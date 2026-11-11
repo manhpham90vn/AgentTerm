@@ -10,10 +10,8 @@ struct DiffView: View {
 
     private var isTree: Bool { viewMode == "tree" }
 
-    private var selectedFile: FileDiff? {
-        guard let files = model.diff?.files else { return nil }
-        return files.first { $0.id == model.selectedDiffFile } ?? files.first
-    }
+    /// The change whose diff is open in the middle pane.
+    private var selectedFile: FileDiff? { model.diffTabFile }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -69,17 +67,11 @@ struct DiffView: View {
             } else if diff.files.isEmpty {
                 placeholder("No uncommitted changes.")
             } else {
-                VSplitView {
-                    VStack(spacing: 0) {
-                        CommitBox(stagedCount: diff.staged.count)
-                        Theme.hairline.frame(height: 1)
-                        fileList(diff)
-                    }
-                    .frame(minHeight: 150, idealHeight: 260, maxHeight: 460)
-                    if let file = selectedFile {
-                        PatchView(file: file)
-                            .frame(minHeight: 120, maxHeight: .infinity)
-                    }
+                // The list only: a file that is clicked shows its diff in the middle pane.
+                VStack(spacing: 0) {
+                    CommitBox(stagedCount: diff.staged.count)
+                    Theme.hairline.frame(height: 1)
+                    fileList(diff)
                 }
             }
         } else {
@@ -128,13 +120,13 @@ struct DiffView: View {
                         }
                 case .file(let file):
                     FileRow(file: file, selected: file.id == selectedFile?.id, showsDirectory: false, depth: row.depth)
-                        .onTapGesture { model.selectedDiffFile = file.id }
+                        .onTapGesture { model.openDiff(file) }
                 }
             }
         } else {
             ForEach(files) { file in
                 FileRow(file: file, selected: file.id == selectedFile?.id)
-                    .onTapGesture { model.selectedDiffFile = file.id }
+                    .onTapGesture { model.openDiff(file) }
             }
         }
     }
@@ -337,6 +329,49 @@ private struct FileRow: View {
     }
 }
 
+/// A change open in the middle pane: where it is, and its diff.
+struct DiffDocumentView: View {
+    @EnvironmentObject private var model: AppModel
+    let file: FileDiff
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text(file.isStaged ? "STAGED" : "CHANGES")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Theme.raised))
+                Text(file.path)
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                Spacer(minLength: 6)
+                DiffCount(added: file.added, deleted: file.deleted)
+                Button(file.isStaged ? "Unstage" : "Stage") {
+                    if file.isStaged { model.unstage([file]) } else { model.stage([file]) }
+                }
+                .controlSize(.small)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Theme.panel)
+            Theme.hairline.frame(height: 1)
+            if file.patch.isEmpty {
+                Text("Nothing to show for this file: it is empty or not text.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                PatchView(file: file)
+            }
+        }
+        .background(Theme.canvas)
+    }
+}
+
 /// One file's unified diff with added and removed lines tinted.
 private struct PatchView: View {
     let file: FileDiff
@@ -385,7 +420,7 @@ private struct PatchView: View {
             }
         }
         .background(Theme.canvas)
-        .id(file.id)
+        .id(file.id + file.patch)
     }
 
     private func foreground(_ line: Substring) -> Color {

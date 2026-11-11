@@ -64,6 +64,15 @@ struct RootView: View {
             Button("Don't Save", role: .destructive) { files.close(path) }
             Button("Cancel", role: .cancel) {}
         }
+        .confirmationDialog(
+            "End \(model.sessions.count) \(model.sessions.count == 1 ? "session" : "sessions") and close every tab?",
+            isPresented: $model.confirmingCloseAll, titleVisibility: .visible
+        ) {
+            Button("End Sessions and Close All", role: .destructive) { model.closeAllTabsConfirmed() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("What is running in the terminals stops. Files with unsaved changes stay open.")
+        }
         .sheet(item: $model.pendingHandoff) { conversation in
             HandoffSheet(conversation: conversation)
         }
@@ -147,7 +156,13 @@ struct CenterView: View {
                 }
                 .padding(40)
             case .connected:
-                if let document = files.activeDocument {
+                if model.diffInFront, let file = model.diffTabFile {
+                    // The diff tab is in front.
+                    VStack(spacing: 0) {
+                        SessionTabs()
+                        DiffDocumentView(file: file)
+                    }
+                } else if let document = files.activeDocument {
                     // A file tab is in front.
                     VStack(spacing: 0) {
                         SessionTabs()

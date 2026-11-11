@@ -21,7 +21,7 @@ to the same sessions over [Tailscale](https://tailscale.com).
   agents that are not installed get no button.
 - Files: browse the folder, create, rename and trash files and folders. Files
   open as tabs next to the sessions, to edit text with syntax coloring and
-  preview Markdown, Mermaid diagrams included.
+  preview Markdown, Mermaid diagrams included. The iPhone app has the same.
 - Real PTYs: job control, Ctrl-C, colors, resize, UTF-8 (Vietnamese included).
 - Sessions live in the `agenttyd` daemon and survive closing the app.
 - A session can be watched from several clients. The client being used decides

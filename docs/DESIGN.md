@@ -179,6 +179,8 @@ Client to host:
 | `resume(agent, sessionID, cwd, size)` | Reopen a conversation in its agent, in a new session. |
 | `handoffPlan(agent)` | What the receiving agent would be told, to show it before handing off. |
 | `handoff(agent, sessionID, cwd, target, plan, prompt, note, size)` | Hand a conversation to another agent, in a new session. |
+| `files(path)` / `readFile(path)` / `writeFile(path, text)` | A folder's files, what a file holds, and saving it. |
+| `createFile(directory, name, isDirectory)` / `renameFile(path, name)` / `trashFile(path)` | Change the files. Answered with the folder's listing. |
 | `listDirectory(path)` | The folders inside a folder, or inside home. |
 
 Host to client: `welcome`, `sessions`, `agents`, `folders`, `attached`,
@@ -248,17 +250,24 @@ documents, and the tab shortcuts count across both.
 The editor is an `NSTextView` whose text storage is Highlightr's
 `CodeAttributedString`, which recolors text as it is edited using
 highlight.js. Markdown is rendered by MarkdownUI, with its code blocks
-colored by the same highlighter. Both are package dependencies of the Mac
-app only.
+colored by the same highlighter. The editor and the previews live in the
+`AgenttyEditor` target, which both apps use: on the iPhone the editor is a
+`UITextView` on the same text storage.
+
+The Mac reads and writes files itself. The iPhone asks the host: `files`
+lists a folder, `readFile` returns text, or an image's bytes up to 8 MB,
+`writeFile` saves, and `createFile`, `renameFile` and `trashFile` change the
+tree and are answered with the folder's new listing. They run `FileBrowser`,
+the same code the Mac app calls.
 
 Mermaid diagrams are drawn by `MermaidView`, a `WKWebView`, since Mermaid is
 a JavaScript library. `mermaid.min.js` (11.4.1, MIT) is checked in under
-`Sources/AgenttyMac/Resources` and shipped in the app, so nothing is loaded
+`Sources/AgenttyEditor/Resources` and shipped in the apps, so nothing is loaded
 from the network: the page has a content security policy that allows no
 remote source at all. The diagram's source goes into the page as escaped
 text, and Mermaid runs with `securityLevel: 'strict'`.
 
-Highlightr and the Mac app each bring a resource bundle, which
+Highlightr and `AgenttyEditor` each bring a resource bundle, which
 `scripts/bundle-mac.sh` copies into the app's `Contents/Resources`.
 
 ## Conversation history

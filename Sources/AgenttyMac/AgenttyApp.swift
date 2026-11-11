@@ -80,7 +80,10 @@ private struct TabCommands: View {
     @ObservedObject var model: AppModel
     @ObservedObject var files: FilesModel
 
-    private var names: [String] { model.sessions.map(\.displayName) + files.documents.map(\.name) }
+    private var names: [String] {
+        model.sessions.map(\.displayName) + files.documents.map(\.name)
+            + (model.diffTabFile.map { ["Diff of " + ($0.path as NSString).lastPathComponent] } ?? [])
+    }
 
     var body: some View {
         // Command and a number shows the tab in that place.
@@ -96,8 +99,16 @@ private struct TabCommands: View {
             .keyboardShortcut("[", modifiers: [.command, .shift])
             .disabled(model.tabCount < 2)
         Divider()
-        Button(files.active != nil ? "Close File" : "End Session") { model.closeFrontTab() }
+        Button(model.diffInFront ? "Close Diff" : (files.active != nil ? "Close File" : "End Session")) { model.closeFrontTab() }
             .keyboardShortcut("w")
-            .disabled(files.active == nil && model.selectedSession == nil)
+            .disabled(!model.diffInFront && files.active == nil && model.selectedSession == nil)
+        Button("Close Other Files") { model.closeFileTabs(except: files.active, keepDiff: model.diffInFront) }
+            .keyboardShortcut("w", modifiers: [.command, .option])
+            .disabled(files.documents.isEmpty && model.diffTabFile == nil)
+        Button("Close All Files") { model.closeFileTabs() }
+            .keyboardShortcut("w", modifiers: [.command, .shift])
+            .disabled(files.documents.isEmpty && model.diffTabFile == nil)
+        Button(model.sessions.isEmpty ? "Close All" : "Close All and End Sessions…") { model.closeAllTabs() }
+            .disabled(model.tabCount == 0)
     }
 }

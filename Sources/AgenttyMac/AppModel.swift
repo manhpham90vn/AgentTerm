@@ -1,3 +1,4 @@
+import Combine
 import AgenttyClient
 import AgenttyHost
 import AgenttyProtocol
@@ -34,11 +35,16 @@ final class AppModel: ObservableObject {
     /// Sessions currently sized by another device, with that device's grid.
     @Published private(set) var foreignSizes: [SessionID: TermSize] = [:]
     @Published private(set) var diff: DiffSnapshot?
-    /// `id` of the change whose diff is shown.
-    @Published var selectedDiffFile: String?
+    /// `id` of the change whose diff has a tab in the middle pane.
+    @Published private(set) var selectedDiffFile: String?
+    /// Whether the diff's tab is the one in front.
+    @Published private(set) var diffInFront = false
+    private var observers: Set<AnyCancellable> = []
     /// The commit message being written, by folder.
     @Published var commitMessages: [String: String] = [:]
     @Published private(set) var isCommitting = false
+    /// Asks before "Close All" ends the running sessions.
+    @Published var confirmingCloseAll = false
     /// Past agent conversations of the selected folder. `nil` while loading.
     @Published private(set) var history: [Conversation]?
     /// History lists the selected folder's conversations, or every
@@ -110,6 +116,10 @@ final class AppModel: ObservableObject {
         if let value = ProcessInfo.processInfo.environment["AGENTTY_PORT"].flatMap(UInt16.init) { port = value }
         connect()
         folderChanged()
+        // A file that comes to the front takes the diff's place there.
+        files.$active.sink { [weak self] active in
+            if active != nil { self?.diffInFront = false }
+        }.store(in: &observers)
         diffTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.showDiff, NSApp.isActive else { return }
@@ -225,7 +235,10 @@ final class AppModel: ObservableObject {
             if selectNextAttached || selectedSession == nil {
                 // A session that was just started comes to the front, also
                 // when a file was showing.
-                if selectNextAttached { files.active = nil }
+                if selectNextAttached {
+                    files.active = nil
+                    diffInFront = false
+                }
                 selectNextAttached = false
                 selectedSession = info.id
             }
@@ -303,6 +316,7 @@ final class AppModel: ObservableObject {
 
     func select(session: SessionInfo) {
         files.active = nil
+        diffInFront = false
         selectedSession = session.id
         if folders.contains(where: { $0.path == session.cwd }) { selectedFolder = session.cwd }
     }
@@ -340,7 +354,7 @@ final class AppModel: ObservableObject {
 
     private func folderChanged() {
         diff = nil
-        selectedDiffFile = nil
+        closeDiffTab()
         files.setRoot(selectedFolder)
         refreshDiff()
         // The list of every conversation does not depend on the folder.
@@ -362,10 +376,11 @@ final class AppModel: ObservableObject {
     }
 
     /// How many tabs the middle pane has: the sessions, then the open files.
-    var tabCount: Int { sessions.count + files.documents.count }
+    var tabCount: Int { sessions.count + files.documents.count + (diffTabFile == nil ? 0 : 1) }
 
     /// The place of the tab in front, counted from 0, if there is one.
     private var frontTab: Int? {
+        if diffInFront, diffTabFile != nil { return tabCount - 1 }
         if let path = files.active, let index = files.documents.firstIndex(where: { $0.path == path }) { return sessions.count + index }
         return sessions.firstIndex { $0.id == selectedSession }
     }
@@ -377,6 +392,8 @@ final class AppModel: ObservableObject {
             select(session: sessions[index])
         } else if files.documents.indices.contains(index - sessions.count) {
             files.active = files.documents[index - sessions.count].path
+        } else if index == tabCount - 1 {
+            showDiffTab()
         }
     }
 
@@ -387,9 +404,29 @@ final class AppModel: ObservableObject {
         selectTab(number: (current + offset + tabCount) % tabCount + 1)
     }
 
+    /// Closes the tabs of files and the diff, leaving the terminals. A file
+    /// given as `kept` stays open too; `keepDiff` leaves the diff tab.
+    func closeFileTabs(except kept: String? = nil, keepDiff: Bool = false) {
+        if !keepDiff { closeDiffTab() }
+        files.closeAll(except: kept)
+    }
+
+    /// Closes every tab. Sessions are running programs, so ending them is
+    /// asked about first.
+    func closeAllTabs() {
+        if sessions.isEmpty { closeFileTabs() } else { confirmingCloseAll = true }
+    }
+
+    func closeAllTabsConfirmed() {
+        closeFileTabs()
+        for session in sessions { close(session.id) }
+    }
+
     /// Closes the tab in front: a file is closed, a session is ended.
     func closeFrontTab() {
-        if let path = files.active {
+        if diffInFront {
+            closeDiffTab()
+        } else if let path = files.active {
             files.requestClose(path)
         } else if let id = selectedSession {
             close(id)
@@ -498,9 +535,32 @@ final class AppModel: ObservableObject {
                     // A file that was just staged or unstaged stays selected in its new list.
                     let path = selected.hasPrefix("staged:") ? String(selected.dropFirst("staged:".count)) : selected
                     self.selectedDiffFile = snapshot.files.first { $0.path == path }?.id
+                    // A change that is gone, committed for one, takes its tab with it.
+                    if self.selectedDiffFile == nil { self.closeDiffTab() }
                 }
             }
         }
+    }
+
+    /// The change that has a tab in the middle pane, if any.
+    var diffTabFile: FileDiff? { selectedDiffFile.flatMap { id in diff?.files.first { $0.id == id } } }
+
+    /// Shows a change's diff in the middle pane. There is one diff tab; it
+    /// follows the change picked in the Git tab.
+    func openDiff(_ file: FileDiff) {
+        selectedDiffFile = file.id
+        showDiffTab()
+    }
+
+    func showDiffTab() {
+        guard selectedDiffFile != nil else { return }
+        files.active = nil
+        diffInFront = true
+    }
+
+    func closeDiffTab() {
+        selectedDiffFile = nil
+        diffInFront = false
     }
 
     /// Stages files for the next commit. No files means every change.

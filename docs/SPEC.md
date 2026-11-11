@@ -128,10 +128,15 @@ corner, the button that hides the side panel.
   launch screen for the selected folder. Above it, every running session is a
   tab, with a "+" to start another. Command and a number (⌘1 to ⌘9) shows the
   tab in that place, ⌘⇧] and ⌘⇧[ go to the next and previous, ⌘W ends the
-  session on screen. Open files are tabs in the same strip.
+  session on screen. Open files are tabs in the same strip, and so is the
+  diff picked in the Git tab. A tab's menu (right click) closes it, the
+  other files, every file (terminals stay), or everything, which ends the
+  sessions and so asks first. Files with unsaved changes are never closed
+  without asking.
 - **Right: side panel**, with three tabs. The panel can be hidden.
   - **Git.** Uncommitted git changes of the selected folder: the changed files
-    with added and removed line counts, and the diff of the selected file. An
+    with added and removed line counts. Clicking a file shows its diff in the
+    middle pane, in one diff tab that follows the file picked. An
     icon switches the file list between a flat list and a tree grouped by
     folder; folders in the tree can be collapsed and show the totals of what
     is inside. It refreshes on its own while the app is in front.
@@ -169,9 +174,10 @@ They differ where the device does:
   scans and manages Macs.
 - "Show in Finder" is on the Mac only. The key bar and the compose field are
   on the iPhone only.
-- Files are on the Mac only for now.
+- On the Mac files and diffs open as tabs next to the terminals; on the
+  iPhone they open as screens.
 
-### Files (Mac)
+### Files
 
 A basic file manager and editor for the selected folder, enough to look at
 and touch up what an agent wrote without leaving the app.
@@ -199,9 +205,16 @@ and touch up what an agent wrote without leaving the app.
   elsewhere, by an agent for one, within a few seconds.
 - The files that were open come back as tabs the next time the app starts.
 
+The iPhone has the same under a folder's **Files** tab, working on the
+Mac's files through the host: the tree, new file and folder, rename, move
+to the Mac's Trash and copy path (hold a row), and the same editor with
+syntax coloring, Markdown and Mermaid preview and images. A file opens as
+a screen; leaving it with unsaved changes asks first. It differs in three
+ways: lines wrap, pictures a Markdown document refers to are not shown,
+and what an agent changes shows after pulling down to refresh or reopening.
+
 Not part of it: search, and a file changed on disk while it has unsaved
-edits here is not merged; saving overwrites it. The iPhone does not have
-Files yet.
+edits here is not merged; saving overwrites it.
 
 ### Pairing and remote access
 
@@ -245,7 +258,8 @@ Files yet.
   files with added and removed line counts, and the diff of a file, which
   scrolls sideways; files can be staged, unstaged and committed as on the
   Mac. **History**: the conversations each agent had in the
-  folder, with a switch to every conversation on the Mac.
+  folder, with a switch to every conversation on the Mac. **Files**: see
+  Files above.
 - A conversation can be resumed in its agent, or handed off to another
   installed agent. The handoff sheet shows the prompt the agent will start
   with, which can be edited and reset, and takes optional instructions. Both

@@ -186,6 +186,7 @@ struct PairingView: View {
                 }
               }
             }
+            .defaultScrollAnchor(.top)
             .frame(height: min(CGFloat(model.devices.count) * Self.deviceRowHeight, Self.deviceRowHeight * 3.4))
             .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.black.opacity(0.22)))
         }

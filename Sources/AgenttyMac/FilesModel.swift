@@ -164,6 +164,19 @@ final class FilesModel: ObservableObject {
         rememberOpenFiles()
     }
 
+    /// Closes every file's tab but the one given. A file with unsaved
+    /// changes stays open, and the first of them asks what to do with it.
+    func closeAll(except kept: String? = nil) {
+        for document in documents where document.path != kept && !document.isDirty {
+            close(document.path)
+        }
+        if let unsaved = documents.first(where: { $0.path != kept && $0.isDirty }) {
+            requestClose(unsaved.path)
+        } else if let kept, active != nil {
+            active = kept
+        }
+    }
+
     @discardableResult
     func save(_ path: String? = nil) -> Bool {
         guard let path = path ?? active, let index = documents.firstIndex(where: { $0.path == path }), documents[index].isDirty else { return true }
