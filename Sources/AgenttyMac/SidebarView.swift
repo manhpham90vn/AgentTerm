@@ -142,17 +142,10 @@ struct SessionRow: View {
                     .help("Sized for another device")
             }
             if hovering, let agent = model.agentID(of: session), !model.handoffTargets(from: agent).isEmpty {
-                Menu {
-                    ForEach(model.handoffTargets(from: agent)) { target in
-                        Button("Hand Off to \(target.name)") { model.handoff(session: session, to: target) }
-                    }
-                } label: {
+                Button { model.requestHandoff(session: session) } label: {
                     Image(systemName: "arrowshape.turn.up.right.fill").font(.system(size: 9.5))
                 }
-                .menuStyle(.button)
                 .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .fixedSize()
                 .foregroundStyle(.secondary)
                 .help("Give this session's work to another agent")
             }

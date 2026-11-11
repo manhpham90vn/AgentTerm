@@ -184,7 +184,8 @@ protocol yet.
    For Antigravity the messages come from
    `brain/<id>/.system_generated/logs/transcript_full.jsonl`, the readable
    log it writes next to its conversation database.
-2. The file gets a brief, a "where things stand" section (the user's last
+2. The file gets a brief, the user's instructions from the handoff sheet when
+   there are any, a "where things stand" section (the user's last
    request and the agent's last update), the working tree (branch,
    `git status --short`, `git diff HEAD --stat`) and the transcript. The brief
    tells the receiving agent to trust the files over the conversation, to say

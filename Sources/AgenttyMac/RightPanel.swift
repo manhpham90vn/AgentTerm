@@ -168,9 +168,6 @@ private struct AgentHeader: View {
                 .foregroundStyle(Theme.accent(for: id))
             Text(name)
                 .font(.system(size: 12, weight: .semibold))
-            Text("\(count)")
-                .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                .foregroundStyle(.secondary)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 8)
@@ -200,18 +197,11 @@ private struct ConversationRow: View {
     private var actions: some View {
         HStack(spacing: 10) {
             if !targets.isEmpty {
-                Menu {
-                    handoffItems
-                } label: {
+                Button { model.requestHandoff(conversation) } label: {
                     Label("Hand Off", systemImage: "arrowshape.turn.up.right.fill")
                         .font(.system(size: 10.5, weight: .semibold))
                 }
-                // A plain button menu: the borderless style draws its label
-                // in the system size and ignores the font set above.
-                .menuStyle(.button)
                 .buttonStyle(.plain)
-                .menuIndicator(.hidden)
-                .fixedSize()
                 .foregroundStyle(.secondary)
                 .help("Give this work to another agent")
             }
@@ -236,13 +226,6 @@ private struct ConversationRow: View {
     }
 
     private var targets: [AgentInfo] { model.handoffTargets(from: conversation.agent) }
-
-    @ViewBuilder
-    private var handoffItems: some View {
-        ForEach(targets) { target in
-            Button(target.name) { model.handoff(conversation, to: target) }
-        }
-    }
 
     private var when: String {
         // "in 0 sec" reads oddly for something that just happened.

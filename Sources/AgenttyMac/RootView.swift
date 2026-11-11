@@ -36,6 +36,9 @@ struct RootView: View {
         .sheet(isPresented: $model.showPairing) {
             PairingView(port: model.hostPort)
         }
+        .sheet(item: $model.pendingHandoff) { conversation in
+            HandoffSheet(conversation: conversation)
+        }
         .alert("Agentty", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
