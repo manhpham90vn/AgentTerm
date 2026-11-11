@@ -164,6 +164,29 @@ final class FlowTests: XCTestCase {
             XCTAssertTrue(app.staticTexts["demo"].waitForExistence(timeout: 5), "the session's folder is not listed")
         }
 
+        // Something that needs the user's attention shows up over whatever
+        // screen is in front. Handing off a session that has no saved
+        // conversation yet says so, right there in the terminal, not only
+        // after going back. Needs an agent, so it runs where one is installed.
+        let startAgent = app.buttons["Start Claude Code"].firstMatch
+        if startAgent.exists {
+            startAgent.tap()
+            XCTAssertTrue(compose.waitForExistence(timeout: 15), "no terminal opened for the agent")
+            app.buttons["session-menu"].tap()
+            let handOff = app.buttons["Hand Off…"]
+            XCTAssertTrue(handOff.waitForExistence(timeout: 5), "an agent's session offers no handoff")
+            handOff.tap()
+            let alert = app.alerts.firstMatch
+            XCTAssertTrue(alert.waitForExistence(timeout: 10), "nothing happened after choosing Hand Off")
+            XCTAssertTrue(alert.staticTexts.containing(NSPredicate(format: "label CONTAINS 'no conversation to hand off'")).firstMatch.exists)
+            capture("7h-handoff-nothing-yet")
+            alert.buttons["OK"].tap()
+            app.buttons["session-menu"].tap()
+            app.buttons["End Session"].tap()
+            app.buttons["End Session"].firstMatch.tap()
+            XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 10), "ending the session did not return to the list")
+        }
+
         // A second Mac can be paired. It becomes the one on screen, with
         // nothing of the first Mac's sessions.
         guard let second = environment["AGENTTY_SECOND_PAIR_URL"] else { return }

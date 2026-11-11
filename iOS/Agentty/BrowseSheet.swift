@@ -67,6 +67,13 @@ struct BrowseSheet: View {
                 }
             }
             .onAppear { if model.listing == nil { model.browse(nil) } }
+            // The alert on the main screen cannot appear over this sheet, so
+            // a folder that cannot be opened is reported here.
+            .alert("Agentty", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(model.message ?? "")
+            }
         }
     }
 }

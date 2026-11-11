@@ -360,7 +360,7 @@ final class AppModel: ObservableObject {
                 if let newest {
                     self.requestHandoff(newest)
                 } else {
-                    self.notice = "\(name) has not saved a conversation for this session yet, so there is nothing to hand off."
+                    self.notice = "\(name) has no conversation to hand off in this session yet. It saves one after your first message."
                 }
             }
         }

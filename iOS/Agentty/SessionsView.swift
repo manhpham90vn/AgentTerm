@@ -94,11 +94,6 @@ struct SessionsView: View {
                         .navigationBarTitleDisplayMode(.inline)
                 }
             }
-            .sheet(item: $model.sessionHandoff) { conversation in
-                ConversationSheet(conversation: conversation, showsResume: false)
-                    .environmentObject(model)
-                    .preferredColorScheme(.dark)
-            }
             .sheet(isPresented: $model.showBrowser) {
                 BrowseSheet()
                     .environmentObject(model)
@@ -109,11 +104,19 @@ struct SessionsView: View {
             } message: {
                 Text("Sessions keep running on \(model.pairing?.name ?? "the Mac"). To connect again you pair with it once more.")
             }
-            .alert("Agentty", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(model.message ?? "")
-            }
+        }
+        // On the stack, not on the list inside it: a sheet or alert attached
+        // to the list cannot appear while another screen, such as a
+        // terminal, is on top of it.
+        .sheet(item: $model.sessionHandoff) { conversation in
+            ConversationSheet(conversation: conversation, showsResume: false)
+                .environmentObject(model)
+                .preferredColorScheme(.dark)
+        }
+        .alert("Agentty", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(model.message ?? "")
         }
     }
 }

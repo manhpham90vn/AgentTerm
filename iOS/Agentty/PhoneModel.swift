@@ -368,7 +368,7 @@ final class PhoneModel: ObservableObject {
                 if let found = conversations.first(where: { $0.agent == agent && $0.updatedAt >= session.createdAt.addingTimeInterval(-5) }) {
                     sessionHandoff = found
                 } else {
-                    self.message = "\(session.title) has not saved a conversation for this session yet, so there is nothing to hand off."
+                    self.message = "\(session.title) has no conversation to hand off in this session yet. It saves one after your first message."
                 }
             }
         case .directory(let listing):
