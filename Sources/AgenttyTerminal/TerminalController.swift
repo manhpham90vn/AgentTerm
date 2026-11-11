@@ -10,8 +10,11 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
 
     /// Called with bytes the user typed.
     public var onInput: ((Data) -> Void)?
-    /// Called when this view's own grid size changes and should drive the PTY.
+    /// Called when the grid that fits this view changes. The host follows
+    /// only if this client is the one driving the session.
     public var onResize: ((TermSize) -> Void)?
+    /// Called when the user is using the session here, to become its driver.
+    public var onClaim: ((TermSize) -> Void)?
 
     /// The grid that fits this view, regardless of who drives the PTY.
     public private(set) var naturalSize: TermSize = .default
@@ -23,6 +26,7 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     /// The emulator's current grid. SwiftTerm does not expose it.
     private var grid: TermSize?
     private var pendingReport: DispatchWorkItem?
+    private var claimWhenLaidOut = false
 
     public init(session: SessionID, fontSize: CGFloat = 13) {
         self.session = session
@@ -32,6 +36,12 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         view.nativeBackgroundColor = TerminalStyle.background
         view.nativeForegroundColor = TerminalStyle.foreground
         view.terminalDelegate = self
+    }
+
+    /// The exact size in points of the grid the emulator currently draws,
+    /// which is smaller than the view while another device's size is shown.
+    public var gridPixelSize: CGSize {
+        view.getOptimalFrameSize().size
     }
 
     public func feed(_ data: Data) {
@@ -47,11 +57,16 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         view.font = TerminalStyle.font(size: size)
     }
 
-    /// Reports the grid that fits the view, making this client the driver.
+    /// The user is using the session here: asks to drive it at the grid
+    /// that fits this view.
     public func claimSize() {
-        guard hasLaidOut else { return }
+        guard hasLaidOut else {
+            // Not laid out yet, so the size is not known. Claim once it is.
+            claimWhenLaidOut = true
+            return
+        }
         pendingReport?.cancel()
-        onResize?(naturalSize)
+        onClaim?(naturalSize)
     }
 
     /// The host changed the PTY size. When another device drives, show its
@@ -79,8 +94,15 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     private func reportNaturalSizeSoon() {
         pendingReport?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.foreignSize == nil else { return }
-            self.onResize?(self.naturalSize)
+            guard let self else { return }
+            // Reported even while another device drives: the host does not
+            // act on it then, but uses it when the user types here again.
+            if self.claimWhenLaidOut {
+                self.claimWhenLaidOut = false
+                self.onClaim?(self.naturalSize)
+            } else {
+                self.onResize?(self.naturalSize)
+            }
         }
         pendingReport = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
@@ -102,9 +124,8 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
                     guard let self, self.foreignSize == foreignSize else { return }
                     self.setGrid(foreignSize)
                 }
-            } else {
-                reportNaturalSizeSoon()
             }
+            reportNaturalSizeSoon()
         }
     }
 

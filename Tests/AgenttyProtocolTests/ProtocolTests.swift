@@ -11,6 +11,7 @@ final class ProtocolTests: XCTestCase {
             .attach(session: 7, size: TermSize(cols: 120, rows: 40)),
             .detach(session: 7),
             .resize(session: 7, size: TermSize(cols: 50, rows: 20)),
+            .takeControl(session: 7, size: TermSize(cols: 50, rows: 20)),
             .kill(session: 7),
             .pair(code: "c0de", device: "iPhone của Mạnh"),
             .createPairingCode,

@@ -116,10 +116,17 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case agents(refresh: Bool)
     /// Starts a session and attaches the sender to it.
     case create(CreateRequest)
+    /// Starts receiving a session. Watching does not change the session's
+    /// size, unless nobody else is attached.
     case attach(session: SessionID, size: TermSize)
     case detach(session: SessionID)
-    /// Reports the sender's grid size and makes it the session's driver.
+    /// Reports that the sender's own grid changed (a window was resized, a
+    /// keyboard appeared). The session follows only if the sender is the one
+    /// driving it.
     case resize(session: SessionID, size: TermSize)
+    /// The user is using the session on this client: it becomes the driver
+    /// and the session takes its size.
+    case takeControl(session: SessionID, size: TermSize)
     case kill(session: SessionID)
     /// Adds a project folder to the list every client shares.
     case addFolder(path: String)

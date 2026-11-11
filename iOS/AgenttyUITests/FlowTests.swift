@@ -65,6 +65,22 @@ final class FlowTests: XCTestCase {
         sleep(1)
         capture("6-key-bar")
 
+        // The whole grid is on screen, also after the text size changes: a
+        // marker written on the last row has to sit right above the key
+        // bar. Full screen programs keep their status line there.
+        for _ in 0..<3 {
+            app.buttons["session-menu"].tap()
+            app.buttons["Larger Text"].tap()
+        }
+        sleep(1)
+        // A short command, so the compose field stays one line tall and the
+        // terminal keeps its height while the command runs.
+        compose.tap()
+        compose.typeText("clear; tput cup 99 0; printf LAST-$(tput lines)")
+        app.buttons["Send"].tap()
+        sleep(2)
+        capture("6b-bottom-row")
+
         // Back in the list the session is there to return to.
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 5))

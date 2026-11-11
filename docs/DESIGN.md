@@ -67,9 +67,16 @@ and a UTF-8 locale when none is set.
 A PTY has one size, but a Mac window and an iPhone screen differ. `SizeArbiter`
 implements "the client being used wins":
 
-- Every attached client reports the grid that fits its view.
-- The driver is the client that most recently attached, resized or typed. The
-  PTY takes the driver's size.
+- Every attached client reports the grid that fits its view, and reports
+  again when that changes (`resize`).
+- The driver is the client that most recently took control (`takeControl`) or
+  typed. The PTY takes the driver's size.
+- Attaching and resizing never make a client the driver, unless it is the only
+  one attached. The Mac app attaches to every session to show it; if that took
+  the size, a session opened on a phone would jump to the Mac's size a moment
+  later and the phone would only see a corner of it.
+- A client's reported size is kept while another client drives, so typing
+  there later switches to its current size at once.
 - When the driver detaches, the most recently active remaining client becomes
   the driver. With no client left the size stays as it is.
 - After every change the host sends `resized` to each attached client with a
@@ -87,8 +94,16 @@ the program redraw.
 its view and the foreign size imposed by another driver. A layout change while
 another device drives updates the natural size without taking control.
 
-The iPhone attaches only to the session on screen and detaches when leaving
-it, so the Mac gets its size back as soon as the phone stops looking.
+The iPhone attaches only to the session on screen, takes control of it when
+it opens, and detaches when leaving it, so the Mac gets its size back as soon
+as the phone stops looking. The Mac takes control only when the user types or
+asks for it.
+
+While a session has a foreign size, the Mac keeps its terminal view at the
+pane's size, so the size that fits the window is still known, and only moves
+the view's origin to bring the smaller grid to the middle. A frame and a
+dimmed surround are drawn around it. The grid's exact size comes from
+SwiftTerm's `getOptimalFrameSize()`.
 
 ## Protocol
 
@@ -106,7 +121,8 @@ Client to host:
 | `agents(refresh)` | Ask which agent CLIs are installed. |
 | `create(command, cwd, title, size)` | Start a session and attach to it. |
 | `attach(session, size)` / `detach(session)` | Start or stop receiving a session. |
-| `resize(session, size)` | Report this client's grid and become the driver. |
+| `resize(session, size)` | Report that this client's grid changed. Applied only if it drives the session. |
+| `takeControl(session, size)` | The user is using the session here: become the driver at this size. |
 | `kill(session)` | Hang up the session (SIGHUP, then SIGKILL after 3 s). |
 | `addFolder(path)` / `removeFolder(path)` | Change the shared folder list. |
 

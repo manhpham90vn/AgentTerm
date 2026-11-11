@@ -43,6 +43,7 @@ struct TerminalScreen: View {
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
+                .accessibilityIdentifier("session-menu")
             }
         }
         .confirmationDialog("End this session?", isPresented: $confirmingEnd, titleVisibility: .visible) {

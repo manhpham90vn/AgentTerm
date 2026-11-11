@@ -352,7 +352,10 @@ public final class HostServer {
             if let session = sessions[id], session.arbiter.remove(client.id) { applySize(of: session) }
         case .resize(let id, let size):
             guard let session = sessions[id], client.attached.contains(id) else { return }
-            let changed = session.arbiter.report(client.id, size: size)
+            if session.arbiter.update(client.id, size: size) { applySize(of: session) }
+        case .takeControl(let id, let size):
+            guard let session = sessions[id], client.attached.contains(id) else { return }
+            let changed = session.arbiter.takeControl(client.id, size: size)
             if changed { applySize(of: session) } else { announceSize(of: session) }
         case .kill(let id):
             guard let session = sessions[id] else { return }
@@ -499,7 +502,8 @@ public final class HostServer {
 
     private func attach(_ client: Client, to session: Session, size: TermSize) {
         client.attached.insert(session.info.id)
-        let changed = session.arbiter.report(client.id, size: size)
+        // Watching is not using: this only sets the size if nobody else is attached.
+        let changed = session.arbiter.update(client.id, size: size)
         if changed {
             session.info.size = session.arbiter.currentSize
             session.process.resize(session.info.size)

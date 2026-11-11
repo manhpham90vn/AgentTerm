@@ -51,10 +51,16 @@ itself.
 
 ### Terminal size
 
-- The terminal resizes to fit the device being used. When the iPhone attaches
-  or types, the PTY takes the iPhone's size and the program redraws for it.
-- The Mac window then shows the iPhone-sized terminal and says so. Typing on
-  the Mac, or pressing "Use This Window's Size", takes the size back.
+- The terminal resizes to fit the device being used. Opening a session on the
+  iPhone, or typing in it there, gives the PTY the iPhone's size and the
+  program redraws for it.
+- A device that only shows a session never changes its size. The Mac app
+  lists and shows every session, including the ones a phone is typing in; it
+  takes a session's size only when the user types in it on the Mac or presses
+  "Use This Window's Size".
+- While another device is using a session, the Mac shows that device's
+  terminal centered in a frame, like a preview of its screen, with a line
+  saying so.
 - On the iPhone, rotating the device, changing the font size and showing or
   hiding the keyboard all resize the terminal.
 

@@ -125,29 +125,47 @@ final class EndToEndTests: XCTestCase {
         let id = mac.attached!.id
         waitUntil("mac drives") { mac.lastResize?.driver == true && mac.lastResize?.size == macSize }
 
-        // The phone attaches: the PTY shrinks to the phone and the Mac is told so.
+        // The phone only watches at first: the Mac keeps its size.
         let phone = connect("phone")
         phone.connection.send(.attach(session: id, size: phoneSize))
+        waitUntil("phone is told the size") { phone.lastResize?.driver == false && phone.lastResize?.size == macSize }
+        XCTAssertEqual(mac.lastResize?.size, macSize)
+
+        // The user opens the session on the phone: the PTY shrinks to the
+        // phone and the Mac is told so.
+        phone.connection.send(.takeControl(session: id, size: phoneSize))
         waitUntil("phone drives") { phone.lastResize?.driver == true && phone.lastResize?.size == phoneSize }
         waitUntil("mac follows") { mac.lastResize?.driver == false && mac.lastResize?.size == phoneSize }
         phone.type("stty size\n", in: id)
         waitUntil("pty has phone size") { phone.text(id).contains("30 48") }
         XCTAssertTrue(mac.text(id).contains("30 48"), "both clients see the same output")
 
-        // Typing on the Mac takes control back.
-        mac.type("stty size\n", in: id)
-        waitUntil("mac drives again") { mac.lastResize?.driver == true && mac.lastResize?.size == macSize }
-        waitUntil("pty has mac size") { mac.text(id).contains("40 120") }
-        waitUntil("phone follows") { phone.lastResize?.driver == false && phone.lastResize?.size == macSize }
+        // The Mac window is resized while the phone is in use: nothing changes for the phone.
+        let widerMac = TermSize(cols: 140, rows: 44)
+        mac.connection.send(.resize(session: id, size: widerMac))
+        phone.type("stty size\n", in: id)
+        waitUntil("still the phone's size") { phone.text(id).components(separatedBy: "30 48").count >= 3 }
+        XCTAssertEqual(phone.lastResize?.size, phoneSize)
 
-        // The phone rotates.
+        // Typing on the Mac takes control back, at the size it last reported.
+        mac.type("stty size\n", in: id)
+        waitUntil("mac drives again") { mac.lastResize?.driver == true && mac.lastResize?.size == widerMac }
+        waitUntil("pty has mac size") { mac.text(id).contains("44 140") }
+        waitUntil("phone follows") { phone.lastResize?.driver == false && phone.lastResize?.size == widerMac }
+
+        // The phone rotates while the Mac is in use: the Mac is not disturbed.
         let landscape = TermSize(cols: 100, rows: 18)
         phone.connection.send(.resize(session: id, size: landscape))
-        waitUntil("phone drives after rotating") { mac.lastResize?.size == landscape && mac.lastResize?.driver == false }
+        mac.type("stty size\n", in: id)
+        waitUntil("still the mac's size") { mac.text(id).components(separatedBy: "44 140").count >= 3 }
+
+        // Typing on the phone takes control at its rotated size.
+        phone.type("stty size\n", in: id)
+        waitUntil("phone drives after typing") { mac.lastResize?.size == landscape && mac.lastResize?.driver == false }
 
         // The phone disconnects: the Mac gets its size back.
         phone.connection.close()
-        waitUntil("mac restored") { mac.lastResize?.driver == true && mac.lastResize?.size == macSize }
+        waitUntil("mac restored") { mac.lastResize?.driver == true && mac.lastResize?.size == widerMac }
         mac.connection.send(.kill(session: id))
     }
 

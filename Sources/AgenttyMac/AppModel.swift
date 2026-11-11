@@ -232,6 +232,7 @@ final class AppModel: ObservableObject {
         let controller = TerminalController(session: id)
         controller.onInput = { [weak self] data in self?.connection?.sendInput(data, to: id) }
         controller.onResize = { [weak self] size in self?.connection?.send(.resize(session: id, size: size)) }
+        controller.onClaim = { [weak self] size in self?.connection?.send(.takeControl(session: id, size: size)) }
         return controller
     }
 
