@@ -131,6 +131,19 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Adds a project folder to the list every client shares.
     case addFolder(path: String)
     case removeFolder(path: String)
+    /// Asks for a folder's uncommitted git changes, without the diffs.
+    case diff(path: String)
+    /// Asks for the diff of one changed file.
+    case diffFile(path: String, file: String)
+    /// Asks for the conversations agents had in a folder, or everywhere on
+    /// the host when `path` is nil.
+    case history(path: String?)
+    /// Reopens a conversation in its agent, in a new session the sender is attached to.
+    case resume(agent: String, sessionID: String, cwd: String, size: TermSize)
+    /// Hands a conversation's work to `target`, in a new session the sender is attached to.
+    case handoff(agent: String, sessionID: String, cwd: String, target: String, note: String, size: TermSize)
+    /// Asks which folders are inside a folder, or inside home when `path` is nil.
+    case listDirectory(path: String?)
 }
 
 /// JSON text frames sent by the host.
@@ -152,6 +165,11 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case pairingCode(code: String, expiresAt: Date)
     /// The paired devices. Sent to the host's own machine when they change.
     case devices([DeviceInfo])
+    case diff(path: String, snapshot: DiffSnapshot)
+    /// `file` is nil when it no longer has changes.
+    case diffFile(path: String, file: FileDiff?)
+    case history(path: String?, conversations: [Conversation])
+    case directory(DirectoryListing)
 }
 
 public enum MessageCoding {

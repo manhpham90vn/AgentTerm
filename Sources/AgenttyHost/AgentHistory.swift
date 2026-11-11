@@ -1,33 +1,6 @@
 #if os(macOS)
+import AgenttyProtocol
 import Foundation
-
-/// A past conversation with an agent, found in that agent's own files.
-public struct Conversation: Identifiable, Equatable, Sendable {
-    /// Agent id: "claude", "codex", "agy" or "copilot".
-    public var agent: String
-    /// The agent's own identifier for the conversation.
-    public var sessionID: String
-    public var title: String
-    public var updatedAt: Date
-    /// Directory the conversation ran in.
-    public var cwd: String
-    /// File holding the conversation's messages, when the agent keeps one
-    /// that can be read.
-    public var source: String?
-
-    public var id: String { agent + ":" + sessionID }
-
-    /// Command line that reopens the conversation in its agent.
-    public var resumeCommand: String {
-        switch agent {
-        case "claude": return "claude --resume \(sessionID)"
-        case "codex": return "codex resume \(sessionID)"
-        case "agy": return "agy --conversation \(sessionID)"
-        case "copilot": return "copilot --resume=\(sessionID)"
-        default: return agent
-        }
-    }
-}
 
 /// Reads the conversation history each agent CLI keeps on disk.
 ///

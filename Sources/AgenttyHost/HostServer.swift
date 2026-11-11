@@ -20,6 +20,8 @@ public final class HostServer {
         public var foldersFile: URL?
         /// Where paired devices are saved. `nil` keeps them in memory only.
         public var devicesFile: URL?
+        /// Home folder whose agent files hold the conversation history.
+        public var home: String
 
         public init(
             port: UInt16 = agenttyDefaultPort,
@@ -28,7 +30,8 @@ public final class HostServer {
             scrollbackLimit: Int = 512 * 1024,
             detectAgents: @escaping () -> [AgentInfo] = AgentDetector.detect,
             foldersFile: URL? = nil,
-            devicesFile: URL? = nil
+            devicesFile: URL? = nil,
+            home: String = NSHomeDirectory()
         ) {
             self.port = port
             self.token = token
@@ -37,6 +40,7 @@ public final class HostServer {
             self.detectAgents = detectAgents
             self.foldersFile = foldersFile
             self.devicesFile = devicesFile
+            self.home = home
         }
     }
 
@@ -85,6 +89,11 @@ public final class HostServer {
     private let configuration: Configuration
     private let queue = DispatchQueue(label: "agentty.host")
     private let detectionQueue = DispatchQueue(label: "agentty.host.detect")
+    /// Git and file reading for clients, kept off the queue that moves terminal bytes.
+    private let workQueue = DispatchQueue(label: "agentty.host.work", qos: .userInitiated, attributes: .concurrent)
+    /// The last changes read per folder, so asking for one file's diff right
+    /// after the list does not run git again.
+    private var diffCache: [String: (snapshot: DiffSnapshot, at: Date)] = [:]
     private var listeners: [String: NWListener] = [:]
     private var tailscaleTimer: DispatchSourceTimer?
     private var clients: [ClientID: Client] = [:]
@@ -375,7 +384,94 @@ public final class HostServer {
             guard folders.contains(path) else { return }
             folders.removeAll { $0 == path }
             foldersChanged()
+        case .diff(let path):
+            work(for: client, { GitDiff.snapshot(directory: path) }) { server, client, snapshot in
+                server.diffCache[path] = (snapshot, Date())
+                server.send(.diff(path: path, snapshot: snapshot.withoutPatches), to: client)
+            }
+        case .diffFile(let path, let file):
+            if let cached = diffCache[path], Date().timeIntervalSince(cached.at) < 20 {
+                send(.diffFile(path: path, file: cached.snapshot.files.first { $0.path == file }), to: client)
+                return
+            }
+            work(for: client, { GitDiff.snapshot(directory: path) }) { server, client, snapshot in
+                server.diffCache[path] = (snapshot, Date())
+                server.send(.diffFile(path: path, file: snapshot.files.first { $0.path == file }), to: client)
+            }
+        case .history(let path):
+            let home = configuration.home
+            work(for: client, {
+                path.map { AgentHistory.conversations(in: $0, home: home) } ?? AgentHistory.allConversations(home: home)
+            }) { server, client, conversations in
+                server.send(.history(path: path, conversations: conversations), to: client)
+            }
+        case .resume(let agent, let sessionID, let cwd, let size):
+            guard AgentDetector.known.contains(where: { $0.id == agent }), AgentHistory.isSafeIdentifier(sessionID) else {
+                send(.error("cannot resume that conversation"), to: client)
+                return
+            }
+            let conversation = Conversation(agent: agent, sessionID: sessionID, title: "", updatedAt: Date(), cwd: cwd)
+            create(CreateRequest(command: conversation.resumeCommand, cwd: cwd, title: Handoff.name(of: agent), size: size), for: client)
+        case .handoff(let agent, let sessionID, let cwd, let target, let note, let size):
+            let home = configuration.home
+            work(for: client, { () -> Result<(Handoff.Prepared, String), Error> in
+                // Looked up again here: the conversation's files are on this
+                // machine, and what the client holds is only a description.
+                let found = AgentHistory.conversations(in: cwd, home: home).first { $0.agent == agent && $0.sessionID == sessionID }
+                    ?? AgentHistory.allConversations(home: home).first { $0.agent == agent && $0.sessionID == sessionID }
+                guard let found else { return .failure(HandoffRequestError.notFound) }
+                return Result { (try Handoff.prepare(found, to: target, note: note), found.cwd) }
+            }) { server, client, result in
+                switch result {
+                case .success(let (prepared, directory)):
+                    server.create(CreateRequest(command: prepared.command, cwd: directory, title: Handoff.name(of: target), size: size), for: client)
+                case .failure(let error):
+                    server.send(.error("\(error)"), to: client)
+                }
+            }
+        case .listDirectory(let path):
+            let home = configuration.home
+            work(for: client, { Self.listing(of: path ?? home, home: home) }) { server, client, listing in
+                if let listing {
+                    server.send(.directory(listing), to: client)
+                } else {
+                    server.send(.error("cannot open that folder"), to: client)
+                }
+            }
         }
+    }
+
+    private enum HandoffRequestError: Error, CustomStringConvertible {
+        case notFound
+        var description: String { "That conversation is no longer on this Mac." }
+    }
+
+    /// Runs `job` off the server queue and hands its result back on it, if
+    /// the client that asked is still connected.
+    private func work<T>(for client: Client, _ job: @escaping () -> T, then: @escaping (HostServer, Client, T) -> Void) {
+        let id = client.id
+        workQueue.async { [weak self] in
+            let result = job()
+            self?.queue.async {
+                guard let self, let client = self.clients[id] else { return }
+                then(self, client, result)
+            }
+        }
+    }
+
+    /// The folders inside `path`, hidden ones left out.
+    static func listing(of path: String, home: String) -> DirectoryListing? {
+        let url = URL(fileURLWithPath: path).standardizedFileURL
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: url, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+        ) else { return nil }
+        let folders = entries
+            .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
+            .map(\.lastPathComponent)
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        let parent = url.path == "/" ? nil : url.deletingLastPathComponent().path
+        let standardHome = URL(fileURLWithPath: home).standardizedFileURL.path
+        return DirectoryListing(path: url.path, parent: parent, folders: folders, isHome: url.path == standardHome)
     }
 
     /// Tells the client why, then closes once the message had time to arrive.

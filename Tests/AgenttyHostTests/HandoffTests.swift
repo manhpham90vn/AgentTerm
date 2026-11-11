@@ -1,3 +1,4 @@
+import AgenttyProtocol
 @testable import AgenttyHost
 import XCTest
 

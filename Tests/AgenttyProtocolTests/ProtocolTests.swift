@@ -18,6 +18,13 @@ final class ProtocolTests: XCTestCase {
             .cancelPairingCode,
             .listDevices,
             .revokeDevice(id: "d-1"),
+            .diff(path: "/Users/me/app"),
+            .diffFile(path: "/Users/me/app", file: "src/a b.swift"),
+            .history(path: nil),
+            .history(path: "/Users/me/app"),
+            .resume(agent: "codex", sessionID: "id-1", cwd: "/Users/me/app", size: .default),
+            .handoff(agent: "claude", sessionID: "id-1", cwd: "/Users/me/app", target: "codex", note: "chỉ viết test", size: .default),
+            .listDirectory(path: nil),
             .addFolder(path: "/Users/me/dự án"),
             .removeFolder(path: "/Users/me/dự án"),
         ]
@@ -40,6 +47,10 @@ final class ProtocolTests: XCTestCase {
             .error("nope"),
             .paired(device: "d-1", token: "t0ken"),
             .pairingCode(code: "c0de", expiresAt: Date(timeIntervalSince1970: 1_800_000_300)),
+            .diff(path: "/Users/me/app", snapshot: DiffSnapshot(isRepository: true, branch: "main", files: [FileDiff(path: "a.txt", added: 1, deleted: 2, isUntracked: false, patch: "")])),
+            .diffFile(path: "/Users/me/app", file: nil),
+            .history(path: nil, conversations: [Conversation(agent: "agy", sessionID: "c-1", title: "Rà soát", updatedAt: Date(timeIntervalSince1970: 1_800_000_000), cwd: "/Users/me/app")]),
+            .directory(DirectoryListing(path: "/Users/me", parent: "/Users", folders: ["Dev", "Tài liệu"], isHome: true)),
             .devices([DeviceInfo(id: "d-1", name: "iPhone", pairedAt: Date(timeIntervalSince1970: 1_800_000_000), lastSeenAt: nil, isConnected: true)]),
         ]
         for message in messages {

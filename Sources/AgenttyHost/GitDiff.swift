@@ -1,24 +1,6 @@
 #if os(macOS)
+import AgenttyProtocol
 import Foundation
-
-public struct FileDiff: Identifiable, Equatable, Sendable {
-    public var path: String
-    public var added: Int
-    public var deleted: Int
-    public var isUntracked: Bool
-    /// Unified diff for this file, starting at the first hunk header.
-    public var patch: String
-
-    public var id: String { path }
-}
-
-public struct DiffSnapshot: Equatable, Sendable {
-    public var isRepository: Bool
-    public var branch: String?
-    public var files: [FileDiff]
-
-    public static let notARepository = DiffSnapshot(isRepository: false, branch: nil, files: [])
-}
 
 /// Reads the uncommitted changes of a working directory with the `git` CLI.
 public enum GitDiff {

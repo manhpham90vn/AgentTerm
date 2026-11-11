@@ -1,4 +1,5 @@
 #if os(macOS)
+import AgenttyProtocol
 import Foundation
 
 /// One thing said in a conversation, without tool calls and their output.

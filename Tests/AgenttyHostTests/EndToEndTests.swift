@@ -329,6 +329,121 @@ final class EndToEndTests: XCTestCase {
         XCTAssertEqual(mac.devices, [])
     }
 
+    // MARK: Changes, history and folders for a remote client
+
+    private func git(_ arguments: String..., in directory: URL) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", directory.path, "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"] + arguments
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try? process.run()
+        process.waitUntilExit()
+    }
+
+    func testAClientCanReadAFoldersChanges() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentty-e2e-git-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        git("init", "-q", "-b", "main", in: directory)
+        try "one\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: directory)
+        git("commit", "-q", "-m", "init", in: directory)
+        try "one\ntwo\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "mới\n".write(to: directory.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+
+        let phone = connect("phone")
+        phone.connection.send(.diff(path: directory.path))
+        var snapshot: DiffSnapshot?
+        waitUntil("changes") {
+            snapshot = phone.messages.compactMap { if case .diff(directory.path, let s) = $0 { return s } else { return nil } }.last
+            return snapshot != nil
+        }
+        XCTAssertEqual(snapshot?.branch, "main")
+        XCTAssertEqual(snapshot?.files.map(\.path), ["a.txt", "b.txt"])
+        XCTAssertEqual(snapshot?.files.map(\.added), [1, 1])
+        XCTAssertEqual(snapshot?.files.map(\.patch), ["", ""], "the list does not carry the diffs")
+
+        phone.connection.send(.diffFile(path: directory.path, file: "b.txt"))
+        phone.connection.send(.diffFile(path: directory.path, file: "gone.txt"))
+        var files: [FileDiff?] = []
+        waitUntil("one file") {
+            files = phone.messages.compactMap { if case .diffFile(directory.path, let f) = $0 { return .some(f) } else { return nil } }
+            return files.count == 2
+        }
+        XCTAssertEqual(files[0]?.patch.contains("+mới"), true)
+        XCTAssertTrue(files[0]?.isUntracked == true)
+        XCTAssertNil(files[1])
+
+        phone.connection.send(.diff(path: "/"))
+        waitUntil("not a repository") { phone.messages.contains(.diff(path: "/", snapshot: .notARepository)) }
+    }
+
+    func testAClientCanBrowseFolders() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentty-e2e-dirs-\(UUID().uuidString)").standardizedFileURL
+        for name in ["beta", "Alpha", "alpha 2", ".hidden"] {
+            try FileManager.default.createDirectory(at: root.appendingPathComponent(name), withIntermediateDirectories: true)
+        }
+        try "x".write(to: root.appendingPathComponent("file.txt"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let phone = connect("phone")
+        phone.connection.send(.listDirectory(path: root.path))
+        var listing: DirectoryListing?
+        waitUntil("listing") {
+            listing = phone.messages.compactMap { if case .directory(let l) = $0 { return l } else { return nil } }.last
+            return listing != nil
+        }
+        XCTAssertEqual(listing?.path, root.path)
+        XCTAssertEqual(listing?.folders, ["Alpha", "alpha 2", "beta"], "folders only, hidden ones left out, sorted")
+        XCTAssertEqual(listing?.parent, root.deletingLastPathComponent().path)
+        XCTAssertEqual(listing?.isHome, false)
+
+        phone.connection.send(.listDirectory(path: "/nonexistent/place"))
+        waitUntil("refused") { phone.messages.contains(.error("cannot open that folder")) }
+
+        // A session can then be started in any folder that was found.
+        phone.connection.send(.create(CreateRequest(command: "pwd -P", cwd: root.appendingPathComponent("alpha 2").path)))
+        waitUntil("attached") { phone.attached != nil }
+        waitUntil("ran there") { phone.text(phone.attached!.id).contains("/alpha 2") }
+    }
+
+    func testAClientCanReadHistoryAndOnlyResumeRealConversations() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("agentty-e2e-home-\(UUID().uuidString)")
+        let project = "/Users/me/Dev/app"
+        let folder = home.appendingPathComponent(".claude/projects/-Users-me-Dev-app")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try #"{"type":"user","cwd":"/Users/me/Dev/app","message":{"role":"user","content":"viết test"}}"#
+            .write(to: folder.appendingPathComponent("c-1.jsonl"), atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: home) }
+        let withHome = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false, home: home.path))
+        let homePort = try withHome.start()
+        defer { withHome.stop() }
+
+        let phone = TestClient(port: homePort, token: token, name: "phone")
+        waitUntil("welcome") { phone.welcomed }
+        phone.connection.send(.history(path: project))
+        phone.connection.send(.history(path: nil))
+        phone.connection.send(.history(path: "/Users/me/Dev/other"))
+        func history(_ path: String?) -> [Conversation]? {
+            phone.messages.compactMap { if case .history(path, let c) = $0 { return c } else { return nil } }.last
+        }
+        waitUntil("history") { history(project) != nil && history(nil) != nil && history("/Users/me/Dev/other") != nil }
+        XCTAssertEqual(history(project)?.map(\.title), ["viết test"])
+        XCTAssertEqual(history(project)?.first?.resumeCommand, "claude --resume c-1")
+        XCTAssertEqual(history(nil)?.map(\.sessionID), ["c-1"])
+        XCTAssertEqual(history("/Users/me/Dev/other"), [])
+
+        // Ids that could break out of the command line, and agents the host
+        // does not know, are refused before anything is started.
+        phone.connection.send(.resume(agent: "claude", sessionID: "x; touch /tmp/pwned", cwd: "/tmp", size: .default))
+        phone.connection.send(.resume(agent: "vim", sessionID: "c-1", cwd: "/tmp", size: .default))
+        waitUntil("refused twice") { phone.messages.filter { $0 == .error("cannot resume that conversation") }.count == 2 }
+        phone.connection.send(.handoff(agent: "claude", sessionID: "no-such", cwd: project, target: "codex", note: "", size: .default))
+        waitUntil("unknown conversation") { phone.messages.contains(.error("That conversation is no longer on this Mac.")) }
+        XCTAssertEqual(withHome.sessionCount, 0)
+    }
+
     func testInputToASessionTheClientIsNotAttachedToIsIgnored() {
         let owner = connect("owner")
         owner.connection.send(.create(CreateRequest(command: "cat")))

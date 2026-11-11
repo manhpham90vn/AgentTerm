@@ -1,3 +1,4 @@
+import AgenttyProtocol
 import AgenttyHost
 import SwiftUI
 
