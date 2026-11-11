@@ -222,6 +222,11 @@ the same folder can therefore be mixed up; the History tab is exact.
   in `~/Library/Application Support/Agentty/token`.
 - The pairing QR code encodes
   `agentty://pair?host=<tailscale name>&port=<port>&token=<token>&name=<mac>`.
+- `Tailscale.status()` decides what the pairing screen shows. Tailscale counts
+  as installed when its app or command line tool is found; as ready when the
+  Mac has an address in Tailscale's range and the CLI, if it answers, reports
+  the backend as running. An address alone is enough where the CLI is missing.
+  The screen re-checks every 3 seconds while it is open.
 - The host listens on `127.0.0.1` and on the Mac's Tailscale address
   (100.64.0.0/10), found with `getifaddrs`. It checks every 15 seconds so it
   follows Tailscale going up, down or changing address. It never listens on

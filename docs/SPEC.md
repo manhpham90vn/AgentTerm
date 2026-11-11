@@ -124,8 +124,13 @@ corner, the button that hides the side panel.
   iPhone app, for when scanning is not possible.
 - All remote traffic goes through Tailscale. Agentty does not run a relay
   server and does not open a port on the local network.
-- If Tailscale is not connected on the Mac, the pairing screen says so and
-  explains what to do.
+- The pairing screen checks Tailscale on the Mac first. The code is shown only
+  when Tailscale is installed, signed in and connected. Otherwise the screen
+  shows what is missing (not installed, not signed in, or not connected) and
+  the steps to fix it, with a button to get or open Tailscale, and switches to
+  the code by itself once Tailscale is ready.
+- Next to the code, the screen says that the iPhone needs Tailscale too, signed
+  in to the same account.
 
 ### iPhone app
 

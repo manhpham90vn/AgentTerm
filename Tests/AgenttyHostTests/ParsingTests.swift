@@ -130,4 +130,20 @@ final class ParsingTests: XCTestCase {
         XCTAssertEqual(rows.map(\.id), ["a.txt", "a2.txt", "a10.txt", "b.txt"])
         XCTAssertTrue(rows.allSatisfy { $0.depth == 0 })
     }
+
+    func testTailscaleStatus() {
+        func status(_ installed: Bool, _ state: String?, _ address: String?, _ name: String? = nil) -> TailscaleStatus {
+            Tailscale.status(installed: installed, backendState: state, address: address, dnsName: name)
+        }
+        XCTAssertEqual(status(false, nil, nil), .notInstalled)
+        XCTAssertEqual(status(true, "NeedsLogin", nil), .needsLogin)
+        XCTAssertEqual(status(true, "Stopped", nil), .notConnected)
+        XCTAssertEqual(status(true, "Starting", nil), .notConnected)
+        XCTAssertEqual(status(true, nil, nil), .notConnected, "installed, CLI gave nothing, no address")
+        XCTAssertEqual(status(true, "Running", nil), .notConnected, "running without an address yet")
+        XCTAssertEqual(status(true, "Stopped", "100.64.0.1"), .notConnected, "a stale address does not count when it is switched off")
+        XCTAssertEqual(status(true, "Running", "100.101.102.103", "macbook.tail1234.ts.net."), .ready(host: "macbook.tail1234.ts.net"))
+        XCTAssertEqual(status(true, "Running", "100.101.102.103", ""), .ready(host: "100.101.102.103"))
+        XCTAssertEqual(status(false, nil, "100.101.102.103"), .ready(host: "100.101.102.103"), "an address proves it works even if the app was not found")
+    }
 }

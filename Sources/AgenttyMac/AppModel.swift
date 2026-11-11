@@ -399,11 +399,12 @@ final class AppModel: ObservableObject {
 
     // MARK: Pairing
 
-    /// Looks up how a phone can reach this Mac. Runs the Tailscale CLI, so call off the main thread.
-    nonisolated static func pairingInfo(port: UInt16) -> PairingInfo? {
-        guard let token = try? HostEnvironment.loadOrCreateToken(), let address = Tailscale.ipv4Address() else { return nil }
-        let host = Tailscale.dnsName() ?? address
-        return PairingInfo(host: host, port: port, token: token, name: Host.current().localizedName ?? "Mac")
+    /// Checks Tailscale and, when it is ready, builds what a phone needs to
+    /// reach this Mac. Runs the Tailscale CLI, so call off the main thread.
+    nonisolated static func pairingState(port: UInt16) -> (status: TailscaleStatus, info: PairingInfo?) {
+        let status = Tailscale.status()
+        guard case .ready(let host) = status, let token = try? HostEnvironment.loadOrCreateToken() else { return (status, nil) }
+        return (status, PairingInfo(host: host, port: port, token: token, name: Host.current().localizedName ?? "Mac"))
     }
 
     var hostPort: UInt16 { port }
