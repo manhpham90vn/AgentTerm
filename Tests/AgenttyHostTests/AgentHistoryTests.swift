@@ -155,7 +155,31 @@ final class AgentHistoryTests: XCTestCase {
         XCTAssertEqual(history(includeSubfolders: true).count, 4)
     }
 
+    func testAllConversationsCoversEveryFolder() throws {
+        try write(".claude/projects/-Users-me-Dev-my-app/c-1.jsonl", [
+            #"{"type":"user","cwd":"/Users/me/Dev/my.app","message":{"role":"user","content":"in the project"}}"#,
+        ], modified: Date(timeIntervalSince1970: 5_000))
+        try write(".claude/projects/-Users-me-other/c-2.jsonl", [
+            #"{"type":"user","cwd":"/Users/me/other","message":{"role":"user","content":"somewhere else"}}"#,
+        ], modified: Date(timeIntervalSince1970: 6_000))
+        try write(".claude/projects/-Users-me-nocwd/c-3.jsonl", [
+            #"{"type":"user","message":{"role":"user","content":"folder unknown"}}"#,
+        ])
+        try write(".codex/sessions/2026/11/11/rollout-2026-11-11T01-00-00-x-1.jsonl", [
+            #"{"type":"session_meta","payload":{"id":"x-1","cwd":"/tmp/scratch"}}"#,
+        ], modified: Date(timeIntervalSince1970: 7_000))
+        try write(".codex/history.jsonl", [#"{"session_id":"x-1","ts":1,"text":"quick experiment"}"#])
+        try write(".copilot/session-state/p-1/workspace.yaml", ["id: p-1", "cwd: /Users/me/third", "name: third", "updated_at: 1970-01-01T00:16:40.000Z"])
+
+        let all = AgentHistory.allConversations(home: home.path)
+        XCTAssertEqual(all.map(\.sessionID), ["x-1", "c-2", "c-1", "p-1"], "newest first; a session with no recorded folder is left out")
+        XCTAssertEqual(all.map(\.cwd), ["/tmp/scratch", "/Users/me/other", "/Users/me/Dev/my.app", "/Users/me/third"])
+        XCTAssertEqual(AgentHistory.allConversations(home: home.path, limit: 2).count, 2)
+        XCTAssertEqual(history().map(\.sessionID), ["c-1"], "the folder view is unaffected")
+    }
+
     func testNothingInstalledMeansNoHistory() {
+        XCTAssertTrue(AgentHistory.allConversations(home: home.path).isEmpty)
         XCTAssertTrue(history().isEmpty)
         XCTAssertTrue(history("/nonexistent/place").isEmpty)
     }

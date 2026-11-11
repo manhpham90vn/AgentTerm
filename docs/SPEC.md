@@ -105,7 +105,8 @@ Three panes, like a code editor:
     long ago it was. A conversation can be resumed, which opens it in its
     agent in a new session, or handed off to another agent. Like the Git
     tab it covers the selected folder only: conversations that ran in a
-    subfolder belong to that subfolder.
+    subfolder belong to that subfolder. A switch at the top changes the list
+    to **All**: every conversation on the Mac, each row naming its folder.
 
 ### Pairing and remote access
 

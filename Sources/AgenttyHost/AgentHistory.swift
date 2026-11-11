@@ -63,12 +63,27 @@ public enum AgentHistory {
         )
     }
 
+    /// Every conversation the agents have on this machine, newest first,
+    /// whatever folder it ran in.
+    public static func allConversations(home: String = NSHomeDirectory(), limit: Int = 300) -> [Conversation] {
+        let home = URL(fileURLWithPath: home, isDirectory: true)
+        let scope = Scope(directory: nil, includeSubfolders: true)
+        let all = claude(scope, home) + codex(scope, home) + antigravity(scope, home) + copilot(scope, home)
+        return Array(
+            all.filter { isSafeIdentifier($0.sessionID) && !$0.title.isEmpty }
+                .sorted { $0.updatedAt > $1.updatedAt }
+                .prefix(limit)
+        )
+    }
+
     private struct Scope {
-        let directory: String
+        /// `nil` means every folder.
+        let directory: String?
         let includeSubfolders: Bool
 
         /// True when a conversation that ran in `path` belongs to this scope.
         func contains(_ path: String) -> Bool {
+            guard let directory else { return true }
             let path = URL(fileURLWithPath: path).standardizedFileURL.path
             if path == directory { return true }
             return includeSubfolders && path.hasPrefix(directory.hasSuffix("/") ? directory : directory + "/")
@@ -86,39 +101,45 @@ public enum AgentHistory {
 
     /// `~/.claude/projects/<directory with every non-alphanumeric as "-">/<session>.jsonl`
     private static func claude(_ scope: Scope, _ home: URL) -> [Conversation] {
-        let directory = scope.directory
         let projects = home.appendingPathComponent(".claude/projects")
-        let own = claudeProjectName(for: directory)
+        let own = scope.directory.map(claudeProjectName)
         // Subfolders of the directory have their own project folder. The name
-        // alone cannot tell "apps/web" from a sibling "apps-web", so those
-        // are checked against the directory recorded inside the session.
-        let names = ((try? FileManager.default.contentsOfDirectory(atPath: projects.path)) ?? [])
-            .filter { $0 == own || (scope.includeSubfolders && $0.hasPrefix(own + "-")) }
-        return names.flatMap { name -> [Conversation] in
-            recentFiles(in: projects.appendingPathComponent(name), suffix: ".jsonl").compactMap { file in
-                let session = file.url.deletingPathExtension().lastPathComponent
-                guard !session.hasPrefix("agent-") else { return nil }
-                var head: Data?
-                var cwd = directory
-                if name != own {
-                    let data = read(file.url, head: headBytes)
-                    head = data
-                    guard let recorded = lines(of: data, containing: "\"cwd\"", limit: 1).first?["cwd"] as? String,
-                          scope.contains(recorded)
-                    else { return nil }
-                    cwd = recorded
-                }
-                // The CLI keeps rewriting an "ai-title" line, so the newest is near the end.
-                var title = lines(of: read(file.url, tail: tailBytes), containing: "\"ai-title\"").reversed()
-                    .lazy.compactMap { $0["aiTitle"] as? String }.first
-                if title == nil {
-                    let data = head ?? read(file.url, head: headBytes)
-                    title = lines(of: data, containing: "\"summary\"").lazy.compactMap { $0["summary"] as? String }.first
-                        ?? lines(of: data, containing: "\"user\"").lazy.compactMap(claudePrompt).first
-                }
-                guard let title else { return nil }
-                return Conversation(agent: "claude", sessionID: session, title: clean(title), updatedAt: file.modified, cwd: cwd, source: file.url.path)
+        // alone cannot tell "apps/web" from a sibling "apps-web", and cannot
+        // be turned back into a path at all, so for any folder but the
+        // directory's own the path recorded inside the session is used.
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: projects.path)) ?? []).filter { name in
+            guard let own else { return true }
+            return name == own || (scope.includeSubfolders && name.hasPrefix(own + "-"))
+        }
+        let files = names.flatMap { name in
+            recentFiles(in: projects.appendingPathComponent(name), suffix: ".jsonl").map { (name: name, file: $0) }
+        }
+        return files.sorted { $0.file.modified > $1.file.modified }.prefix(maxFilesPerAgent).compactMap { entry -> Conversation? in
+            let file = entry.file
+            let session = file.url.deletingPathExtension().lastPathComponent
+            guard !session.hasPrefix("agent-") else { return nil }
+            var head: Data?
+            let cwd: String
+            if let directory = scope.directory, entry.name == own {
+                cwd = directory
+            } else {
+                let data = read(file.url, head: headBytes)
+                head = data
+                guard let recorded = lines(of: data, containing: "\"cwd\"", limit: 1).first?["cwd"] as? String,
+                      scope.contains(recorded)
+                else { return nil }
+                cwd = recorded
             }
+            // The CLI keeps rewriting an "ai-title" line, so the newest is near the end.
+            var title = lines(of: read(file.url, tail: tailBytes), containing: "\"ai-title\"").reversed()
+                .lazy.compactMap { $0["aiTitle"] as? String }.first
+            if title == nil {
+                let data = head ?? read(file.url, head: headBytes)
+                title = lines(of: data, containing: "\"summary\"").lazy.compactMap { $0["summary"] as? String }.first
+                    ?? lines(of: data, containing: "\"user\"").lazy.compactMap(claudePrompt).first
+            }
+            guard let title else { return nil }
+            return Conversation(agent: "claude", sessionID: session, title: clean(title), updatedAt: file.modified, cwd: cwd, source: file.url.path)
         }
     }
 

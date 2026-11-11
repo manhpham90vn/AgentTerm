@@ -73,9 +73,21 @@ struct HistoryView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text(model.history.map { $0.count == 1 ? "1 conversation" : "\($0.count) conversations" } ?? "Loading…")
-                    .font(.system(size: 11, weight: .medium))
+                // Same idea as the Git tab by default: the selected folder.
+                // "All" is the one place that lists every conversation.
+                Picker("Scope", selection: $model.historyShowsAll) {
+                    Text("This Folder").tag(false)
+                    Text("All").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()
+                .help("Show this folder's conversations, or every conversation on this Mac")
+                Text(model.history.map { "\($0.count)" } ?? "…")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
                     .foregroundStyle(.secondary)
+                    .accessibilityLabel(model.history.map { "\($0.count) conversations" } ?? "Loading")
                 Spacer()
                 Button { model.refreshHistory() } label: {
                     Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
@@ -97,11 +109,13 @@ struct HistoryView: View {
 
     @ViewBuilder
     private var content: some View {
-        if model.selectedFolder == nil {
-            placeholder("Select a folder to see its conversations.")
+        if model.selectedFolder == nil && !model.historyShowsAll {
+            placeholder("Select a folder to see its conversations, or switch to All.")
         } else if let history = model.history {
             if history.isEmpty {
-                placeholder("No agent has a conversation in this folder yet.")
+                placeholder(model.historyShowsAll
+                    ? "No agent has a conversation on this Mac yet."
+                    : "No agent has a conversation in this folder yet.\nSwitch to All to see the ones from other folders.")
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
@@ -113,7 +127,7 @@ struct HistoryView: View {
                                 }
                             if expanded {
                                 ForEach(section.conversations) { conversation in
-                                    ConversationRow(conversation: conversation)
+                                    ConversationRow(conversation: conversation, showsFolder: model.historyShowsAll)
                                 }
                             }
                         }
@@ -169,6 +183,8 @@ private struct AgentHeader: View {
 private struct ConversationRow: View {
     @EnvironmentObject private var model: AppModel
     let conversation: Conversation
+    /// In the list of everything, each row says which folder it ran in.
+    var showsFolder = false
     @State private var hovering = false
 
     private static let relative: RelativeDateTimeFormatter = {
@@ -198,9 +214,18 @@ private struct ConversationRow: View {
                     .font(.system(size: 12))
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(when)
-                    .font(.system(size: 10.5))
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    Text(when)
+                    if showsFolder {
+                        Text("·")
+                        Image(systemName: "folder").font(.system(size: 9))
+                        Text((conversation.cwd as NSString).lastPathComponent)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
             }
             Spacer(minLength: 4)
             if hovering {
@@ -244,6 +269,6 @@ private struct ConversationRow: View {
                 NSPasteboard.general.setString(conversation.resumeCommand, forType: .string)
             }
         }
-        .help(conversation.title)
+        .help(showsFolder ? "\(conversation.title)\n\((conversation.cwd as NSString).abbreviatingWithTildeInPath)" : conversation.title)
     }
 }

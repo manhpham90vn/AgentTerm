@@ -32,6 +32,16 @@ final class AppModel: ObservableObject {
     @Published var selectedDiffFile: String?
     /// Past agent conversations of the selected folder. `nil` while loading.
     @Published private(set) var history: [Conversation]?
+    /// History lists the selected folder's conversations, or every
+    /// conversation on this Mac when this is on.
+    @Published var historyShowsAll = UserDefaults.standard.bool(forKey: "historyShowsAll") {
+        didSet {
+            guard historyShowsAll != oldValue else { return }
+            UserDefaults.standard.set(historyShowsAll, forKey: "historyShowsAll")
+            history = nil
+            refreshHistory()
+        }
+    }
     @Published var showDiff = true
     @Published var showPairing = false
     @Published private(set) var lastError: String?
@@ -257,9 +267,12 @@ final class AppModel: ObservableObject {
     private func folderChanged() {
         diff = nil
         selectedDiffFile = nil
-        history = nil
         refreshDiff()
-        refreshHistory()
+        // The list of every conversation does not depend on the folder.
+        if !historyShowsAll {
+            history = nil
+            refreshHistory()
+        }
     }
 
     // MARK: Handoff
@@ -315,16 +328,20 @@ final class AppModel: ObservableObject {
     // MARK: History
 
     func refreshHistory() {
-        guard let directory = selectedFolder else {
+        let everywhere = historyShowsAll
+        let directory = selectedFolder
+        guard everywhere || directory != nil else {
             history = []
             return
         }
         historyGeneration += 1
         let generation = historyGeneration
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let found = AgentHistory.conversations(in: directory)
+            let found = everywhere ? AgentHistory.allConversations() : AgentHistory.conversations(in: directory ?? "")
             DispatchQueue.main.async {
-                guard let self, generation == self.historyGeneration, self.selectedFolder == directory else { return }
+                guard let self, generation == self.historyGeneration,
+                      self.historyShowsAll == everywhere, everywhere || self.selectedFolder == directory
+                else { return }
                 if self.history != found { self.history = found }
             }
         }
