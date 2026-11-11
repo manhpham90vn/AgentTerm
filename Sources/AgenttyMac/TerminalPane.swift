@@ -23,8 +23,9 @@ struct TerminalPane: NSViewRepresentable {
 /// Normally the terminal fills the pane. While another device drives the
 /// session the emulator draws that device's grid, which is usually much
 /// smaller than a Mac window. Left alone it would sit in the top-left corner
-/// with the rest of the pane blank, which looks broken. Instead the grid is
-/// centered and framed like a preview of the other device's screen.
+/// with the rest of the pane blank, which looks broken. Instead the terminal
+/// view is made exactly as large as that grid, centered, and framed like a
+/// preview of the other device's screen.
 final class TerminalContainerView: NSView {
     private var controller: TerminalController?
     private var foreignSize: TermSize?
@@ -91,17 +92,17 @@ final class TerminalContainerView: NSView {
             return
         }
 
-        // The view keeps the pane's size, so the size that fits this window
-        // is still known when control comes back. Only its origin moves, to
-        // bring the grid it draws in its top-left corner to the middle.
+        // The view is exactly as large as the grid it draws, placed in the
+        // middle. What would fit this pane is worked out by the controller.
+        controller.containerResized(to: bounds.size)
         let grid = controller.gridPixelSize
-        let dx = max(0, ((bounds.width - grid.width) / 2).rounded(.down))
-        let dy = max(0, ((bounds.height - grid.height) / 2).rounded(.down))
-        terminal.frame = NSRect(x: dx, y: -dy, width: bounds.width, height: bounds.height)
+        let x = max(0, ((bounds.width - grid.width) / 2).rounded(.down))
+        let y = max(0, ((bounds.height - grid.height) / 2).rounded(.down))
+        // A little slack so rounding never costs the last column or row.
+        let gridRect = NSRect(x: x, y: bounds.height - y - grid.height, width: grid.width + 0.5, height: grid.height + 0.5)
+        terminal.frame = gridRect
 
-        let card = NSRect(x: dx, y: bounds.height - dy - grid.height, width: grid.width, height: grid.height)
-            .insetBy(dx: -10, dy: -10)
-            .intersection(bounds.insetBy(dx: 1, dy: 1))
+        let card = gridRect.insetBy(dx: -10, dy: -10).intersection(bounds.insetBy(dx: 1, dy: 1))
         let outline = CGPath(roundedRect: card, cornerWidth: 10, cornerHeight: 10, transform: nil)
         let surround = CGMutablePath()
         surround.addRect(bounds)

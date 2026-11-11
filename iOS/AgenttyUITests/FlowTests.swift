@@ -46,6 +46,21 @@ final class FlowTests: XCTestCase {
         capture("3-terminal")
 
         // Text written in the compose field, Vietnamese included, is sent as typed.
+        // When the Mac takes the session, the phone shows the Mac's larger
+        // terminal scaled down, and can take the session back. Only checked
+        // when the test is told that something will play the Mac.
+        if environment["AGENTTY_EXPECT_MAC_TAKEOVER"] != nil {
+            let fit = app.buttons["Fit This Screen"]
+            XCTAssertTrue(fit.waitForExistence(timeout: 30), "the Mac did not take the session")
+            sleep(1)
+            capture("3b-mac-in-control")
+            fit.tap()
+            let gone = NSPredicate(format: "exists == false")
+            wait(for: [expectation(for: gone, evaluatedWith: fit)], timeout: 10)
+            sleep(1)
+            capture("3c-taken-back")
+        }
+
         compose.tap()
         compose.typeText("echo Xin chào tiếng Việt: ờ ữ ẩ đ")
         capture("4-composing")

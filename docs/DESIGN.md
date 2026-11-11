@@ -107,11 +107,20 @@ as the phone stops looking. The Mac takes control only when the user types or
 asks for it.
 
 While a session has a foreign size, every client's emulator takes that grid,
-so all of them draw exactly what the driver sees. The Mac keeps its terminal
-view at the pane's size, so the size that fits the window is still known, and
-only moves the view's origin to bring the smaller grid to the middle. A frame
-and a dimmed surround are drawn around it. The grid's exact size comes from
-SwiftTerm's `getOptimalFrameSize()`.
+so all of them draw exactly what the driver sees. The terminal view is then
+made exactly as large as the grid (SwiftTerm's `getOptimalFrameSize()`), and
+the container decides how to show it:
+
+- **Mac**, where the foreign grid is usually a phone's and small: centered,
+  with a frame and a dimmed surround.
+- **iPhone**, where it is usually a Mac's and large: scaled down with a view
+  transform until the whole grid fits, against the top.
+
+Because the view no longer has the container's size, what SwiftTerm reports
+as its size is the foreign grid. The grid that would fit the container, which
+is what the client asks for when the user comes back to it, is worked out by
+`TerminalController.containerResized` from the cell size. Once the client
+drives again the view fills the container and SwiftTerm's own figure is used.
 
 Keeping the Mac's own, larger grid and letting the narrower output flow into
 it was tried and dropped: it reads well for programs that draw relative to

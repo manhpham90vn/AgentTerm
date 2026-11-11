@@ -61,6 +61,11 @@ itself.
 - While another device is using a session, the Mac shows that device's
   terminal centered in a frame, like a preview of its screen, with a line
   above saying so. This is the same for shells and for agents.
+- The other way round, while the Mac is using a session that is open on the
+  iPhone, the iPhone shows the Mac's whole terminal scaled down to fit, with a
+  line saying so and a "Fit This Screen" button that takes the session back.
+- Handing a session back and forth redraws the program for the new size each
+  time.
 - What a terminal sends by itself (answers to the program's questions, focus
   changes, the pointer passing over the window) is not use of the session and
   never changes its size.

@@ -18,10 +18,10 @@ struct TerminalScreen: View {
                 ForeignSizeBanner(size: size)
             }
             if let controller {
-                TerminalPane(controller: controller)
+                TerminalPane(controller: controller, foreignSize: model.foreignSize)
                     .id(ObjectIdentifier(controller))
-                    .padding(.leading, 6)
-                    .padding(.top, 4)
+                    .padding(.leading, model.foreignSize == nil ? 6 : 0)
+                    .padding(.top, model.foreignSize == nil ? 4 : 0)
                 KeyBar(controller: controller)
                 ComposeBar(controller: controller)
             } else {
@@ -56,26 +56,80 @@ struct TerminalScreen: View {
     }
 }
 
-/// Hosts the SwiftTerm view. Its frame decides the terminal grid.
+/// Hosts the SwiftTerm view.
 private struct TerminalPane: UIViewRepresentable {
     let controller: TerminalController
+    /// The grid another device imposed, while it drives the session.
+    let foreignSize: TermSize?
 
-    func makeUIView(context: Context) -> UIView {
-        let container = UIView()
-        container.backgroundColor = TerminalStyle.background
-        container.clipsToBounds = true
-        return container
+    func makeUIView(context: Context) -> TerminalContainerView {
+        TerminalContainerView()
     }
 
-    func updateUIView(_ container: UIView, context: Context) {
+    func updateUIView(_ container: TerminalContainerView, context: Context) {
+        container.show(controller, foreignSize: foreignSize)
+    }
+}
+
+/// Lays the terminal out in the room above the key bar.
+///
+/// Normally the terminal fills it, and its size decides the grid. While
+/// the Mac drives the session the grid is the Mac's, far larger than a phone
+/// screen. Showing it at full size would leave only its top-left corner on
+/// screen. Instead the whole grid is scaled down to fit, like a picture of
+/// the Mac's terminal, until the user takes the session back.
+final class TerminalContainerView: UIView {
+    private var controller: TerminalController?
+    private var foreignSize: TermSize?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = TerminalStyle.background
+        clipsToBounds = true
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("not used")
+    }
+
+    func show(_ controller: TerminalController, foreignSize: TermSize?) {
         let terminal = controller.view
-        guard terminal.superview !== container else { return }
-        container.subviews.forEach { $0.removeFromSuperview() }
-        terminal.frame = container.bounds
-        terminal.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        container.addSubview(terminal)
-        // Opening a session here means using it here, so take over its size.
-        DispatchQueue.main.async { controller.claimSize() }
+        if terminal.superview !== self {
+            subviews.forEach { $0.removeFromSuperview() }
+            terminal.autoresizingMask = []
+            addSubview(terminal)
+            self.controller = controller
+            // Opening a session here means using it here, so take over its size.
+            DispatchQueue.main.async { controller.claimSize() }
+        }
+        self.foreignSize = foreignSize
+        setNeedsLayout()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard let controller else { return }
+        let terminal = controller.view
+        // Geometry is set through bounds and center, which stay meaningful
+        // under a transform. `frame` does not.
+        terminal.transform = .identity
+
+        guard foreignSize != nil else {
+            terminal.bounds = CGRect(origin: terminal.bounds.origin, size: bounds.size)
+            terminal.center = CGPoint(x: bounds.midX, y: bounds.midY)
+            return
+        }
+
+        controller.containerResized(to: bounds.size)
+        let grid = controller.gridPixelSize
+        guard grid.width > 0, grid.height > 0 else { return }
+        let scale = min(1, bounds.width / grid.width, bounds.height / grid.height)
+        // A little slack so rounding never costs the last column or row.
+        terminal.bounds = CGRect(origin: terminal.bounds.origin, size: CGSize(width: grid.width + 0.5, height: grid.height + 0.5))
+        // Centered across, against the top: a terminal reads from the top.
+        terminal.center = CGPoint(x: bounds.midX, y: grid.height * scale / 2)
+        terminal.transform = CGAffineTransform(scaleX: scale, y: scale)
     }
 }
 
@@ -86,8 +140,10 @@ private struct ForeignSizeBanner: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "macbook").foregroundStyle(.secondary)
-            Text("Sized for the Mac (\(size.cols)×\(size.rows))")
+            Text("In use on the Mac · \(size.cols)×\(size.rows) · scaled to fit")
                 .font(.footnote)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
             Spacer()
             Button("Fit This Screen") { model.takeControl() }
                 .font(.footnote.weight(.semibold))

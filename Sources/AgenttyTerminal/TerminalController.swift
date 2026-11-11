@@ -44,6 +44,22 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         view.getOptimalFrameSize().size
     }
 
+    /// Called by the container with the room it has. While another device
+    /// drives, the terminal view is sized to that device's grid, so the grid
+    /// that would fit here has to be worked out from the cell size instead.
+    /// It is what this client asks for when the user comes back to it.
+    public func containerResized(to size: CGSize) {
+        guard foreignSize != nil, let grid, grid.cols > 0, grid.rows > 0 else { return }
+        let pixels = gridPixelSize
+        let cell = CGSize(width: pixels.width / CGFloat(grid.cols), height: pixels.height / CGFloat(grid.rows))
+        guard cell.width > 0, cell.height > 0 else { return }
+        let fitted = TermSize(cols: max(2, Int(size.width / cell.width)), rows: max(2, Int(size.height / cell.height)))
+        guard fitted != naturalSize else { return }
+        naturalSize = fitted
+        hasLaidOut = true
+        reportNaturalSizeSoon()
+    }
+
     public func feed(_ data: Data) {
         view.feed(byteArray: ArraySlice([UInt8](data)))
     }
@@ -113,18 +129,25 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     public nonisolated func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
         MainActor.assumeIsolated {
             guard !applyingRemoteSize else { return }
-            // The view was laid out and picked the grid that fits it.
-            naturalSize = TermSize(cols: newCols, rows: newRows)
-            grid = naturalSize
-            hasLaidOut = true
+            let reported = TermSize(cols: newCols, rows: newRows)
             if let foreignSize {
-                // Another device is driving. A layout change here must not
-                // steal control, so put its grid back once layout is done.
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, self.foreignSize == foreignSize else { return }
-                    self.setGrid(foreignSize)
+                // While another device drives, the view is sized to that
+                // device's grid, so what it reports is that grid or a layout
+                // pass on the way to it. It is never the size that fits here;
+                // that comes from `containerResized`.
+                grid = reported
+                if reported != foreignSize {
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self, self.foreignSize == foreignSize else { return }
+                        self.setGrid(foreignSize)
+                    }
                 }
+                return
             }
+            // The view fills its container and picked the grid that fits it.
+            naturalSize = reported
+            grid = reported
+            hasLaidOut = true
             reportNaturalSizeSoon()
         }
     }
