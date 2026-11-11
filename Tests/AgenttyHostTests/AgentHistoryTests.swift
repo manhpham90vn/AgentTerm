@@ -103,6 +103,12 @@ final class AgentHistoryTests: XCTestCase {
         XCTAssertEqual(found[0].title, "Plan the release")
         XCTAssertEqual(found[0].resumeCommand, "agy --conversation conv-1")
         XCTAssertEqual(found[0].updatedAt.timeIntervalSince1970, 1_794_304_822.474, accuracy: 0.01)
+        XCTAssertNil(found[0].source, "no transcript file was written for it")
+
+        try write(".gemini/antigravity-cli/brain/conv-1/.system_generated/logs/transcript.jsonl", ["{}"])
+        XCTAssertTrue(history()[0].source?.hasSuffix("/brain/conv-1/.system_generated/logs/transcript.jsonl") == true)
+        try write(".gemini/antigravity-cli/brain/conv-1/.system_generated/logs/transcript_full.jsonl", ["{}"])
+        XCTAssertTrue(history()[0].source?.hasSuffix("/transcript_full.jsonl") == true, "the untruncated file is preferred")
     }
 
     func testCopilotReadsWorkspaceFiles() throws {

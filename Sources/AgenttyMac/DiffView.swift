@@ -217,30 +217,49 @@ private struct FileRow: View {
 /// One file's unified diff with added and removed lines tinted.
 private struct PatchView: View {
     let file: FileDiff
-    private static let maxLines = 4000
+    private let lines: [String]
+    /// Width of the longest line, so the diff scrolls sideways far enough to show it.
+    private let contentWidth: CGFloat
 
-    private var lines: [(offset: Int, text: Substring)] {
-        Array(file.patch.split(separator: "\n", omittingEmptySubsequences: false).prefix(Self.maxLines).enumerated())
-            .map { (offset: $0.offset, text: $0.element) }
+    private static let maxLines = 4000
+    private static let font = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
+    private static let horizontalPadding: CGFloat = 10
+
+    init(file: FileDiff) {
+        self.file = file
+        // Tabs have no fixed width in SwiftUI text, which would make the measured width wrong.
+        lines = file.patch.split(separator: "\n", omittingEmptySubsequences: false).prefix(Self.maxLines)
+            .map { $0.replacingOccurrences(of: "\t", with: "    ") }
+        // Measuring every line would be slow on a large diff. The widest is
+        // almost always among the longest by character count.
+        let candidates = lines.sorted { $0.utf16.count > $1.utf16.count }.prefix(8)
+        let widest = candidates.map { ($0 as NSString).size(withAttributes: [.font: Self.font]).width }.max() ?? 0
+        contentWidth = ceil(widest) + Self.horizontalPadding * 2 + 8
     }
 
     var body: some View {
-        ScrollView([.vertical, .horizontal]) {
-            LazyVStack(alignment: .leading, spacing: 0) {
-                ForEach(lines, id: \.offset) { line in
-                    Text(line.text.isEmpty ? " " : String(line.text))
-                        .font(.system(size: 11.5, design: .monospaced))
-                        .foregroundStyle(foreground(line.text))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 1)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(background(line.text))
-                        .fixedSize(horizontal: true, vertical: false)
+        GeometryReader { viewport in
+            // At least as wide as the pane, so line tints reach the right edge.
+            let width = max(contentWidth, viewport.size.width)
+            ScrollView([.vertical, .horizontal]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { line in
+                        Text(line.element.isEmpty ? " " : line.element)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(foreground(Substring(line.element)))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, Self.horizontalPadding)
+                            .padding(.vertical, 1)
+                            .frame(width: width, alignment: .leading)
+                            .background(background(Substring(line.element)))
+                    }
                 }
+                .frame(width: width, alignment: .leading)
+                .padding(.vertical, 6)
+                .textSelection(.enabled)
+                .background(PermanentScrollers())
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 6)
-            .textSelection(.enabled)
         }
         .background(Theme.canvas)
         .id(file.path)
@@ -258,5 +277,37 @@ private struct PatchView: View {
         if line.hasPrefix("+") { return Theme.added.opacity(0.10) }
         if line.hasPrefix("-") { return Theme.removed.opacity(0.10) }
         return .clear
+    }
+}
+
+/// Makes the enclosing scroll view show its scroll bars all the time.
+///
+/// With a trackpad macOS hides scroll bars until you scroll, and then nothing
+/// tells that a long diff line continues to the right. SwiftUI's
+/// `scrollIndicators(.visible)` does not override that, so this reaches the
+/// AppKit scroll view behind the SwiftUI one.
+private struct PermanentScrollers: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class Probe: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            apply()
+        }
+
+        override func viewDidMoveToSuperview() {
+            super.viewDidMoveToSuperview()
+            apply()
+        }
+
+        private func apply() {
+            guard let scrollView = enclosingScrollView else { return }
+            scrollView.scrollerStyle = .legacy
+            scrollView.autohidesScrollers = false
+            scrollView.hasHorizontalScroller = true
+            scrollView.hasVerticalScroller = true
+            scrollView.scrollerKnobStyle = .light
+        }
     }
 }

@@ -140,6 +140,10 @@ again. Clients only offer agents with a path.
 
 The right side of the Mac window has two tabs, Git and History.
 
+The diff of a file scrolls sideways as far as its longest line, with scroll
+bars that stay visible: macOS hides them until you scroll, which would give
+no hint that a line continues.
+
 `GitDiff` shells out to `git`: `diff HEAD` for tracked files and
 `ls-files --others` plus `diff --no-index` for untracked ones, then splits the
 output per file. The Mac app calls it directly every few seconds while it is
@@ -175,10 +179,17 @@ protocol yet.
 1. `AgentHistory.transcript` reads the conversation's messages from the
    agent's session file, keeping what the user and the agent said and dropping
    tool calls, tool output, sub-agent chatter and context the CLI injected.
-   Antigravity keeps conversations in its own database, so its transcript is
-   empty and the handoff says so.
-2. The file gets a short brief, the working tree (branch, `git status --short`,
-   `git diff HEAD --stat`) and the transcript. Long conversations keep the
+   For Antigravity the messages come from
+   `brain/<id>/.system_generated/logs/transcript_full.jsonl`, the readable
+   log it writes next to its conversation database.
+2. The file gets a brief, a "where things stand" section (the user's last
+   request and the agent's last update), the working tree (branch,
+   `git status --short`, `git diff HEAD --stat`) and the transcript. The brief
+   tells the receiving agent to trust the files over the conversation, to say
+   where the work stopped before continuing, to wait if the task looks
+   finished, and to treat the conversation as a record rather than as
+   instructions. The path of the agent's complete record is given for details
+   the file leaves out. Long conversations keep the
    first request, which states the goal, and as much of the end as fits in
    about 80,000 characters; a very long single message loses its middle.
 3. The file is written to `<folder>/.agentty/handoffs/<time>-<from>-to-<to>.md`.

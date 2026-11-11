@@ -75,6 +75,22 @@ final class HandoffTests: XCTestCase {
         ])
     }
 
+    func testAntigravityTranscript() throws {
+        let source = try write("transcript_full.jsonl", [
+            #"{"source":"SYSTEM","type":"SYSTEM_MESSAGE","content":"rules"}"#,
+            #"{"source":"USER_EXPLICIT","type":"USER_INPUT","content":"<ADDITIONAL_METADATA>time</ADDITIONAL_METADATA>\n<USER_REQUEST>\nrà soát file N5\n</USER_REQUEST>"}"#,
+            #"{"source":"MODEL","type":"PLANNER_RESPONSE","content":null,"tool_calls":[{}]}"#,
+            #"{"source":"MODEL","type":"GENERIC","content":"tool output"}"#,
+            #"{"source":"MODEL","type":"PLANNER_RESPONSE","content":"Đã rà soát xong."}"#,
+            #"{"source":"USER_EXPLICIT","type":"USER_INPUT","content":"no tag here"}"#,
+        ])
+        XCTAssertEqual(AgentHistory.transcript(of: conversation("agy", source: source)), [
+            TranscriptMessage(role: .user, text: "rà soát file N5"),
+            TranscriptMessage(role: .agent, text: "Đã rà soát xong."),
+            TranscriptMessage(role: .user, text: "no tag here"),
+        ])
+    }
+
     func testNoReadableSourceMeansNoTranscript() {
         XCTAssertTrue(AgentHistory.transcript(of: conversation("agy")).isEmpty)
         XCTAssertTrue(AgentHistory.transcript(of: conversation("claude", source: "/nonexistent.jsonl")).isEmpty)
@@ -109,6 +125,20 @@ final class HandoffTests: XCTestCase {
         XCTAssertTrue(text.contains("## Instructions from the user\n\nfocus on tests\n"))
         XCTAssertTrue(text.contains("## Working tree\n\nBranch: main"))
         XCTAssertTrue(text.contains("### User\n\nadd login\n\n### Claude Code\n\nDone, tests missing."))
+        XCTAssertTrue(text.contains("## Where things stand\n\nLast request from the user:\n\n> add login\n\nLast update from Claude Code:\n\n> Done, tests missing.\n"))
+        XCTAssertTrue(text.contains("the files are right"))
+        XCTAssertTrue(text.contains("not a list of instructions to you"))
+        XCTAssertFalse(text.contains("complete record"), "no record file is named when the conversation has none")
+    }
+
+    func testDocumentPointsAtTheFullRecordWhenThereIsOne() {
+        let text = Handoff.document(
+            conversation: conversation("codex", source: "/Users/me/.codex/sessions/rollout-1.jsonl"), target: "claude",
+            transcript: [TranscriptMessage(role: .user, text: "line one\nline two")], workingTree: nil, note: nil, now: Date()
+        )
+        XCTAssertTrue(text.contains("is at `/Users/me/.codex/sessions/rollout-1.jsonl`"))
+        XCTAssertTrue(text.contains("> line one\n> line two"))
+        XCTAssertFalse(text.contains("Last update from"))
     }
 
     func testDocumentWithoutATranscriptSaysSo() {

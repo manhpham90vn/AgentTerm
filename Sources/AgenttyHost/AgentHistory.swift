@@ -175,7 +175,13 @@ public enum AgentHistory {
             let title = [summary["Title"], summary["Preview"]].lazy.compactMap { $0 as? String }.first { !$0.isEmpty }
             let stamp = (summary["UpdatedAt"] as? String) ?? (entry["last_modified_time"] as? String) ?? ""
             guard let title, let date = parseDate(stamp) else { return nil }
-            return Conversation(agent: "agy", sessionID: id, title: clean(title), updatedAt: date, cwd: cwd)
+            // The CLI also writes each conversation as readable JSON lines;
+            // the "full" file is the one without truncated messages.
+            let logs = home.appendingPathComponent(".gemini/antigravity-cli/brain/\(id)/.system_generated/logs")
+            let transcript = ["transcript_full.jsonl", "transcript.jsonl"]
+                .map { logs.appendingPathComponent($0).path }
+                .first(where: FileManager.default.fileExists(atPath:))
+            return Conversation(agent: "agy", sessionID: id, title: clean(title), updatedAt: date, cwd: cwd, source: transcript)
         }
     }
 
