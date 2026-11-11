@@ -108,6 +108,9 @@ final class FlowTests: XCTestCase {
         // panel. The script that runs this test sets up the project.
         if environment["AGENTTY_TEST_PROJECT"] != nil {
             app.buttons["folder-details"].firstMatch.tap()
+            // The app remembers the tab last used, so pick it rather than assume it.
+            XCTAssertTrue(app.buttons["Git"].waitForExistence(timeout: 10))
+            app.buttons["Git"].tap()
             XCTAssertTrue(app.staticTexts["notes.txt"].waitForExistence(timeout: 10), "the changed file is not listed")
             capture("7a-changes")
             app.staticTexts["notes.txt"].tap()
