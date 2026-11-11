@@ -234,14 +234,27 @@ component, and an existing name is never overwritten. The Mac app calls it
 directly; it is not in the protocol, so the iPhone has no Files tab.
 
 `FilesModel` holds the tree (folders load when opened and are read again
-every 5 seconds while the app is in front) and the one open document.
+every 5 seconds while the app is in front) and the open documents. Documents
+belong to the window, not to the folder being browsed, so switching folders
+does not close a file with unsaved edits. `active` names the document in
+front; it is nil while a terminal shows. The tab strip lists sessions, then
+documents, and the tab shortcuts count across both.
 
 The editor is an `NSTextView` whose text storage is Highlightr's
 `CodeAttributedString`, which recolors text as it is edited using
 highlight.js. Markdown is rendered by MarkdownUI, with its code blocks
 colored by the same highlighter. Both are package dependencies of the Mac
-app only. Highlightr brings a resource bundle (the grammars and themes),
-which `scripts/bundle-mac.sh` copies into the app's `Contents/Resources`.
+app only.
+
+Mermaid diagrams are drawn by `MermaidView`, a `WKWebView`, since Mermaid is
+a JavaScript library. `mermaid.min.js` (11.4.1, MIT) is checked in under
+`Sources/AgenttyMac/Resources` and shipped in the app, so nothing is loaded
+from the network: the page has a content security policy that allows no
+remote source at all. The diagram's source goes into the page as escaped
+text, and Mermaid runs with `securityLevel: 'strict'`.
+
+Highlightr and the Mac app each bring a resource bundle, which
+`scripts/bundle-mac.sh` copies into the app's `Contents/Resources`.
 
 ## Conversation history
 

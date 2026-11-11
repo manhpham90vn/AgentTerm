@@ -219,6 +219,9 @@ final class AppModel: ObservableObject {
             if controllers[info.id] == nil { controllers[info.id] = makeController(for: info.id) }
             if !sessions.contains(where: { $0.id == info.id }) { sessions.append(info) }
             if selectNextAttached || selectedSession == nil {
+                // A session that was just started comes to the front, also
+                // when a file was showing.
+                if selectNextAttached { files.active = nil }
                 selectNextAttached = false
                 selectedSession = info.id
             }
@@ -295,6 +298,7 @@ final class AppModel: ObservableObject {
     }
 
     func select(session: SessionInfo) {
+        files.active = nil
         selectedSession = session.id
         if folders.contains(where: { $0.path == session.cwd }) { selectedFolder = session.cwd }
     }
@@ -353,17 +357,39 @@ final class AppModel: ObservableObject {
         session.agent
     }
 
-    /// Shows the session `offset` places after the one on screen, wrapping.
-    func selectSession(offset: Int) {
-        guard !sessions.isEmpty else { return }
-        let current = sessions.firstIndex { $0.id == selectedSession } ?? (offset > 0 ? -1 : 0)
-        select(session: sessions[(current + offset + sessions.count) % sessions.count])
+    /// How many tabs the middle pane has: the sessions, then the open files.
+    var tabCount: Int { sessions.count + files.documents.count }
+
+    /// The place of the tab in front, counted from 0, if there is one.
+    private var frontTab: Int? {
+        if let path = files.active, let index = files.documents.firstIndex(where: { $0.path == path }) { return sessions.count + index }
+        return sessions.firstIndex { $0.id == selectedSession }
     }
 
-    /// Shows the session in the given place of the tab strip, counted from 1.
-    func selectSession(number: Int) {
-        guard sessions.indices.contains(number - 1) else { return }
-        select(session: sessions[number - 1])
+    /// Shows the tab in the given place of the strip, counted from 1.
+    func selectTab(number: Int) {
+        let index = number - 1
+        if sessions.indices.contains(index) {
+            select(session: sessions[index])
+        } else if files.documents.indices.contains(index - sessions.count) {
+            files.active = files.documents[index - sessions.count].path
+        }
+    }
+
+    /// Shows the tab `offset` places after the one in front, wrapping.
+    func selectTab(offset: Int) {
+        guard tabCount > 0 else { return }
+        let current = frontTab ?? (offset > 0 ? -1 : 0)
+        selectTab(number: (current + offset + tabCount) % tabCount + 1)
+    }
+
+    /// Closes the tab in front: a file is closed, a session is ended.
+    func closeFrontTab() {
+        if let path = files.active {
+            files.requestClose(path)
+        } else if let id = selectedSession {
+            close(id)
+        }
     }
 
     /// Opens the handoff sheet for a conversation.

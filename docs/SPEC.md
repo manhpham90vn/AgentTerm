@@ -128,7 +128,7 @@ corner, the button that hides the side panel.
   launch screen for the selected folder. Above it, every running session is a
   tab, with a "+" to start another. Command and a number (⌘1 to ⌘9) shows the
   tab in that place, ⌘⇧] and ⌘⇧[ go to the next and previous, ⌘W ends the
-  session on screen.
+  session on screen. Open files are tabs in the same strip.
 - **Right: side panel**, with three tabs. The panel can be hidden.
   - **Git.** Uncommitted git changes of the selected folder: the changed files
     with added and removed line counts, and the diff of the selected file. An
@@ -161,31 +161,39 @@ They differ where the device does:
   scans and manages Macs.
 - "Show in Finder" is on the Mac only. The key bar and the compose field are
   on the iPhone only.
-- The Files tab is on the Mac only for now.
+- Files are on the Mac only for now.
 
-### Files tab (Mac)
+### Files (Mac)
 
 A basic file manager and editor for the selected folder, enough to look at
 and touch up what an agent wrote without leaving the app.
 
-- A tree of the folder's files and folders. Folders open in place. Files
-  with uncommitted changes are marked the way the Git tab marks them.
+- The **Files** tab of the side panel is a tree of the folder's files and
+  folders. Folders open in place. Files with uncommitted changes are marked
+  the way the Git tab marks them.
 - New file and new folder, in the folder itself or in any folder of the tree.
   Rename. Move to the Trash, after asking, so it can be put back. Show in
   Finder, copy the path. A name that is taken is refused; nothing is
   overwritten.
-- Clicking a file opens it under the tree. Text opens in an editor with
-  syntax coloring for the common languages, which saves with ⌘S and marks
-  unsaved changes. Opening another file with unsaved changes asks first.
-- Markdown opens as a rendered preview, with a switch to the source.
+- Clicking a file opens it in the middle pane, as a tab next to the session
+  tabs. Several files can be open. File tabs follow the session tabs, share
+  their shortcuts (⌘1 to ⌘9, ⌘⇧], ⌘⇧[) and close with ⌘W. Starting or
+  picking a session brings the terminal back to the front.
+- Text opens in an editor with syntax coloring for the common languages. It
+  saves with ⌘S, and a dot on the tab marks unsaved changes. Closing a tab
+  with unsaved changes asks first.
+- Markdown opens as a rendered preview, with a switch to the source. Code
+  blocks in it are colored, and blocks marked `mermaid` are drawn as
+  diagrams. A `.mmd` or `.mermaid` file is previewed as a diagram too.
 - Images are shown. Files that are not text, or larger than 2 MB, are not
   opened.
-- The tree follows changes made elsewhere, by an agent for one, within a few
-  seconds.
-- The file that was open in a folder is opened again when coming back to it.
+- The tree, and open files without unsaved changes, follow changes made
+  elsewhere, by an agent for one, within a few seconds.
+- The files that were open come back as tabs the next time the app starts.
 
-Not part of it: search, several files open at once, an editor in the middle
-pane. The iPhone does not have this tab yet.
+Not part of it: search, and a file changed on disk while it has unsaved
+edits here is not merged; saving overwrites it. The iPhone does not have
+Files yet.
 
 ### Pairing and remote access
 

@@ -4,7 +4,7 @@ import Combine
 import SwiftUI
 
 /// The project folder's files: a tree to browse, create, rename and remove
-/// them, and under it the file that is open, to read or edit.
+/// them. A file that is clicked opens in the middle pane.
 struct FilesView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var files: FilesModel
@@ -42,11 +42,6 @@ struct FilesView: View {
             Theme.hairline.frame(height: 1)
             if files.root == nil {
                 placeholder("Select a folder to see its files.")
-            } else if files.document != nil {
-                VSplitView {
-                    tree.frame(minHeight: 90, idealHeight: 220, maxHeight: 420)
-                    DocumentView().frame(minHeight: 140, maxHeight: .infinity)
-                }
             } else {
                 tree
             }
@@ -66,14 +61,6 @@ struct FilesView: View {
             Button("Move to Trash", role: .destructive) { files.trash(entry) }
         } message: { entry in
             Text(entry.isDirectory ? "The folder and everything in it can be put back from the Trash." : "It can be put back from the Trash.")
-        }
-        .confirmationDialog(
-            "Save changes to \"\(files.document?.name ?? "")\"?", isPresented: Binding(get: { files.pendingOpen != nil }, set: { if !$0 { files.pendingOpen = nil } }),
-            titleVisibility: .visible, presenting: files.pendingOpen
-        ) { next in
-            Button("Save") { if files.save() { files.open(next) } }
-            Button("Don't Save", role: .destructive) { files.open(next) }
-            Button("Cancel", role: .cancel) {}
         }
         .alert("Agentty", isPresented: Binding(get: { files.error != nil }, set: { if !$0 { files.error = nil } })) {
             Button("OK", role: .cancel) {}
@@ -185,7 +172,7 @@ private struct FileTreeRow: View {
     @State private var hovering = false
 
     private var entry: FileEntry { row.entry }
-    private var isOpen: Bool { files.document?.path == entry.path }
+    private var isOpen: Bool { files.active == entry.path }
     private var isExpanded: Bool { files.expanded.contains(entry.path) }
 
     var body: some View {
@@ -221,7 +208,7 @@ private struct FileTreeRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture {
-            if entry.isDirectory { files.toggle(entry.path) } else { files.requestOpen(entry.path) }
+            if entry.isDirectory { files.toggle(entry.path) } else { files.open(entry.path) }
         }
         .help(entry.path)
         .accessibilityElement(children: .combine)
@@ -249,37 +236,33 @@ private struct FileTreeRow: View {
     }
 }
 
-/// The open file: an editor for text, a picture for an image.
-private struct DocumentView: View {
+/// A file open in the middle pane: an editor for text, a picture for an image.
+struct DocumentView: View {
     @EnvironmentObject private var files: FilesModel
+    let document: OpenDocument
     /// Markdown opens rendered. Editing is one click away.
     @State private var previewing = true
 
     var body: some View {
-        if let document = files.document {
-            VStack(spacing: 0) {
-                bar(for: document)
-                Theme.hairline.frame(height: 1)
-                content(for: document)
-            }
-            .background(Theme.canvas)
-            .onChange(of: document.path) { _, _ in previewing = true }
+        VStack(spacing: 0) {
+            bar
+            Theme.hairline.frame(height: 1)
+            content
         }
+        .background(Theme.canvas)
+        .onChange(of: document.path) { _, _ in previewing = true }
     }
 
-    private func bar(for document: OpenDocument) -> some View {
+    private var bar: some View {
         HStack(spacing: 8) {
-            // A dot marks unsaved changes, as in a window's close button.
-            Circle()
-                .fill(document.isDirty ? Color.orange : .clear)
-                .frame(width: 7, height: 7)
-                .accessibilityLabel(document.isDirty ? "Unsaved changes" : "")
-            Text(document.name)
-                .font(.system(size: 12, weight: .medium))
+            Image(systemName: "folder").font(.system(size: 10.5)).foregroundStyle(.secondary)
+            Text(((document.path as NSString).deletingLastPathComponent as NSString).abbreviatingWithTildeInPath)
+                .font(.system(size: 11.5))
+                .foregroundStyle(.secondary)
                 .lineLimit(1)
-                .truncationMode(.middle)
+                .truncationMode(.head)
             Spacer(minLength: 6)
-            if document.isMarkdown, document.isText {
+            if document.hasPreview {
                 Picker("Mode", selection: $previewing) {
                     Text("Preview").tag(true)
                     Text("Edit").tag(false)
@@ -290,37 +273,36 @@ private struct DocumentView: View {
                 .fixedSize()
             }
             if document.isDirty {
-                Button("Revert") { files.discardChanges() }
+                Button("Revert") { files.discardChanges(document.path) }
                     .controlSize(.small)
                     .help("Throw away the changes that are not saved")
-                Button("Save") { files.save() }
+                Button("Save") { files.save(document.path) }
                     .controlSize(.small)
                     .buttonStyle(.borderedProminent)
                     .help("Save (⌘S)")
             }
-            Button { files.closeDocument() } label: {
-                Image(systemName: "xmark").font(.system(size: 9.5, weight: .bold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("Close the file")
-            .disabled(document.isDirty)
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 7)
+        .padding(.vertical, 6)
         .background(Theme.panel)
     }
 
     @ViewBuilder
-    private func content(for document: OpenDocument) -> some View {
+    private var content: some View {
         switch document.content {
         case .text:
-            if document.isMarkdown, previewing {
+            if document.isMermaid, previewing {
+                ScrollView {
+                    MermaidView(code: document.text).padding(16)
+                }
+                .background(Theme.canvas)
+            } else if document.isMarkdown, previewing {
                 MarkdownPreview(text: document.text, baseURL: URL(fileURLWithPath: (document.path as NSString).deletingLastPathComponent, isDirectory: true))
             } else {
+                let path = document.path
                 CodeEditor(
-                    text: Binding(get: { files.document?.text ?? "" }, set: { files.document?.text = $0 }),
-                    path: document.path
+                    text: Binding(get: { files.documents.first { $0.path == path }?.text ?? "" }, set: { files.setText($0, for: path) }),
+                    path: path
                 )
             }
         case .image:

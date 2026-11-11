@@ -30,23 +30,8 @@ struct AgenttyApp: App {
             CommandGroup(replacing: .saveItem) {
                 SaveCommand(files: model.files)
             }
-            CommandMenu("Session") {
-                // Command and a number shows the tab in that place.
-                ForEach(Array(model.sessions.prefix(9).enumerated()), id: \.element.id) { index, session in
-                    Button(session.displayName) { model.selectSession(number: index + 1) }
-                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
-                }
-                if !model.sessions.isEmpty { Divider() }
-                Button("Next Session") { model.selectSession(offset: 1) }
-                    .keyboardShortcut("]", modifiers: [.command, .shift])
-                    .disabled(model.sessions.count < 2)
-                Button("Previous Session") { model.selectSession(offset: -1) }
-                    .keyboardShortcut("[", modifiers: [.command, .shift])
-                    .disabled(model.sessions.count < 2)
-                Divider()
-                Button("End Session") { if let id = model.selectedSession { model.close(id) } }
-                    .keyboardShortcut("w")
-                    .disabled(model.selectedSession == nil)
+            CommandMenu("Tab") {
+                TabCommands(model: model, files: model.files)
             }
             CommandGroup(after: .sidebar) {
                 Button("Bigger Text") { model.changeFontSize(by: 1) }
@@ -78,14 +63,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
 
-/// File > Save, for the file open in the Files tab. Its own view so the menu
-/// item follows the file's unsaved state.
+/// File > Save, for the file in front. Its own view so the menu item
+/// follows the file's unsaved state.
 private struct SaveCommand: View {
     @ObservedObject var files: FilesModel
 
     var body: some View {
         Button("Save") { files.save() }
             .keyboardShortcut("s")
-            .disabled(files.document?.isDirty != true)
+            .disabled(files.activeDocument?.isDirty != true)
+    }
+}
+
+/// The tabs of the middle pane as menu items: sessions first, then files.
+private struct TabCommands: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var files: FilesModel
+
+    private var names: [String] { model.sessions.map(\.displayName) + files.documents.map(\.name) }
+
+    var body: some View {
+        // Command and a number shows the tab in that place.
+        ForEach(Array(names.prefix(9).enumerated()), id: \.offset) { index, name in
+            Button(name) { model.selectTab(number: index + 1) }
+                .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+        }
+        if !names.isEmpty { Divider() }
+        Button("Next Tab") { model.selectTab(offset: 1) }
+            .keyboardShortcut("]", modifiers: [.command, .shift])
+            .disabled(model.tabCount < 2)
+        Button("Previous Tab") { model.selectTab(offset: -1) }
+            .keyboardShortcut("[", modifiers: [.command, .shift])
+            .disabled(model.tabCount < 2)
+        Divider()
+        Button(files.active != nil ? "Close File" : "End Session") { model.closeFrontTab() }
+            .keyboardShortcut("w")
+            .disabled(files.active == nil && model.selectedSession == nil)
     }
 }

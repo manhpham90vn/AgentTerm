@@ -42,7 +42,10 @@ let package = Package(
                 "AgenttyTerminal",
                 .product(name: "Highlightr", package: "Highlightr"),
                 .product(name: "MarkdownUI", package: "swift-markdown-ui"),
-            ]
+            ],
+            exclude: ["Resources/THIRD-PARTY.md"],
+            // Mermaid, to draw diagrams in Markdown previews without a network.
+            resources: [.copy("Resources/mermaid.min.js")]
         ),
         .testTarget(name: "AgenttyProtocolTests", dependencies: ["AgenttyProtocol"]),
         .testTarget(name: "AgenttyHostTests", dependencies: ["AgenttyHost", "AgenttyClient"]),

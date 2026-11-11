@@ -4,6 +4,7 @@ import SwiftUI
 
 struct RootView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var files: FilesModel
 
     var body: some View {
         HSplitView {
@@ -52,6 +53,15 @@ struct RootView: View {
         }
         .sheet(isPresented: $model.showPairing) {
             PairingView(port: model.hostPort)
+        }
+        .confirmationDialog(
+            "Save changes to \"\((files.pendingClose as NSString?)?.lastPathComponent ?? "")\"?",
+            isPresented: Binding(get: { files.pendingClose != nil }, set: { if !$0 { files.pendingClose = nil } }),
+            titleVisibility: .visible, presenting: files.pendingClose
+        ) { path in
+            Button("Save") { if files.save(path) { files.close(path) } }
+            Button("Don't Save", role: .destructive) { files.close(path) }
+            Button("Cancel", role: .cancel) {}
         }
         .sheet(item: $model.pendingHandoff) { conversation in
             HandoffSheet(conversation: conversation)
@@ -116,6 +126,7 @@ struct LaunchButton: View {
 
 struct CenterView: View {
     @EnvironmentObject private var model: AppModel
+    @EnvironmentObject private var files: FilesModel
 
     var body: some View {
         ZStack {
@@ -135,7 +146,13 @@ struct CenterView: View {
                 }
                 .padding(40)
             case .connected:
-                if let controller = model.currentController {
+                if let document = files.activeDocument {
+                    // A file tab is in front.
+                    VStack(spacing: 0) {
+                        SessionTabs()
+                        DocumentView(document: document)
+                    }
+                } else if let controller = model.currentController {
                     VStack(spacing: 0) {
                         SessionTabs()
                         if let size = model.foreignSizes[controller.session] {

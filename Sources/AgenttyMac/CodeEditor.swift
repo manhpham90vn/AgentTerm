@@ -165,10 +165,34 @@ struct MarkdownPreview: View {
     /// Folder of the document, so links and images relative to it resolve.
     let baseURL: URL?
 
+    /// GitHub's look, with code blocks marked "mermaid" drawn as diagrams.
+    private static let theme = MarkdownUI.Theme.gitHub
+        .text { BackgroundColor(nil) }
+        .codeBlock { configuration in
+            if configuration.language?.lowercased() == "mermaid" {
+                MermaidView(code: configuration.content)
+                    .markdownMargin(top: 0, bottom: 16)
+            } else {
+                ScrollView(.horizontal) {
+                    configuration.label
+                        .fixedSize(horizontal: false, vertical: true)
+                        .relativeLineSpacing(.em(0.225))
+                        .markdownTextStyle {
+                            FontFamilyVariant(.monospaced)
+                            FontSize(.em(0.85))
+                        }
+                        .padding(14)
+                }
+                .background(Color.white.opacity(0.06))
+                .clipShape(RoundedRectangle(cornerRadius: 6))
+                .markdownMargin(top: 0, bottom: 16)
+            }
+        }
+
     var body: some View {
         ScrollView {
             Markdown(text, baseURL: baseURL)
-                .markdownTheme(.gitHub.text { BackgroundColor(nil) })
+                .markdownTheme(Self.theme)
                 .markdownCodeSyntaxHighlighter(PreviewCodeHighlighter())
                 .textSelection(.enabled)
                 .padding(16)
