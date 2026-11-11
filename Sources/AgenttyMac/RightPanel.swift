@@ -236,11 +236,9 @@ private struct ConversationRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(count: 2) { model.resume(conversation) }
+        // Resume and Hand Off have their own buttons on the row, so the menu
+        // only holds what has no button.
         .contextMenu {
-            Button("Resume") { model.resume(conversation) }
-            if !targets.isEmpty {
-                Menu("Hand Off To") { handoffItems }
-            }
             Button("Copy Resume Command") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(conversation.resumeCommand, forType: .string)

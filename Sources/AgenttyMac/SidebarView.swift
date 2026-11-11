@@ -171,19 +171,5 @@ struct SessionRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { model.select(session: session) }
-        .contextMenu {
-            if let agent = model.agentID(of: session) {
-                let targets = model.handoffTargets(from: agent)
-                if !targets.isEmpty {
-                    Menu("Hand Off To") {
-                        ForEach(targets) { target in
-                            Button(target.name) { model.handoff(session: session, to: target) }
-                        }
-                    }
-                    Divider()
-                }
-            }
-            Button("End Session", role: .destructive) { model.close(session.id) }
-        }
     }
 }
