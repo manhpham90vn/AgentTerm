@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 # Runs the iPhone UI test in the iOS Simulator against two throwaway hosts.
 #
-#   ./scripts/test-ios.sh                   # "iPhone 17"
+#   ./scripts/test-ios.sh                   # "iPhone Air"
 #   ./scripts/test-ios.sh "iPhone 17 Pro"
 #   SHOTS=/some/folder ./scripts/test-ios.sh    # also save screenshots there
 #   AGENTTY_LAUNCH="Start Claude Code" ./scripts/test-ios.sh
 #
 # The hosts use their own state folders and ports, so your real pairing,
-# folders and sessions are not touched. The simulator's keychain is reset.
+# folders and sessions are not touched. The keychain of the simulator the test
+# runs in is reset, so anything paired in that simulator has to pair again.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 command -v xcodegen >/dev/null || { echo "test-ios.sh: xcodegen is not installed (brew install xcodegen)" >&2; exit 1; }
-DEVICE="${1:-iPhone 17}"
+# Not the simulator run-ios.sh uses by default: this test resets the
+# simulator's keychain, which would unpair the app you are trying out there.
+DEVICE="${1:-iPhone Air}"
 PORT=7798
 SECOND_PORT=7799
 STATE="$(mktemp -d)"
