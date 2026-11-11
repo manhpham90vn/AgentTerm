@@ -100,10 +100,12 @@ Three panes, like a code editor:
     icon switches the file list between a flat list and a tree grouped by
     folder; folders in the tree can be collapsed and show the totals of what
     is inside. It refreshes on its own while the app is in front.
-  - **History.** The conversations each agent had in the selected folder and
-    its subfolders, one section per agent, newest first, with a title and how
+  - **History.** The conversations each agent had in the selected folder, one
+    section per agent, newest first, with a title and how
     long ago it was. A conversation can be resumed, which opens it in its
-    agent in a new session, or handed off to another agent.
+    agent in a new session, or handed off to another agent. Like the Git
+    tab it covers the selected folder only: conversations that ran in a
+    subfolder belong to that subfolder.
 
 ### Pairing and remote access
 

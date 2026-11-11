@@ -21,8 +21,8 @@ final class AgentHistoryTests: XCTestCase {
         if let modified { try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path) }
     }
 
-    private func history(_ directory: String? = nil) -> [Conversation] {
-        AgentHistory.conversations(in: directory ?? project, home: home.path)
+    private func history(_ directory: String? = nil, includeSubfolders: Bool = false) -> [Conversation] {
+        AgentHistory.conversations(in: directory ?? project, includeSubfolders: includeSubfolders, home: home.path)
     }
 
     func testClaudeProjectFolderName() {
@@ -62,7 +62,8 @@ final class AgentHistoryTests: XCTestCase {
         try write(".claude/projects/-Users-me-Dev-my-app-tools/sib-1.jsonl", [
             #"{"type":"user","cwd":"/Users/me/Dev/my.app-tools","message":{"role":"user","content":"unrelated project"}}"#,
         ])
-        let found = history()
+        XCTAssertTrue(history().isEmpty, "a folder lists only its own conversations")
+        let found = history(includeSubfolders: true)
         XCTAssertEqual(found.map(\.sessionID), ["sub-1"])
         XCTAssertEqual(found[0].cwd, "/Users/me/Dev/my.app/web")
     }
@@ -80,12 +81,14 @@ final class AgentHistoryTests: XCTestCase {
             #"{"session_id":"id-one","ts":2,"text":"a later prompt"}"#,
             #"{"session_id":"id-three","ts":3,"text":"not this project"}"#,
         ])
-        let found = history().filter { $0.agent == "codex" }
+        XCTAssertEqual(history().map(\.sessionID), ["id-one"], "the subfolder's conversation is not the project's")
+        XCTAssertEqual(history(project + "/packages/web").map(\.sessionID), ["id-two"])
+        let found = history(includeSubfolders: true).filter { $0.agent == "codex" }
         XCTAssertEqual(Set(found.map(\.sessionID)), ["id-one", "id-two"])
         XCTAssertEqual(found.first { $0.sessionID == "id-one" }?.title, "refactor the parser")
         let nested = try XCTUnwrap(found.first { $0.sessionID == "id-two" })
         XCTAssertEqual(nested.title, "add dark mode")
-        XCTAssertEqual(nested.cwd, project + "/packages/web", "a conversation in a subfolder belongs to the project")
+        XCTAssertEqual(nested.cwd, project + "/packages/web")
         XCTAssertEqual(nested.resumeCommand, "codex resume id-two")
     }
 
@@ -135,6 +138,21 @@ final class AgentHistoryTests: XCTestCase {
         }
         try write(".copilot/session-state/evil/workspace.yaml", ["id: x; touch /tmp/pwned", "cwd: /Users/me/Dev/my.app", "name: Evil"])
         XCTAssertTrue(history().isEmpty)
+    }
+
+    func testEveryAgentIsScopedToTheExactFolder() throws {
+        let sub = project + "/packages/web"
+        try write(".gemini/antigravity-cli/cache/conversation_metadata.json", ["""
+        {"conversations":{
+          "here":{"summary":{"Title":"here","UpdatedAt":"2026-11-10T17:00:22Z","WorkspaceURIs":["file:///Users/me/Dev/my.app"]}},
+          "below":{"summary":{"Title":"below","UpdatedAt":"2026-11-10T17:00:23Z","WorkspaceURIs":["file:///Users/me/Dev/my.app/packages/web"]}}
+        }}
+        """])
+        try write(".copilot/session-state/c-here/workspace.yaml", ["id: c-here", "cwd: \(project)", "name: here", "updated_at: 2026-11-11T04:00:00.000Z"])
+        try write(".copilot/session-state/c-below/workspace.yaml", ["id: c-below", "cwd: \(sub)", "name: below", "updated_at: 2026-11-11T05:00:00.000Z"])
+        XCTAssertEqual(Set(history().map(\.sessionID)), ["here", "c-here"])
+        XCTAssertEqual(Set(history(sub).map(\.sessionID)), ["below", "c-below"])
+        XCTAssertEqual(history(includeSubfolders: true).count, 4)
     }
 
     func testNothingInstalledMeansNoHistory() {

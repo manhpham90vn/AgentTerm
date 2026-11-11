@@ -153,7 +153,9 @@ in front. It is not in the protocol yet; the iPhone needs a `diff` message
 ## Conversation history
 
 `AgentHistory` reads the files each agent CLI keeps about its own
-conversations and lists those that ran in a folder or below it:
+conversations and lists those that ran in a folder. Conversations of
+subfolders are left out by default, so that a workspace holding several
+projects does not list every project's conversations as its own:
 
 | Agent | Where it looks | Title | Resume command |
 |---|---|---|---|

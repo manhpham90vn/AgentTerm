@@ -41,15 +41,38 @@ public enum AgentHistory {
 
     /// Conversations that ran in `directory`, newest first. Blocks on file
     /// access, so call it off the main thread. `home` is replaceable for tests.
-    public static func conversations(in directory: String, home: String = NSHomeDirectory(), limit: Int = 200) -> [Conversation] {
+    ///
+    /// Only the directory itself counts unless `includeSubfolders` is set. A
+    /// project folder shows its own conversations, the way it shows its own
+    /// git changes; a workspace of several projects would otherwise list
+    /// every project's conversations under the workspace.
+    public static func conversations(
+        in directory: String,
+        includeSubfolders: Bool = false,
+        home: String = NSHomeDirectory(),
+        limit: Int = 200
+    ) -> [Conversation] {
         let directory = URL(fileURLWithPath: directory).standardizedFileURL.path
         let home = URL(fileURLWithPath: home, isDirectory: true)
-        let all = claude(directory, home) + codex(directory, home) + antigravity(directory, home) + copilot(directory, home)
+        let scope = Scope(directory: directory, includeSubfolders: includeSubfolders)
+        let all = claude(scope, home) + codex(scope, home) + antigravity(scope, home) + copilot(scope, home)
         return Array(
             all.filter { isSafeIdentifier($0.sessionID) && !$0.title.isEmpty }
                 .sorted { $0.updatedAt > $1.updatedAt }
                 .prefix(limit)
         )
+    }
+
+    private struct Scope {
+        let directory: String
+        let includeSubfolders: Bool
+
+        /// True when a conversation that ran in `path` belongs to this scope.
+        func contains(_ path: String) -> Bool {
+            let path = URL(fileURLWithPath: path).standardizedFileURL.path
+            if path == directory { return true }
+            return includeSubfolders && path.hasPrefix(directory.hasSuffix("/") ? directory : directory + "/")
+        }
     }
 
     /// Session ids end up in a shell command line, so only plain ones pass.
@@ -62,14 +85,15 @@ public enum AgentHistory {
     // MARK: Claude Code
 
     /// `~/.claude/projects/<directory with every non-alphanumeric as "-">/<session>.jsonl`
-    private static func claude(_ directory: String, _ home: URL) -> [Conversation] {
+    private static func claude(_ scope: Scope, _ home: URL) -> [Conversation] {
+        let directory = scope.directory
         let projects = home.appendingPathComponent(".claude/projects")
         let own = claudeProjectName(for: directory)
         // Subfolders of the directory have their own project folder. The name
         // alone cannot tell "apps/web" from a sibling "apps-web", so those
         // are checked against the directory recorded inside the session.
         let names = ((try? FileManager.default.contentsOfDirectory(atPath: projects.path)) ?? [])
-            .filter { $0 == own || $0.hasPrefix(own + "-") }
+            .filter { $0 == own || (scope.includeSubfolders && $0.hasPrefix(own + "-")) }
         return names.flatMap { name -> [Conversation] in
             recentFiles(in: projects.appendingPathComponent(name), suffix: ".jsonl").compactMap { file in
                 let session = file.url.deletingPathExtension().lastPathComponent
@@ -80,7 +104,7 @@ public enum AgentHistory {
                     let data = read(file.url, head: headBytes)
                     head = data
                     guard let recorded = lines(of: data, containing: "\"cwd\"", limit: 1).first?["cwd"] as? String,
-                          isInside(recorded, directory)
+                          scope.contains(recorded)
                     else { return nil }
                     cwd = recorded
                 }
@@ -123,7 +147,7 @@ public enum AgentHistory {
 
     /// `~/.codex/sessions/<year>/<month>/<day>/rollout-<time>-<id>.jsonl`, whose
     /// first line holds the id and directory. Prompts are in `history.jsonl`.
-    private static func codex(_ directory: String, _ home: URL) -> [Conversation] {
+    private static func codex(_ scope: Scope, _ home: URL) -> [Conversation] {
         let root = home.appendingPathComponent(".codex/sessions")
         var files: [(url: URL, modified: Date)] = []
         if let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) {
@@ -143,7 +167,7 @@ public enum AgentHistory {
         return files.compactMap { file in
             let head = read(file.url, head: headBytes)
             guard let meta = lines(of: head, containing: "\"session_meta\"", limit: 1).first?["payload"] as? [String: Any],
-                  let id = meta["id"] as? String, let cwd = meta["cwd"] as? String, isInside(cwd, directory)
+                  let id = meta["id"] as? String, let cwd = meta["cwd"] as? String, scope.contains(cwd)
             else { return nil }
             // Sessions an agent started for a sub-task are not the user's conversations.
             if let source = meta["source"] as? [String: Any], source["subagent"] != nil { return nil }
@@ -159,7 +183,7 @@ public enum AgentHistory {
     // MARK: Antigravity
 
     /// `~/.gemini/antigravity-cli/cache/conversation_metadata.json`
-    private static func antigravity(_ directory: String, _ home: URL) -> [Conversation] {
+    private static func antigravity(_ scope: Scope, _ home: URL) -> [Conversation] {
         let file = home.appendingPathComponent(".gemini/antigravity-cli/cache/conversation_metadata.json")
         guard let data = try? Data(contentsOf: file),
               let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -171,7 +195,7 @@ public enum AgentHistory {
                   let workspaces = summary["WorkspaceURIs"] as? [String]
             else { return nil }
             let paths = workspaces.compactMap { URL(string: $0)?.standardizedFileURL.path }
-            guard let cwd = paths.first(where: { isInside($0, directory) }) else { return nil }
+            guard let cwd = paths.first(where: scope.contains) else { return nil }
             let title = [summary["Title"], summary["Preview"]].lazy.compactMap { $0 as? String }.first { !$0.isEmpty }
             let stamp = (summary["UpdatedAt"] as? String) ?? (entry["last_modified_time"] as? String) ?? ""
             guard let title, let date = parseDate(stamp) else { return nil }
@@ -188,7 +212,7 @@ public enum AgentHistory {
     // MARK: Copilot CLI
 
     /// `~/.copilot/session-state/<id>/workspace.yaml`, flat `key: value` lines.
-    private static func copilot(_ directory: String, _ home: URL) -> [Conversation] {
+    private static func copilot(_ scope: Scope, _ home: URL) -> [Conversation] {
         let root = home.appendingPathComponent(".copilot/session-state")
         let folders = (try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: nil)) ?? []
         return folders.prefix(maxFilesPerAgent * 4).compactMap { folder in
@@ -203,7 +227,7 @@ public enum AgentHistory {
                 }
                 fields[String(line[..<colon])] = value
             }
-            guard let cwd = fields["cwd"], isInside(cwd, directory) else { return nil }
+            guard let cwd = fields["cwd"], scope.contains(cwd) else { return nil }
             let id = fields["id"] ?? folder.lastPathComponent
             var title = fields["name"]
             if title?.isEmpty != false {
@@ -217,12 +241,6 @@ public enum AgentHistory {
     }
 
     // MARK: Helpers
-
-    /// True when `path` is `directory` or somewhere below it.
-    private static func isInside(_ path: String, _ directory: String) -> Bool {
-        let path = URL(fileURLWithPath: path).standardizedFileURL.path
-        return path == directory || path.hasPrefix(directory.hasSuffix("/") ? directory : directory + "/")
-    }
 
     private static func recentFiles(in folder: URL, suffix: String) -> [(url: URL, modified: Date)] {
         let urls = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
