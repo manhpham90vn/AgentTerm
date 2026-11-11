@@ -218,6 +218,20 @@ Settings (⌘,), is on by default. With it off there is no icon, and closing
 the window quits the app. Sessions keep running either way, since the host
 that holds them is a separate program.
 
+### What agents may ask macOS for
+
+macOS holds a terminal responsible for everything run inside it. An agent
+that drives another app (a browser, for one), takes a screenshot or reads a
+protected folder is asking as AgentTerm. The app declares what programs in
+its sessions may ask for: controlling other apps, the camera and microphone,
+contacts, calendars, reminders, photos, location, the local network, and the
+Desktop, Documents, Downloads, removable and network volumes. macOS then asks
+the user the first time each is used; without the declaration it would refuse
+without asking. Two are not asked for and are switched on by hand in System
+Settings > Privacy & Security, for AgentTerm: **Accessibility**, to let an
+agent click and type in other apps, and **Screen & System Audio Recording**,
+to let it take screenshots.
+
 ### A host from another copy of the app
 
 The host outlives the app, so a newly installed version can find the host of

@@ -136,7 +136,10 @@ platform :mac do
 
       # Inside out: the daemon, then the app around it. The hardened runtime
       # and a timestamp are what notarization asks for.
-      flags = ["--force", "--options", "runtime", "--timestamp", "--keychain", path, "--sign", identity]
+      # The entitlements are what lets a program in a session ask for
+      # things such as scripting another app; see the file.
+      entitlements = File.join(ROOT, "assets/AgentTerm.entitlements")
+      flags = ["--force", "--options", "runtime", "--timestamp", "--entitlements", entitlements, "--keychain", path, "--sign", identity]
       sh("codesign", *flags, File.join(app, "Contents/MacOS/agenttermd"))
       sh("codesign", *flags, app)
       sh("codesign", "--verify", "--deep", "--strict", "--verbose=2", app)

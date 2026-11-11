@@ -60,11 +60,32 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key><true/>
+    <!-- macOS holds a terminal responsible for what runs inside it. Without
+         these, a program in a session that wants one of these things is
+         refused without the user ever being asked. -->
+    <key>NSAppleEventsUsageDescription</key><string>A program running in ${NAME} wants to control another app.</string>
+    <key>NSCameraUsageDescription</key><string>A program running in ${NAME} wants to use the camera.</string>
+    <key>NSMicrophoneUsageDescription</key><string>A program running in ${NAME} wants to use the microphone.</string>
+    <key>NSSpeechRecognitionUsageDescription</key><string>A program running in ${NAME} wants to use speech recognition.</string>
+    <key>NSLocalNetworkUsageDescription</key><string>${NAME} lets your iPhone reach its sessions, and programs running in it may use the local network.</string>
+    <key>NSBluetoothAlwaysUsageDescription</key><string>A program running in ${NAME} wants to use Bluetooth.</string>
+    <key>NSCalendarsUsageDescription</key><string>A program running in ${NAME} wants to access your calendars.</string>
+    <key>NSContactsUsageDescription</key><string>A program running in ${NAME} wants to access your contacts.</string>
+    <key>NSRemindersUsageDescription</key><string>A program running in ${NAME} wants to access your reminders.</string>
+    <key>NSPhotoLibraryUsageDescription</key><string>A program running in ${NAME} wants to access your photos.</string>
+    <key>NSLocationUsageDescription</key><string>A program running in ${NAME} wants to use your location.</string>
+    <key>NSLocationWhenInUseUsageDescription</key><string>A program running in ${NAME} wants to use your location.</string>
+    <key>NSDesktopFolderUsageDescription</key><string>A program running in ${NAME} wants to access files in your Desktop folder.</string>
+    <key>NSDocumentsFolderUsageDescription</key><string>A program running in ${NAME} wants to access files in your Documents folder.</string>
+    <key>NSDownloadsFolderUsageDescription</key><string>A program running in ${NAME} wants to access files in your Downloads folder.</string>
+    <key>NSRemovableVolumesUsageDescription</key><string>A program running in ${NAME} wants to access files on a removable volume.</string>
+    <key>NSNetworkVolumesUsageDescription</key><string>A program running in ${NAME} wants to access files on a network volume.</string>
+    <key>NSSystemAdministrationUsageDescription</key><string>A program running in ${NAME} wants to administer this Mac.</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict>
 </plist>
 PLIST
 
-codesign --force --sign - "$APP/Contents/MacOS/agenttermd"
-codesign --force --sign - "$APP"
+codesign --force --sign - --entitlements assets/AgentTerm.entitlements "$APP/Contents/MacOS/agenttermd"
+codesign --force --sign - --entitlements assets/AgentTerm.entitlements "$APP"
 echo "Built $APP"
