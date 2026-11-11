@@ -395,13 +395,26 @@ final class PhoneModel: ObservableObject {
 
     // MARK: Actions
 
+    /// The grid a new session should start with. The terminal screen is not
+    /// on screen yet, so its room is worked out from the screen: all of the
+    /// width, and the height left by the bars above and below. The width is
+    /// what matters, since a wrong one makes the shell draw its first prompt
+    /// for a width the terminal does not have.
+    private var startingSize: TermSize {
+        let screen = UIScreen.main.bounds.size
+        let window = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
+        let safe = window?.safeAreaInsets ?? .zero
+        let width = (window?.bounds.width ?? screen.width) - safe.left - safe.right - 6
+        // Navigation bar, key bar and compose field take about this much.
+        let height = (window?.bounds.height ?? screen.height) - safe.top - safe.bottom - 44 - 52 - 56 - 4
+        return TerminalMetrics.grid(for: CGSize(width: width, height: height), fontSize: fontSize) ?? TermSize(cols: 48, rows: 30)
+    }
+
     /// Starts an agent, or a shell when `agent` is nil, and opens it.
     func launch(_ agent: AgentInfo?, in folder: String?) {
         guard status == .connected else { return }
         openCreatedSession = true
-        // A typical portrait grid. The real one is reported once the view is laid out.
-        let size = TermSize(cols: 48, rows: 30)
-        connection?.send(.create(CreateRequest(command: agent?.id, cwd: folder, title: agent?.name, size: size)))
+        connection?.send(.create(CreateRequest(command: agent?.id, cwd: folder, title: agent?.name, size: startingSize)))
     }
 
     /// Attaches to a session so its terminal can be shown.
@@ -445,7 +458,7 @@ final class PhoneModel: ObservableObject {
     func resume(_ conversation: Conversation) {
         guard status == .connected else { return }
         openCreatedSession = true
-        connection?.send(.resume(agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd, size: TermSize(cols: 48, rows: 30)))
+        connection?.send(.resume(agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd, size: startingSize))
     }
 
     /// Asks the Mac what the receiving agent would be told, to show it.
@@ -463,7 +476,7 @@ final class PhoneModel: ObservableObject {
         let edited = plan.map { prompt != $0.prompt } ?? false
         connection?.send(.handoff(
             agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd,
-            target: target.id, plan: plan?.id, prompt: edited ? prompt : nil, note: note, size: TermSize(cols: 48, rows: 30)
+            target: target.id, plan: plan?.id, prompt: edited ? prompt : nil, note: note, size: startingSize
         ))
         handoffPlan = nil
     }

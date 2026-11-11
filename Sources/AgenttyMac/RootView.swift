@@ -148,15 +148,38 @@ struct CenterView: View {
                             // is centered, so it gets no one-sided padding.
                             .padding(.leading, foreign == nil ? 10 : 0)
                             .padding(.top, foreign == nil ? 6 : 0)
+                            .background(TerminalAreaReader(insets: foreign == nil ? .zero : CGSize(width: 10, height: 6)))
                     }
                 } else {
                     VStack(spacing: 0) {
                         SessionTabs()
                         WelcomeView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                            // Where a terminal would go, less its padding.
+                            .background(TerminalAreaReader(insets: CGSize(width: 10, height: 6)))
                     }
                 }
             }
         }
+    }
+}
+
+/// Tells the model how much room a terminal has, so a new session can be
+/// started at the size it will be shown at.
+private struct TerminalAreaReader: View {
+    @EnvironmentObject private var model: AppModel
+    /// What to take off for the padding a terminal gets.
+    let insets: CGSize
+
+    var body: some View {
+        GeometryReader { proxy in
+            Color.clear
+                .onAppear { report(proxy.size) }
+                .onChange(of: proxy.size) { _, size in report(size) }
+        }
+    }
+
+    private func report(_ size: CGSize) {
+        model.terminalArea = CGSize(width: size.width - insets.width, height: size.height - insets.height)
     }
 }
 

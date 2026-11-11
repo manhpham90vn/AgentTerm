@@ -67,6 +67,17 @@ final class AppModel: ObservableObject {
     static let fontSizes: ClosedRange<Double> = 9...24
     static let defaultFontSize: Double = 13
 
+    /// The room the terminal has in the window, measured by the view.
+    var terminalArea: CGSize = .zero
+
+    /// The grid a new session should start with: what fits the terminal's
+    /// place in the window, so its first output is drawn for the right width.
+    private var startingSize: TermSize {
+        TerminalMetrics.grid(for: terminalArea, fontSize: terminalFontSize)
+            ?? currentController?.naturalSize
+            ?? TermSize(cols: 100, rows: 30)
+    }
+
     /// Devices that were paired with this Mac.
     @Published private(set) var devices: [DeviceInfo] = []
     /// The pairing code on show, while the pairing sheet is open.
@@ -253,7 +264,7 @@ final class AppModel: ObservableObject {
         guard status == .connected else { return }
         lastError = nil
         selectNextAttached = true
-        let size = currentController?.naturalSize ?? TermSize(cols: 100, rows: 30)
+        let size = startingSize
         connection?.send(.create(CreateRequest(command: agent?.id, cwd: workingDirectory, title: agent?.name, size: size)))
     }
 
@@ -389,7 +400,7 @@ final class AppModel: ObservableObject {
     /// possibly edited there.
     func handoff(_ conversation: Conversation, to target: AgentInfo, plan: Handoff.Plan, prompt: String, note: String) {
         guard status == .connected else { return }
-        let size = currentController?.naturalSize ?? TermSize(cols: 100, rows: 30)
+        let size = startingSize
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Result { try Handoff.prepare(conversation, to: target.id, plan: plan, prompt: prompt, note: note) }
             DispatchQueue.main.async {
@@ -432,7 +443,7 @@ final class AppModel: ObservableObject {
         guard status == .connected else { return }
         lastError = nil
         selectNextAttached = true
-        let size = currentController?.naturalSize ?? TermSize(cols: 100, rows: 30)
+        let size = startingSize
         let name = agents.first { $0.id == conversation.agent }?.name
         connection?.send(.create(CreateRequest(command: conversation.resumeCommand, cwd: conversation.cwd, title: name, size: size)))
     }

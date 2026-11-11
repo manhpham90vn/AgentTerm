@@ -126,6 +126,19 @@ Keeping the Mac's own, larger grid and letting the narrower output flow into
 it was tried and dropped: it reads well for programs that draw relative to
 the cursor, but the picture on the Mac is then not the picture on the phone.
 
+### The size a session starts with
+
+A session is created with the grid that fits the place its terminal will be
+shown in, worked out by `TerminalMetrics` from that place's size and the
+font before any terminal view exists. With a guessed size the shell draws
+its first prompt for the wrong width. zsh then leaves a stray "%" on screen:
+it prints that mark and pads the line to the width it believes in, and the
+padding wraps where the real width is smaller.
+
+The same mark can still show after the width changes later (rotating the
+phone, changing the text size, another device taking over), because the
+padded line is already on screen and gets wrapped again.
+
 ### Input that is not typing
 
 Every attached emulator answers the program's queries (cursor position,
