@@ -1,0 +1,177 @@
+# Agentty design
+
+How Agentty is built and why. For what it should do, see [SPEC.md](SPEC.md).
+
+## Overview
+
+```
+ iPhone app ──┐                      ┌── PTY ── claude
+              │  WebSocket           │
+              ├──(Tailscale)──┐      ├── PTY ── codex
+              │               ▼      │
+ macOS app ───┴─(loopback)─ agenttyd ┴── PTY ── zsh
+```
+
+One process, `agenttyd`, owns every terminal session. The macOS app and the
+iPhone app are both clients of it and speak the same protocol. The macOS app
+has no private path to the terminals, so everything it can do is something the
+iPhone can do too, and the protocol is exercised every time the Mac app is used.
+
+## Modules
+
+| Module | Platforms | Role |
+|---|---|---|
+| `AgenttyProtocol` | macOS, iOS | Message types, binary frame, pairing URL. No dependencies. |
+| `AgenttyHost` | macOS | `PTYProcess`, `SizeArbiter`, `HostServer`, agent detection, Tailscale lookup, git diff, daemon launcher. |
+| `agenttyd` | macOS | Command line entry point around `HostServer`. |
+| `AgenttyClient` | macOS, iOS | `AgenttyConnection`, a WebSocket client built on `URLSession`. |
+| `AgenttyMac` | macOS | SwiftUI app. Uses SwiftTerm as the terminal emulator. |
+
+The package is plain SwiftPM. The iOS app will add an Xcode project that
+depends on `AgenttyProtocol` and `AgenttyClient`.
+
+## Pseudo terminals
+
+`PTYProcess` opens a PTY with `posix_openpt` and starts the child with
+`posix_spawn`, not `fork`, which is unsafe in a multithreaded Swift process.
+
+- `POSIX_SPAWN_SETSID` makes the child a session leader. A file action opens
+  the slave side as file descriptor 0 inside the child, which makes the PTY
+  its controlling terminal. Job control and Ctrl-C then work as usual.
+- `POSIX_SPAWN_CLOEXEC_DEFAULT` keeps the daemon's sockets and other PTYs out
+  of the child.
+- The parent holds the slave open until the child has started. On macOS a
+  window size set before any slave is open is lost.
+- Output is read by a dispatch source on the host queue. Writes run on a
+  separate queue because they block when the program is not reading, and
+  output must keep flowing meanwhile.
+- When the child exits, pending output is drained before the exit is reported.
+
+Programs are started through the user's login shell (`$SHELL -l -i -c
+<command>`), so they get the same `PATH` and environment as in a regular
+terminal. The environment sets `TERM=xterm-256color`, `COLORTERM=truecolor`
+and a UTF-8 locale when none is set.
+
+## Terminal size with several clients
+
+A PTY has one size, but a Mac window and an iPhone screen differ. `SizeArbiter`
+implements "the client being used wins":
+
+- Every attached client reports the grid that fits its view.
+- The driver is the client that most recently attached, resized or typed. The
+  PTY takes the driver's size.
+- When the driver detaches, the most recently active remaining client becomes
+  the driver. With no client left the size stays as it is.
+- After every change the host sends `resized` to each attached client with a
+  `driver` flag. A client that is not the driver shows the driver's grid
+  rather than its own, so the content lines up.
+
+tmux's rule, the smallest attached client, was rejected: a phone left
+connected would keep the Mac window small.
+
+On the Mac, `TerminalController` keeps two sizes: the natural size that fits
+the window and the foreign size imposed by another driver. Resizing the window
+while a phone drives updates the natural size without taking control.
+
+## Protocol
+
+WebSocket over TCP, default port 7717.
+
+**Text frames** carry JSON messages, encoded with Swift's synthesized `Codable`
+for enums (`{"attach":{"session":1,"size":{"cols":48,"rows":30}}}`).
+
+Client to host:
+
+| Message | Meaning |
+|---|---|
+| `hello(token, client)` | Must come first. Wrong token closes the connection. |
+| `list` | Ask for the session list. |
+| `agents(refresh)` | Ask which agent CLIs are installed. |
+| `create(command, cwd, title, size)` | Start a session and attach to it. |
+| `attach(session, size)` / `detach(session)` | Start or stop receiving a session. |
+| `resize(session, size)` | Report this client's grid and become the driver. |
+| `kill(session)` | Hang up the session (SIGHUP, then SIGKILL after 3 s). |
+
+Host to client: `welcome`, `sessions`, `agents`, `attached`, `resized`,
+`exited`, `error`. The session list is pushed to every client when it changes.
+
+**Binary frames** carry terminal bytes: one byte kind (0 output, 1 input), the
+session id as 4 bytes big endian, then the raw bytes. Input from a client that
+is not attached to the session is dropped.
+
+## Attaching to a running session
+
+The host keeps the last 512 KB of each session's output and replays it to a
+client that attaches. This is simple and good enough for shells. For full
+screen programs it relies on the program redrawing, which happens when the
+attach changes the size. Replacing the replay with a real screen snapshot from
+a headless emulator on the host is planned (M3).
+
+## Agent detection
+
+`AgentDetector` runs one script through the login shell that resolves each
+known CLI with `whence -p` (zsh), `type -P` (bash) or `command -v`. The result
+is cached by the host and sent on request; `agents(refresh: true)` runs it
+again. Clients only offer agents with a path.
+
+## Changes pane
+
+`GitDiff` shells out to `git`: `diff HEAD` for tracked files and
+`ls-files --others` plus `diff --no-index` for untracked ones, then splits the
+output per file. The Mac app calls it directly every few seconds while it is
+in front. It is not in the protocol yet; the iPhone needs a `diff` message
+(M3).
+
+## Pairing and security
+
+- The token is 32 random bytes, created on first run and stored with mode 0600
+  in `~/Library/Application Support/Agentty/token`.
+- The pairing QR code encodes
+  `agentty://pair?host=<tailscale name>&port=<port>&token=<token>&name=<mac>`.
+- The host listens on `127.0.0.1` and on the Mac's Tailscale address
+  (100.64.0.0/10), found with `getifaddrs`. It checks every 15 seconds so it
+  follows Tailscale going up, down or changing address. It never listens on
+  other interfaces.
+- The WebSocket itself is not encrypted. Loopback traffic stays on the Mac and
+  Tailscale traffic is encrypted by WireGuard.
+- The token is still required on Tailscale, because other devices and shared
+  nodes in a tailnet can reach the port, and the port is shell access.
+- Token comparison is constant time. Unauthenticated connections are closed
+  after 10 seconds.
+
+Not done yet: revoking a token from the UI, and per-device tokens.
+
+## Vietnamese input
+
+- **Host**: bytes pass through untouched and the locale is UTF-8. Covered by
+  tests at the PTY level and end to end.
+- **macOS**: SwiftTerm's view implements `NSTextInputClient`, so input methods
+  that use marked text compose at the cursor. Tools that retype with
+  backspaces send DEL bytes followed by the new text, which the shell and the
+  agents handle themselves. Both paths need to be checked by hand against the
+  matrix in the spec; that has not been done yet.
+- **iPhone**: prose goes through a native compose field and is sent as
+  complete text, so the emulator never sees a composition. The key bar sends
+  control keys directly.
+
+## macOS app structure
+
+- `AppModel` holds all state: connection, folders, sessions, agents, the diff
+  and one `TerminalController` per session.
+- `TerminalController` wraps a SwiftTerm `TerminalView` and is its delegate.
+  Terminal views are kept alive while their session runs, so switching
+  sessions keeps scrollback.
+- If the app cannot connect, it starts the `agenttyd` that sits next to its
+  own executable, in a new session so it outlives the app, and retries.
+
+## Known limitations
+
+- Attach replays raw bytes instead of a screen snapshot.
+- SwiftTerm resets some terminal modes when its grid is resized from code,
+  which happens when another device takes over the size.
+- A terminal wider than the Mac window (a phone in landscape next to a narrow
+  window) is clipped rather than scaled.
+- The host does not apply backpressure to a slow client.
+- The daemon is started by the app, not as a login item, so after a reboot
+  nothing runs until the app is opened.
+- The Mac build is ad-hoc signed, not notarized.
