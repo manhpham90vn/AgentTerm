@@ -1,12 +1,17 @@
-// Draws AgentTerm's app icon and writes it where the two apps expect it:
+// Makes AgentTerm's app icon and writes it where the two apps expect it:
 //   iOS/AgentTerm/Assets.xcassets/AppIcon.appiconset/icon-1024.png
 //   assets/AppIcon.icns (through an .iconset and iconutil)
 // Run from the repository root: swift scripts/make-icons.swift
+//
+// The picture is assets/icon-source.png when that file is there: a square,
+// full-bleed image, 1024 pixels or more. Without it the icon is drawn here.
 import AppKit
 
 /// The picture itself, drawn into a square of the given size. On the Mac the
 /// icon is a rounded tile with a margin, as the system's own are; on the
 /// iPhone it fills the square and the system rounds it.
+let source: CGImage? = NSImage(contentsOfFile: "assets/icon-source.png")?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+
 func draw(size: CGFloat, forMac: Bool) -> NSBitmapImageRep {
     let rep = NSBitmapImageRep(
         bitmapDataPlanes: nil, pixelsWide: Int(size), pixelsHigh: Int(size), bitsPerSample: 8,
@@ -31,6 +36,13 @@ func draw(size: CGFloat, forMac: Bool) -> NSBitmapImageRep {
     }
     context.addPath(shape)
     context.clip()
+    if let source {
+        // The artwork fills the tile; on the Mac the tile's shape crops it.
+        context.interpolationQuality = .high
+        context.draw(source, in: tile)
+        NSGraphicsContext.restoreGraphicsState()
+        return rep
+    }
     let colors = [CGColor(red: 0.13, green: 0.14, blue: 0.20, alpha: 1), CGColor(red: 0.055, green: 0.058, blue: 0.08, alpha: 1)] as CFArray
     let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(), colors: colors, locations: [0, 1])!
     context.drawLinearGradient(gradient, start: CGPoint(x: tile.minX, y: tile.maxY), end: CGPoint(x: tile.maxX, y: tile.minY), options: [])
@@ -107,4 +119,4 @@ iconutil.arguments = ["-c", "icns", iconset, "-o", "assets/AppIcon.icns"]
 try iconutil.run()
 iconutil.waitUntilExit()
 try? fm.removeItem(atPath: iconset)
-print(iconutil.terminationStatus == 0 ? "Wrote the iPhone icon and assets/AppIcon.icns" : "iconutil failed")
+print(iconutil.terminationStatus == 0 ? "Wrote the iPhone icon and assets/AppIcon.icns from \(source == nil ? "the drawing in this script" : "assets/icon-source.png")" : "iconutil failed")
