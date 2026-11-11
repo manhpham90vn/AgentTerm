@@ -77,8 +77,10 @@ Three panes, like a code editor:
   launch screen for the selected folder.
 - **Right: changes.** Uncommitted git changes of the selected folder: the
   changed files with added and removed line counts, and the diff of the
-  selected file. It refreshes on its own while the app is in front. The pane
-  can be hidden.
+  selected file. An icon in the pane's header switches the file list between
+  a flat list and a tree grouped by folder; folders in the tree can be
+  collapsed and show the totals of what is inside. It refreshes on its own
+  while the app is in front. The pane can be hidden.
 
 ### Pairing and remote access
 

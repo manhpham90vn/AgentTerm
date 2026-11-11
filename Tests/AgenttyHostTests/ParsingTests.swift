@@ -81,4 +81,53 @@ final class ParsingTests: XCTestCase {
         XCTAssertEqual(snapshot.files[1].added, 1)
         XCTAssertTrue(snapshot.files[1].patch.contains("+xin chào"))
     }
+
+    private func file(_ path: String, added: Int = 1, deleted: Int = 0) -> FileDiff {
+        FileDiff(path: path, added: added, deleted: deleted, isUntracked: false, patch: "")
+    }
+
+    func testTreeGroupsFilesByFolder() {
+        let files = [
+            file("README.md", added: 2),
+            file("Sources/AgenttyHost/GitDiff.swift", added: 3, deleted: 1),
+            file("Sources/AgenttyHost/DiffTree.swift", added: 10),
+            file("Sources/AgenttyMac/DiffView.swift", added: 5, deleted: 4),
+            file("docs/guide/deep/notes.md"),
+        ]
+        let rows = DiffTree.rows(for: files)
+        XCTAssertEqual(rows.map(\.id), [
+            "docs/guide/deep/",
+            "docs/guide/deep/notes.md",
+            "Sources/",
+            "Sources/AgenttyHost/",
+            "Sources/AgenttyHost/DiffTree.swift",
+            "Sources/AgenttyHost/GitDiff.swift",
+            "Sources/AgenttyMac/",
+            "Sources/AgenttyMac/DiffView.swift",
+            "README.md",
+        ])
+        XCTAssertEqual(rows.map(\.depth), [0, 1, 0, 1, 2, 2, 1, 2, 0])
+        // A chain of single folders is one row.
+        XCTAssertEqual(rows[0].name, "docs/guide/deep")
+        // Folders total what is inside them.
+        XCTAssertEqual(rows[2].added, 18)
+        XCTAssertEqual(rows[2].deleted, 5)
+        XCTAssertEqual(rows[3].added, 13)
+        XCTAssertEqual(rows.last?.name, "README.md")
+    }
+
+    func testCollapsedFoldersHideTheirContents() {
+        let files = [file("a/one.txt"), file("a/b/two.txt"), file("c/three.txt")]
+        let rows = DiffTree.rows(for: files, collapsed: ["a/"])
+        XCTAssertEqual(rows.map(\.id), ["a/", "c/", "c/three.txt"])
+        XCTAssertEqual(rows[0].kind, .folder(expanded: false))
+        XCTAssertEqual(rows[0].added, 2, "a collapsed folder still shows its totals")
+        XCTAssertEqual(rows[1].kind, .folder(expanded: true))
+    }
+
+    func testTreeOfRootFilesIsFlat() {
+        let rows = DiffTree.rows(for: [file("b.txt"), file("a.txt"), file("a10.txt"), file("a2.txt")])
+        XCTAssertEqual(rows.map(\.id), ["a.txt", "a2.txt", "a10.txt", "b.txt"])
+        XCTAssertTrue(rows.allSatisfy { $0.depth == 0 })
+    }
 }
