@@ -16,6 +16,8 @@ public enum HostEnvironment {
 
     public static var tokenFile: URL { supportDirectory.appendingPathComponent("token") }
 
+    public static var devicesFile: URL { supportDirectory.appendingPathComponent("devices.json") }
+
     public static var foldersFile: URL { supportDirectory.appendingPathComponent("folders.json") }
 
     public static var homeDirectory: String { NSHomeDirectory() }
@@ -60,8 +62,9 @@ public enum HostEnvironment {
         return [name, "-l", "-i", "-c", command]
     }
 
-    /// Returns the pairing token, creating it on first use. The file is
-    /// readable by the user only.
+    /// Returns the Mac's own token, creating it on first use. It lets apps on
+    /// this Mac talk to the host and is never given to another device. The
+    /// file is readable by the user only.
     public static func loadOrCreateToken() throws -> String {
         let fm = FileManager.default
         if let data = fm.contents(atPath: tokenFile.path),
@@ -70,12 +73,7 @@ public enum HostEnvironment {
             return token
         }
         try fm.createDirectory(at: supportDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        var generator = SystemRandomNumberGenerator()
-        let bytes = (0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
-        let token = Data(bytes).base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
+        let token = DeviceRegistry.randomToken()
         guard fm.createFile(atPath: tokenFile.path, contents: Data(token.utf8), attributes: [.posixPermissions: 0o600]) else {
             throw CocoaError(.fileWriteUnknown)
         }

@@ -11,8 +11,12 @@ final class EndToEndTests: XCTestCase {
         var output: [SessionID: Data] = [:]
         var state: AgenttyConnection.State = .connecting
 
-        init(port: UInt16, token: String, name: String) {
-            connection = AgenttyConnection(host: "127.0.0.1", port: port, token: token, clientName: name)
+        convenience init(port: UInt16, token: String, name: String) {
+            self.init(port: port, credential: .token(token), name: name)
+        }
+
+        init(port: UInt16, credential: AgenttyConnection.Credential, name: String) {
+            connection = AgenttyConnection(host: "127.0.0.1", port: port, credential: credential, clientName: name)
             connection.onMessage = { [weak self] in self?.messages.append($0) }
             connection.onOutput = { [weak self] id, data in self?.output[id, default: Data()].append(data) }
             connection.onState = { [weak self] in self?.state = $0 }
@@ -28,6 +32,21 @@ final class EndToEndTests: XCTestCase {
         var lastResize: (size: TermSize, driver: Bool)? {
             messages.compactMap { if case .resized(_, let size, let driver) = $0 { return (size, driver) } else { return nil } }.last
         }
+
+        var pairingCode: String? {
+            messages.compactMap { if case .pairingCode(let code, _) = $0 { return code } else { return nil } }.last
+        }
+
+        var devices: [DeviceInfo]? {
+            messages.compactMap { if case .devices(let list) = $0 { return list } else { return nil } }.last
+        }
+
+        var pairedToken: String? {
+            messages.compactMap { if case .paired(_, let token) = $0 { return token } else { return nil } }.last
+        }
+
+        var welcomed: Bool { messages.contains { if case .welcome = $0 { return true } else { return false } } }
+        var isClosed: Bool { if case .closed = state { return true } else { return false } }
 
         func type(_ text: String, in session: SessionID) { connection.sendInput(Data(text.utf8), to: session) }
     }
@@ -193,6 +212,75 @@ final class EndToEndTests: XCTestCase {
         waitUntil("saved list is served") { client.messages.contains(.folders(["/tmp"])) }
         client.connection.send(.addFolder(path: "/usr"))
         waitUntil("written") { (try? JSONDecoder().decode([String].self, from: Data(contentsOf: file))) == ["/tmp", "/usr"] }
+    }
+
+    func testAPhonePairsWithACodeThenUsesItsOwnToken() {
+        let mac = connect("mac")
+        waitUntil("no devices yet") { mac.devices == [] }
+        mac.connection.send(.createPairingCode)
+        waitUntil("code") { mac.pairingCode != nil }
+        let code = mac.pairingCode!
+
+        // The phone trades the code for a token and is let in.
+        let phone = TestClient(port: port, credential: .pairingCode(code), name: "iPhone của Mạnh")
+        waitUntil("paired") { phone.pairedToken != nil && phone.welcomed }
+        let token = phone.pairedToken!
+        XCTAssertNotEqual(token, code)
+        waitUntil("the Mac sees the device") { mac.devices?.map(\.name) == ["iPhone của Mạnh"] && mac.devices?.first?.isConnected == true }
+
+        // The code does not work a second time.
+        let late = TestClient(port: port, credential: .pairingCode(code), name: "someone else")
+        waitUntil("refused") { late.messages.contains(.error("invalid pairing code")) && late.isClosed }
+        XCTAssertNil(late.pairedToken)
+        XCTAssertEqual(mac.devices?.count, 1)
+
+        // Later the phone connects with its token, and can use sessions.
+        phone.connection.close()
+        waitUntil("the Mac sees it leave") { mac.devices?.first?.isConnected == false }
+        let again = TestClient(port: port, token: token, name: "iPhone của Mạnh")
+        waitUntil("welcome") { again.welcomed }
+        again.connection.send(.create(CreateRequest(command: "echo from-phone-$((1+1))")))
+        waitUntil("attached") { again.attached != nil }
+        waitUntil("output") { again.text(again.attached!.id).contains("from-phone-2") }
+        XCTAssertNil(again.devices, "the device list is not shown to devices")
+    }
+
+    func testOnlyTheMacMayPairAndRevoke() {
+        let mac = connect("mac")
+        mac.connection.send(.createPairingCode)
+        waitUntil("code") { mac.pairingCode != nil }
+        let phone = TestClient(port: port, credential: .pairingCode(mac.pairingCode!), name: "phone")
+        waitUntil("paired") { phone.welcomed }
+        waitUntil("listed") { mac.devices?.count == 1 }
+        let id = mac.devices![0].id
+
+        // A paired device cannot hand out access or remove devices.
+        for message in [ClientMessage.createPairingCode, .cancelPairingCode, .listDevices, .revokeDevice(id: id)] {
+            phone.connection.send(message)
+        }
+        waitUntil("refused four times") { phone.messages.filter { $0 == .error("not allowed") }.count == 4 }
+        XCTAssertNil(phone.pairingCode)
+        XCTAssertEqual(mac.devices?.count, 1)
+
+        // The Mac revokes it: the connection drops and the token is dead.
+        let token = phone.pairedToken!
+        mac.connection.send(.revokeDevice(id: id))
+        waitUntil("phone disconnected") { phone.isClosed }
+        waitUntil("list emptied") { mac.devices == [] }
+        let revoked = TestClient(port: port, token: token, name: "phone")
+        waitUntil("token refused") { revoked.messages.contains(.error("invalid token")) && revoked.isClosed }
+    }
+
+    func testACancelledCodeDoesNotPair() {
+        let mac = connect("mac")
+        mac.connection.send(.createPairingCode)
+        waitUntil("code") { mac.pairingCode != nil }
+        mac.connection.send(.cancelPairingCode)
+        mac.connection.send(.listDevices)
+        waitUntil("cancel processed") { mac.messages.filter { if case .devices = $0 { return true } else { return false } }.count >= 2 }
+        let phone = TestClient(port: port, credential: .pairingCode(mac.pairingCode!), name: "phone")
+        waitUntil("refused") { phone.messages.contains(.error("invalid pairing code")) && phone.isClosed }
+        XCTAssertEqual(mac.devices, [])
     }
 
     func testInputToASessionTheClientIsNotAttachedToIsIgnored() {

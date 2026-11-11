@@ -27,7 +27,7 @@ let package = Package(
         ),
         // macOS only: PTY ownership, session management, WebSocket server.
         .target(name: "AgenttyHost", dependencies: ["AgenttyProtocol"]),
-        .executableTarget(name: "agenttyd", dependencies: ["AgenttyHost"]),
+        .executableTarget(name: "agenttyd", dependencies: ["AgenttyHost", "AgenttyClient"]),
         .executableTarget(
             name: "AgenttyMac",
             dependencies: [

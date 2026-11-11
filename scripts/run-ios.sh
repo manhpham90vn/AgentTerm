@@ -36,4 +36,4 @@ rm -f "$LOG"
 xcrun simctl install "$DEVICE" .build/ios/Build/Products/Debug-iphonesimulator/Agentty.app
 xcrun simctl launch "$DEVICE" click.manhdev.agentty.ios >/dev/null
 echo "Agentty is running on $DEVICE."
-echo "The simulator has no camera. Pair it with: xcrun simctl openurl \"$DEVICE\" '<pairing link>'"
+echo "The simulator has no camera. With Agentty open on this Mac, pair it with: ./scripts/pair-ios.sh"

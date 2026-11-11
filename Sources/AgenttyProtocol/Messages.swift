@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttyProtocolVersion = 1
+public let agenttyProtocolVersion = 2
 
 /// Default TCP port the host daemon listens on.
 public let agenttyDefaultPort: UInt16 = 7717
@@ -78,10 +78,39 @@ public struct AgentInfo: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// A device that was paired with the host and holds its own token.
+public struct DeviceInfo: Codable, Equatable, Identifiable, Sendable {
+    public var id: String
+    public var name: String
+    public var pairedAt: Date
+    /// When the device last connected, if it ever did after pairing.
+    public var lastSeenAt: Date?
+    public var isConnected: Bool
+
+    public init(id: String, name: String, pairedAt: Date, lastSeenAt: Date?, isConnected: Bool) {
+        self.id = id
+        self.name = name
+        self.pairedAt = pairedAt
+        self.lastSeenAt = lastSeenAt
+        self.isConnected = isConnected
+    }
+}
+
 /// JSON text frames sent by a client.
 public enum ClientMessage: Codable, Equatable, Sendable {
-    /// Must be the first message on a connection.
+    /// Must be the first message on a connection, unless the client is
+    /// pairing. The token is a paired device's own, or the host's local one.
     case hello(token: String, client: String)
+    /// First message of a device that is not paired yet. Trades a pairing
+    /// code, which works once and for a few minutes, for a token of its own.
+    case pair(code: String, device: String)
+    /// The four below are only accepted from the host's own machine.
+    /// Asks for a new pairing code. Any earlier code stops working.
+    case createPairingCode
+    case cancelPairingCode
+    case listDevices
+    /// Takes a device's token away and disconnects it.
+    case revokeDevice(id: String)
     case list
     /// Asks which agent CLIs are installed on the host.
     case agents(refresh: Bool)
@@ -110,6 +139,12 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case resized(session: SessionID, size: TermSize, driver: Bool)
     case exited(session: SessionID, status: Int32)
     case error(String)
+    /// Answer to `pair`: the token this device connects with from now on.
+    case paired(device: String, token: String)
+    /// Answer to `createPairingCode`.
+    case pairingCode(code: String, expiresAt: Date)
+    /// The paired devices. Sent to the host's own machine when they change.
+    case devices([DeviceInfo])
 }
 
 public enum MessageCoding {

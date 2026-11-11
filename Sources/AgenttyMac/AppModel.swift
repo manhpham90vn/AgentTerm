@@ -5,6 +5,11 @@ import AgenttyTerminal
 import AppKit
 import SwiftUI
 
+struct PairingCode: Equatable {
+    let code: String
+    let expiresAt: Date
+}
+
 struct Folder: Identifiable, Hashable {
     let path: String
     var id: String { path }
@@ -54,6 +59,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastError: String?
     /// Shown in an alert, for problems that are not tied to the launch screen.
     @Published var notice: String?
+    /// Devices that were paired with this Mac.
+    @Published private(set) var devices: [DeviceInfo] = []
+    /// The pairing code on show, while the pairing sheet is open.
+    @Published private(set) var pairingCode: PairingCode?
+    /// The device that used the code on show, to confirm it in the sheet.
+    @Published private(set) var justPaired: DeviceInfo?
     /// The conversation being handed off, while its sheet is open.
     @Published var pendingHandoff: Conversation?
 
@@ -203,6 +214,17 @@ final class AppModel: ObservableObject {
             }
         case .error(let text):
             lastError = text
+        case .pairingCode(let code, let expiresAt):
+            pairingCode = PairingCode(code: code, expiresAt: expiresAt)
+        case .devices(let list):
+            // A device that appears while a code is on show used that code.
+            if pairingCode != nil, let new = list.first(where: { device in !devices.contains { $0.id == device.id } }) {
+                justPaired = new
+                pairingCode = nil
+            }
+            devices = list
+        case .paired:
+            break
         }
     }
 
@@ -399,12 +421,24 @@ final class AppModel: ObservableObject {
 
     // MARK: Pairing
 
-    /// Checks Tailscale and, when it is ready, builds what a phone needs to
-    /// reach this Mac. Runs the Tailscale CLI, so call off the main thread.
-    nonisolated static func pairingState(port: UInt16) -> (status: TailscaleStatus, info: PairingInfo?) {
-        let status = Tailscale.status()
-        guard case .ready(let host) = status, let token = try? HostEnvironment.loadOrCreateToken() else { return (status, nil) }
-        return (status, PairingInfo(host: host, port: port, token: token, name: Host.current().localizedName ?? "Mac"))
+    /// Asks the host for a fresh pairing code. Earlier codes stop working.
+    func requestPairingCode() {
+        justPaired = nil
+        pairingCode = nil
+        connection?.send(.createPairingCode)
+    }
+
+    /// Called when the pairing sheet closes: a code nobody is looking at
+    /// should not keep working.
+    func cancelPairingCode() {
+        pairingCode = nil
+        justPaired = nil
+        connection?.send(.cancelPairingCode)
+    }
+
+    /// Takes a device's access away. It has to be paired again to come back.
+    func revoke(_ device: DeviceInfo) {
+        connection?.send(.revokeDevice(id: device.id))
     }
 
     var hostPort: UInt16 { port }

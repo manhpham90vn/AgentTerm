@@ -24,15 +24,12 @@ final class FlowTests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        // Pair by link: the simulator has no camera to scan with.
+        // Pair by opening the link, as tapping an agentty:// link would: the
+        // simulator has no camera to scan with.
         let enterLink = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Enter a pairing link'")).firstMatch
         XCTAssertTrue(enterLink.waitForExistence(timeout: 10))
         capture("1-pair")
-        enterLink.tap()
-        let field = app.alerts.textFields.firstMatch
-        XCTAssertTrue(field.waitForExistence(timeout: 5))
-        field.typeText(link)
-        app.alerts.buttons["Pair"].tap()
+        app.open(try XCTUnwrap(URL(string: link)))
 
         // Connected: the Mac's folders and launch buttons show up.
         let start = app.buttons[launchButton].firstMatch

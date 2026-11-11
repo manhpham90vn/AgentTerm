@@ -4,30 +4,51 @@ import Combine
 import CoreImage.CIFilterBuiltins
 import SwiftUI
 
-/// Shows the QR code an iPhone scans to pair with this Mac, or, while
-/// Tailscale is not ready on this Mac, what to do about that.
+/// Pairs an iPhone with this Mac and lists the devices already paired.
+///
+/// The code on show works once and for a few minutes. It stops working when
+/// this sheet closes. While Tailscale is not ready on this Mac, the sheet
+/// shows what to do about that instead of a code.
 struct PairingView: View {
+    @EnvironmentObject private var model: AppModel
     let port: UInt16
     @Environment(\.dismiss) private var dismiss
     @State private var status: TailscaleStatus?
-    @State private var info: PairingInfo?
     @State private var copied = false
     @State private var checking = false
+    @State private var now = Date()
     /// Re-checks while the sheet is open, so the code appears by itself once
     /// Tailscale is installed, signed in and connected.
     private let recheck = Timer.publish(every: 3, on: .main, in: .common).autoconnect()
+    private let clock = Timer.publish(every: 1, on: .main, in: .common).autoconnect()
+
+    private var host: String? {
+        if case .ready(let host) = status { return host }
+        return nil
+    }
 
     var body: some View {
         VStack(spacing: 18) {
             Text("Pair an iPhone")
                 .font(.system(size: 18, weight: .semibold))
 
-            if let info, let image = Self.qrCode(for: info.url.absoluteString) {
-                ready(info, image)
+            if let device = model.justPaired {
+                paired(device)
+            } else if let host {
+                if let code = model.pairingCode, code.expiresAt > now,
+                   let image = Self.qrCode(for: link(host: host, code: code)) {
+                    ready(host: host, code: code, image: image)
+                } else {
+                    ProgressView().controlSize(.small).frame(height: 248)
+                }
             } else if let status {
                 setup(for: status)
             } else {
                 ProgressView().controlSize(.small).frame(height: 248)
+            }
+
+            if !model.devices.isEmpty {
+                devices
             }
 
             Button("Done") { dismiss() }
@@ -36,13 +57,34 @@ struct PairingView: View {
         .padding(28)
         .frame(width: 400)
         .onAppear(perform: check)
+        .onDisappear { model.cancelPairingCode() }
         .onReceive(recheck) { _ in check() }
+        .onReceive(clock) { now = $0 }
+        .onChange(of: host) { _, _ in renewCodeIfNeeded() }
+        .onChange(of: now) { _, _ in renewCodeIfNeeded() }
     }
+
+    private func link(host: String, code: PairingCode) -> String {
+        PairingInfo(host: host, port: port, code: code.code, name: Host.current().localizedName ?? "Mac").url.absoluteString
+    }
+
+    /// Keeps a working code on show: asks for one when Tailscale becomes
+    /// ready, and for a new one when the old one runs out.
+    private func renewCodeIfNeeded() {
+        guard host != nil, model.justPaired == nil else { return }
+        if let code = model.pairingCode, code.expiresAt > now { return }
+        guard !requesting else { return }
+        requesting = true
+        model.requestPairingCode()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { requesting = false }
+    }
+
+    @State private var requesting = false
 
     // MARK: Ready
 
     @ViewBuilder
-    private func ready(_ info: PairingInfo, _ image: NSImage) -> some View {
+    private func ready(host: String, code: PairingCode, image: NSImage) -> some View {
         Image(nsImage: image)
             .interpolation(.none)
             .resizable()
@@ -50,33 +92,111 @@ struct PairingView: View {
             .padding(14)
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white))
 
+        Text("This code works once and expires in \(remaining(until: code.expiresAt)).")
+            .font(.system(size: 12, weight: .medium))
+            .monospacedDigit()
+
         VStack(alignment: .leading, spacing: 10) {
             Step(number: 1, text: "Install Tailscale on the iPhone and sign in to the same account as this Mac.")
             Step(number: 2, text: "Open Agentty on the iPhone and scan this code, or copy the link below and paste it there.")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
 
-        Text("\(info.host):\(String(info.port))")
+        Text("\(host):\(String(port))")
             .font(.system(size: 11.5, design: .monospaced))
             .foregroundStyle(.secondary)
             .textSelection(.enabled)
 
-        // The iPhone app can also take the link as text, for when scanning
-        // is not possible.
-        Button {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(info.url.absoluteString, forType: .string)
-            copied = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
-        } label: {
-            Label(copied ? "Copied" : "Copy Pairing Link", systemImage: copied ? "checkmark" : "doc.on.doc")
+        HStack(spacing: 10) {
+            // The iPhone app can also take the link as text, for when
+            // scanning is not possible.
+            Button {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(link(host: host, code: code), forType: .string)
+                copied = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+            } label: {
+                Label(copied ? "Copied" : "Copy Pairing Link", systemImage: copied ? "checkmark" : "doc.on.doc")
+            }
+            .help("Copy the link to paste into \"Enter a pairing link\" on the iPhone")
+            Button("New Code") { model.requestPairingCode() }
+                .help("Replace this code. The old one stops working at once.")
         }
-        .help("Copy the link to paste into \"Enter a pairing link\" on the iPhone")
 
-        Label("Anyone with this code or link can run commands on this Mac. Don't share it.", systemImage: "lock.fill")
+        Label("The code stops working when this window closes. Until then, whoever has it can pair a device with this Mac.", systemImage: "lock.fill")
             .font(.system(size: 11.5))
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func remaining(until date: Date) -> String {
+        let seconds = max(0, Int(date.timeIntervalSince(now).rounded(.up)))
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+
+    // MARK: Paired
+
+    @ViewBuilder
+    private func paired(_ device: DeviceInfo) -> some View {
+        Image(systemName: "checkmark.circle.fill")
+            .font(.system(size: 44))
+            .foregroundStyle(Theme.added)
+            .padding(.top, 8)
+        Text("\(device.name) is paired")
+            .font(.headline)
+        Text("It can now open this Mac's sessions. The code it used no longer works.")
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+        Button("Pair Another Device") { model.requestPairingCode() }
+    }
+
+    // MARK: Devices
+
+    private var devices: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("PAIRED DEVICES")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(.secondary)
+            VStack(spacing: 0) {
+                ForEach(model.devices) { device in
+                    HStack(spacing: 9) {
+                        Image(systemName: "iphone")
+                            .foregroundStyle(device.isConnected ? Theme.added : .secondary)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(device.name).font(.system(size: 12.5))
+                            Text(subtitle(for: device))
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 6)
+                        Button("Remove", role: .destructive) { model.revoke(device) }
+                            .controlSize(.small)
+                            .help("Take this device's access away. It has to be paired again to come back.")
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    if device.id != model.devices.last?.id {
+                        Theme.hairline.frame(height: 1).padding(.leading, 34)
+                    }
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.black.opacity(0.22)))
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private static let relative: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter
+    }()
+
+    private func subtitle(for device: DeviceInfo) -> String {
+        if device.isConnected { return "Connected now" }
+        guard let seen = device.lastSeenAt else { return "Has not connected since it was paired" }
+        return seen.timeIntervalSince(now) > -60 ? "Last connected just now" : "Last connected \(Self.relative.localizedString(for: seen, relativeTo: now))"
     }
 
     // MARK: Not ready
@@ -150,13 +270,12 @@ struct PairingView: View {
     private func check() {
         guard !checking else { return }
         checking = true
-        let port = port
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = AppModel.pairingState(port: port)
+            let result = Tailscale.status()
             DispatchQueue.main.async {
-                status = result.status
-                if info != result.info { info = result.info }
+                if status != result { status = result }
                 checking = false
+                renewCodeIfNeeded()
             }
         }
     }

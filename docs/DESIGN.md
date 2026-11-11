@@ -218,10 +218,28 @@ the same folder can therefore be mixed up; the History tab is exact.
 
 ## Pairing and security
 
-- The token is 32 random bytes, created on first run and stored with mode 0600
-  in `~/Library/Application Support/Agentty/token`.
-- The pairing QR code encodes
-  `agentty://pair?host=<tailscale name>&port=<port>&token=<token>&name=<mac>`.
+`DeviceRegistry` knows three kinds of secret:
+
+| Secret | Who holds it | Lifetime | Good for |
+|---|---|---|---|
+| Local token | The Mac (`token`, mode 0600) | Permanent | Everything, but only on connections that arrive on the loopback interface |
+| Pairing code | Shown as QR code or link | One use, five minutes, and until the pairing screen closes | Getting a device token |
+| Device token | One paired device (Keychain) | Until the Mac removes the device | Sessions, folders, agents. Not pairing or removing devices |
+
+- A device that is not paired sends `pair(code, device)` as its first message.
+  The host answers `paired(device, token)` once and then treats the connection
+  as that device. Afterwards the device connects with `hello(token)`.
+- The host stores only the SHA-256 of device tokens (`devices.json`), so that
+  file cannot be used to connect.
+- The local token is refused on the Tailscale listener. If it leaks it is
+  useless to anyone who is not already on the Mac.
+- `createPairingCode`, `cancelPairingCode`, `listDevices` and `revokeDevice`
+  are accepted only from a connection that authenticated with the local
+  token. Revoking closes the device's live connections.
+- The pairing link is
+  `agentty://pair?host=<tailscale name>&port=<port>&code=<code>&name=<mac>`.
+- `agenttyd pairing-link` asks the running daemon for a code and prints the
+  link. The iOS Simulator has no camera, so `scripts/pair-ios.sh` uses it.
 - `Tailscale.status()` decides what the pairing screen shows. Tailscale counts
   as installed when its app or command line tool is found; as ready when the
   Mac has an address in Tailscale's range and the CLI, if it answers, reports
@@ -233,12 +251,10 @@ the same folder can therefore be mixed up; the History tab is exact.
   other interfaces.
 - The WebSocket itself is not encrypted. Loopback traffic stays on the Mac and
   Tailscale traffic is encrypted by WireGuard.
-- The token is still required on Tailscale, because other devices and shared
+- A token is still required on Tailscale, because other devices and shared
   nodes in a tailnet can reach the port, and the port is shell access.
-- Token comparison is constant time. Unauthenticated connections are closed
-  after 10 seconds.
-
-Not done yet: revoking a token from the UI, and per-device tokens.
+- Token and code comparison is constant time. Unauthenticated connections are
+  closed after 10 seconds.
 
 ## Vietnamese input
 

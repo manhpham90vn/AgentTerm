@@ -12,6 +12,11 @@ final class ProtocolTests: XCTestCase {
             .detach(session: 7),
             .resize(session: 7, size: TermSize(cols: 50, rows: 20)),
             .kill(session: 7),
+            .pair(code: "c0de", device: "iPhone của Mạnh"),
+            .createPairingCode,
+            .cancelPairingCode,
+            .listDevices,
+            .revokeDevice(id: "d-1"),
             .addFolder(path: "/Users/me/dự án"),
             .removeFolder(path: "/Users/me/dự án"),
         ]
@@ -32,6 +37,9 @@ final class ProtocolTests: XCTestCase {
             .resized(session: 3, size: TermSize(cols: 48, rows: 30), driver: true),
             .exited(session: 3, status: 130),
             .error("nope"),
+            .paired(device: "d-1", token: "t0ken"),
+            .pairingCode(code: "c0de", expiresAt: Date(timeIntervalSince1970: 1_800_000_300)),
+            .devices([DeviceInfo(id: "d-1", name: "iPhone", pairedAt: Date(timeIntervalSince1970: 1_800_000_000), lastSeenAt: nil, isConnected: true)]),
         ]
         for message in messages {
             let decoded = MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))
@@ -61,15 +69,16 @@ final class ProtocolTests: XCTestCase {
     }
 
     func testPairingURLRoundTrip() {
-        let info = PairingInfo(host: "macbook.tail1234.ts.net", port: 7717, token: "abc-_123", name: "Mạnh's MacBook")
+        let info = PairingInfo(host: "macbook.tail1234.ts.net", port: 7717, code: "abc-_123", name: "Mạnh's MacBook")
         XCTAssertEqual(info.url.scheme, "agentty")
         XCTAssertEqual(PairingInfo(url: info.url), info)
     }
 
     func testPairingURLRejectsIncompleteLinks() {
         XCTAssertNil(PairingInfo(url: URL(string: "agentty://pair?host=mac&port=7717")!))
-        XCTAssertNil(PairingInfo(url: URL(string: "https://pair?host=mac&port=7717&token=x")!))
-        XCTAssertNil(PairingInfo(url: URL(string: "agentty://pair?host=mac&port=99999&token=x")!))
+        XCTAssertNil(PairingInfo(url: URL(string: "agentty://pair?host=mac&port=7717&token=old-style")!), "links from before pairing codes")
+        XCTAssertNil(PairingInfo(url: URL(string: "https://pair?host=mac&port=7717&code=x")!))
+        XCTAssertNil(PairingInfo(url: URL(string: "agentty://pair?host=mac&port=99999&code=x")!))
     }
 
     func testSizeIsClamped() {

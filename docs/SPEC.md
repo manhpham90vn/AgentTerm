@@ -119,9 +119,16 @@ corner, the button that hides the side panel.
 ### Pairing and remote access
 
 - The Mac shows a QR code containing its Tailscale name, the port and a
-  pairing token. The iPhone scans it once and remembers the Mac. The same
-  information can be copied from the Mac as a link and pasted into the
-  iPhone app, for when scanning is not possible.
+  pairing code. The iPhone scans it and is paired. The same information can
+  be copied from the Mac as a link and pasted into the iPhone app, or opened
+  on the iPhone, for when scanning is not possible.
+- A pairing code works once and for five minutes, and stops working when the
+  pairing screen closes. The screen counts down, replaces a code that ran
+  out, and can make a new one on demand. A code that leaked after it was used
+  or after the screen closed is worth nothing.
+- Pairing gives the iPhone a token of its own, kept in its Keychain. The Mac
+  lists the paired devices, with when each last connected, and can remove
+  one. A removed device is disconnected at once and has to pair again.
 - All remote traffic goes through Tailscale. Agentty does not run a relay
   server and does not open a port on the local network.
 - The pairing screen checks Tailscale on the Mac first. The code is shown only

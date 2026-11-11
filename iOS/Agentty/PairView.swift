@@ -68,6 +68,13 @@ struct PairView: View {
                     .multilineTextAlignment(.center)
                     .padding(.bottom, 12)
             }
+            if model.isPairing {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text("Pairing with your Mac…").font(.subheadline)
+                }
+                .padding(.bottom, 14)
+            }
             Button {
                 scanning = true
             } label: {
@@ -77,7 +84,7 @@ struct PairView: View {
                     .padding(.vertical, 6)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!canScan)
+            .disabled(!canScan || model.isPairing)
 
             Button(canScan ? "Enter a pairing link instead" : "Enter a pairing link") {
                 enteringLink = true

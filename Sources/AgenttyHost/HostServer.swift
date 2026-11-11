@@ -18,6 +18,8 @@ public final class HostServer {
         public var detectAgents: () -> [AgentInfo]
         /// Where the shared folder list is saved. `nil` keeps it in memory only.
         public var foldersFile: URL?
+        /// Where paired devices are saved. `nil` keeps them in memory only.
+        public var devicesFile: URL?
 
         public init(
             port: UInt16 = agenttyDefaultPort,
@@ -25,7 +27,8 @@ public final class HostServer {
             listenOnTailscale: Bool = true,
             scrollbackLimit: Int = 512 * 1024,
             detectAgents: @escaping () -> [AgentInfo] = AgentDetector.detect,
-            foldersFile: URL? = nil
+            foldersFile: URL? = nil,
+            devicesFile: URL? = nil
         ) {
             self.port = port
             self.token = token
@@ -33,6 +36,7 @@ public final class HostServer {
             self.scrollbackLimit = scrollbackLimit
             self.detectAgents = detectAgents
             self.foldersFile = foldersFile
+            self.devicesFile = devicesFile
         }
     }
 
@@ -49,12 +53,19 @@ public final class HostServer {
     private final class Client {
         let id: ClientID
         let connection: NWConnection
-        var authenticated = false
+        /// Whether the connection arrived on the loopback interface.
+        let isLocal: Bool
+        var identity: DeviceRegistry.Identity?
         var attached: Set<SessionID> = []
 
-        init(id: ClientID, connection: NWConnection) {
+        var authenticated: Bool { identity != nil }
+        /// The Mac's own apps may pair and revoke devices.
+        var isAdmin: Bool { identity == .local }
+
+        init(id: ClientID, connection: NWConnection, isLocal: Bool) {
             self.id = id
             self.connection = connection
+            self.isLocal = isLocal
         }
     }
 
@@ -85,9 +96,11 @@ public final class HostServer {
     private var detecting = false
     private var boundPort: UInt16 = 0
     private var folders: [String] = []
+    private let registry: DeviceRegistry
 
     public init(configuration: Configuration) {
         self.configuration = configuration
+        registry = DeviceRegistry(localToken: configuration.token, file: configuration.devicesFile)
         if let file = configuration.foldersFile, let data = try? Data(contentsOf: file),
            let saved = try? JSONDecoder().decode([String].self, from: data) {
             folders = saved
@@ -167,7 +180,9 @@ public final class HostServer {
 
     private func makeListener(host: String, port: UInt16) throws -> NWListener {
         let listener = try NWListener(using: Self.parameters(host: host, port: port))
-        listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
+        // Which listener took the connection tells whether it came from this Mac.
+        let isLocal = host == "127.0.0.1"
+        listener.newConnectionHandler = { [weak self] connection in self?.accept(connection, isLocal: isLocal) }
         return listener
     }
 
@@ -193,8 +208,8 @@ public final class HostServer {
 
     // MARK: Connections
 
-    private func accept(_ connection: NWConnection) {
-        let client = Client(id: nextClientID, connection: connection)
+    private func accept(_ connection: NWConnection, isLocal: Bool) {
+        let client = Client(id: nextClientID, connection: connection, isLocal: isLocal)
         nextClientID += 1
         clients[client.id] = client
         connection.stateUpdateHandler = { [weak self, weak client] state in
@@ -254,6 +269,7 @@ public final class HostServer {
             if session.arbiter.remove(client.id) { applySize(of: session) }
         }
         client.attached.removeAll()
+        if case .device = client.identity { broadcastDevices() }
     }
 
     private func send(_ message: ServerMessage, to client: Client) {
@@ -279,18 +295,21 @@ public final class HostServer {
 
     private func handle(_ message: ClientMessage, from client: Client) {
         if case .hello(let token, _) = message {
-            guard Self.constantTimeEquals(token, configuration.token) else {
-                send(.error("invalid token"), to: client)
-                // Give the error a moment to reach the client before closing.
-                queue.asyncAfter(deadline: .now() + 0.2) { [weak self, weak client] in
-                    if let self, let client { self.close(client) }
-                }
+            guard let identity = registry.authenticate(token: token, isLocal: client.isLocal) else {
+                refuse(client, "invalid token")
                 return
             }
-            client.authenticated = true
-            send(.welcome(version: agenttyProtocolVersion, host: Host.current().localizedName ?? "Mac"), to: client)
-            send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
-            send(.folders(folders), to: client)
+            admit(client, as: identity)
+            return
+        }
+        if case .pair(let code, let device) = message {
+            guard !client.authenticated, let paired = registry.redeem(code: code, deviceName: device) else {
+                refuse(client, "invalid pairing code")
+                return
+            }
+            // The token is sent once, here. Only its hash is kept.
+            send(.paired(device: paired.device.id, token: paired.token), to: client)
+            admit(client, as: .device(id: paired.device.id))
             return
         }
         guard client.authenticated else {
@@ -299,8 +318,23 @@ public final class HostServer {
         }
 
         switch message {
-        case .hello:
+        case .hello, .pair:
             break
+        case .createPairingCode:
+            guard client.isAdmin else { return send(.error("not allowed"), to: client) }
+            let created = registry.createCode()
+            send(.pairingCode(code: created.code, expiresAt: created.expiresAt), to: client)
+        case .cancelPairingCode:
+            guard client.isAdmin else { return send(.error("not allowed"), to: client) }
+            registry.cancelCode()
+        case .listDevices:
+            guard client.isAdmin else { return send(.error("not allowed"), to: client) }
+            send(.devices(deviceList()), to: client)
+        case .revokeDevice(let id):
+            guard client.isAdmin else { return send(.error("not allowed"), to: client) }
+            guard registry.revoke(id) else { return }
+            for other in clients.values where other.identity == .device(id: id) { close(other) }
+            broadcastDevices()
         case .list:
             send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
         case .agents(let refresh):
@@ -338,6 +372,42 @@ public final class HostServer {
             guard folders.contains(path) else { return }
             folders.removeAll { $0 == path }
             foldersChanged()
+        }
+    }
+
+    /// Tells the client why, then closes once the message had time to arrive.
+    private func refuse(_ client: Client, _ reason: String) {
+        send(.error(reason), to: client)
+        queue.asyncAfter(deadline: .now() + 0.2) { [weak self, weak client] in
+            if let self, let client { self.close(client) }
+        }
+    }
+
+    private func admit(_ client: Client, as identity: DeviceRegistry.Identity) {
+        client.identity = identity
+        send(.welcome(version: agenttyProtocolVersion, host: Host.current().localizedName ?? "Mac"), to: client)
+        send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
+        send(.folders(folders), to: client)
+        if client.isAdmin {
+            send(.devices(deviceList()), to: client)
+        } else {
+            broadcastDevices()
+        }
+    }
+
+    private func deviceList() -> [DeviceInfo] {
+        let connected = Set(clients.values.compactMap { client -> String? in
+            if case .device(let id) = client.identity { return id }
+            return nil
+        })
+        return registry.devices(connected: connected)
+    }
+
+    /// Paired devices are the Mac's business only.
+    private func broadcastDevices() {
+        let list = deviceList()
+        for client in clients.values where client.isAdmin {
+            send(.devices(list), to: client)
         }
     }
 
@@ -475,12 +545,6 @@ public final class HostServer {
             send(.exited(session: id, status: status), to: client)
         }
         broadcastSessions()
-    }
-
-    private static func constantTimeEquals(_ a: String, _ b: String) -> Bool {
-        let x = Array(a.utf8), y = Array(b.utf8)
-        guard x.count == y.count else { return false }
-        return zip(x, y).reduce(UInt8(0)) { $0 | ($1.0 ^ $1.1) } == 0
     }
 }
 #endif

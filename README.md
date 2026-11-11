@@ -55,9 +55,8 @@ brew install xcodegen
 ./scripts/run-ios.sh              # the booted simulator, or "iPhone 17"
 ```
 
-The simulator has no camera, so pair it with the link instead of the QR code:
-`xcrun simctl openurl booted '<pairing link>'`, or "Enter a pairing link" in
-the app. On a real iPhone, run `xcodegen` in `iOS/`, open
+The simulator has no camera, so pair it with a link instead of the QR code:
+`./scripts/pair-ios.sh`, with Agentty open on the Mac. On a real iPhone, run `xcodegen` in `iOS/`, open
 `iOS/Agentty.xcodeproj`, pick your team under Signing and run.
 
 Tests:
@@ -84,10 +83,15 @@ swift test                # protocol, PTY, host server, end to end
 
 ## Security
 
-The daemon gives shell access to whoever holds the pairing token. It listens
-only on `127.0.0.1` and on the Mac's Tailscale address, never on the local
-network. The token is stored in `~/Library/Application Support/Agentty/token`,
-readable by you only. Treat the pairing QR code like a password.
+The host daemon gives shell access, so it is careful about who connects:
+
+- It listens only on `127.0.0.1` and on the Mac's Tailscale address, never on
+  the local network.
+- An iPhone pairs with a code that works once and for five minutes, and only
+  while the pairing screen is open. Pairing gives the phone a token of its
+  own, which the Mac can revoke under "Pair iPhone".
+- The Mac's own token (`~/Library/Application Support/Agentty/token`) is only
+  accepted from the Mac itself.
 
 ## License
 

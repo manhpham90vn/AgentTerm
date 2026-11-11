@@ -16,19 +16,31 @@ public final class AgenttyConnection: @unchecked Sendable {
         case closed(reason: String?)
     }
 
+    /// How the connection introduces itself.
+    public enum Credential: Equatable, Sendable {
+        /// A token the host already knows: a paired device's, or the Mac's own.
+        case token(String)
+        /// A pairing code, to be traded for a token. The host answers with `paired`.
+        case pairingCode(String)
+    }
+
     public var onState: ((State) -> Void)?
     public var onMessage: ((ServerMessage) -> Void)?
     public var onOutput: ((SessionID, Data) -> Void)?
 
-    private let token: String
+    private let credential: Credential
     private let clientName: String
     private let connection: NWConnection
     private let queue = DispatchQueue(label: "agentty.client")
     /// Touched on the main queue only.
     private var closed = false
 
-    public init(host: String, port: UInt16, token: String, clientName: String) {
-        self.token = token
+    public convenience init(host: String, port: UInt16, token: String, clientName: String) {
+        self.init(host: host, port: port, credential: .token(token), clientName: clientName)
+    }
+
+    public init(host: String, port: UInt16, credential: Credential, clientName: String) {
+        self.credential = credential
         self.clientName = clientName
 
         let tcp = NWProtocolTCP.Options()
@@ -57,7 +69,10 @@ public final class AgenttyConnection: @unchecked Sendable {
             guard let self else { return }
             switch state {
             case .ready:
-                self.send(.hello(token: self.token, client: self.clientName))
+                switch self.credential {
+                case .token(let token): self.send(.hello(token: token, client: self.clientName))
+                case .pairingCode(let code): self.send(.pair(code: code, device: self.clientName))
+                }
                 self.deliver { if !self.closed { self.onState?(.connected) } }
                 self.receive()
             case .waiting(let error), .failed(let error):

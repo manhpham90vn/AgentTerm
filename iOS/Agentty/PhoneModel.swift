@@ -21,7 +21,10 @@ struct FolderGroup: Identifiable {
 
 @MainActor
 final class PhoneModel: ObservableObject {
-    @Published private(set) var pairing: PairingInfo?
+    /// The Mac this iPhone is paired with.
+    @Published private(set) var pairing: SavedHost?
+    /// A pairing code is being traded for a token.
+    @Published private(set) var isPairing = false
     @Published private(set) var status: LinkStatus = .offline(nil)
     @Published private(set) var sessions: [SessionInfo] = []
     @Published private(set) var folders: [String] = []
@@ -35,6 +38,8 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var fontSize: Double
 
     private var connection: AgenttyConnection?
+    /// Where a pairing code came from, until the Mac answers it.
+    private var pendingPairing: PairingInfo?
     private var openCreatedSession = false
     private var reattachAfterConnect = false
     private var retryScheduled = false
@@ -75,14 +80,15 @@ final class PhoneModel: ObservableObject {
 
     func pair(with url: URL) {
         guard let info = PairingInfo(url: url) else {
-            message = "That is not an Agentty pairing code."
+            message = "That is not an Agentty pairing code. Show a new one on the Mac and try again."
             return
         }
-        PairingStore.save(info)
         disconnect()
-        pairing = info
         message = nil
-        connect()
+        pendingPairing = info
+        isPairing = true
+        // The code is only good for getting a token of our own, once.
+        open(host: info.host, port: info.port, credential: .pairingCode(info.code))
     }
 
     func pair(withText text: String) {
@@ -95,6 +101,8 @@ final class PhoneModel: ObservableObject {
 
     func forgetMac() {
         disconnect()
+        pendingPairing = nil
+        isPairing = false
         PairingStore.clear()
         pairing = nil
         sessions = []
@@ -117,8 +125,12 @@ final class PhoneModel: ObservableObject {
 
     private func connect() {
         guard let pairing else { return }
+        open(host: pairing.host, port: pairing.port, credential: .token(pairing.token))
+    }
+
+    private func open(host: String, port: UInt16, credential: AgenttyConnection.Credential) {
         status = .connecting
-        let connection = AgenttyConnection(host: pairing.host, port: pairing.port, token: pairing.token, clientName: UIDevice.current.name)
+        let connection = AgenttyConnection(host: host, port: port, credential: credential, clientName: UIDevice.current.name)
         self.connection = connection
         connection.onState = { [weak self, weak connection] state in
             MainActor.assumeIsolated {
@@ -160,7 +172,16 @@ final class PhoneModel: ObservableObject {
         case .closed(let reason):
             connection = nil
             status = .offline(reason)
-            scheduleRetry()
+            if isPairing {
+                // Never got as far as an answer to the code.
+                isPairing = false
+                pendingPairing = nil
+                if message == nil {
+                    message = "Could not reach the Mac. Check that Tailscale is connected on this iPhone and on the Mac, then try again."
+                }
+            } else {
+                scheduleRetry()
+            }
         }
     }
 
@@ -219,13 +240,24 @@ final class PhoneModel: ObservableObject {
             foreignSize = controller.foreignSize
         case .exited:
             break
+        case .paired(_, let token):
+            guard let info = pendingPairing else { return }
+            let saved = SavedHost(host: info.host, port: info.port, name: info.name, token: token)
+            PairingStore.save(saved)
+            pairing = saved
+            pendingPairing = nil
+            isPairing = false
         case .error(let text):
             if text == "invalid token" {
-                self.message = "This Mac no longer accepts the saved pairing. Scan its code again."
                 forgetMac()
+                self.message = "This iPhone was removed from the Mac's paired devices. Pair it again to reconnect."
+            } else if text == "invalid pairing code" {
+                self.message = "That pairing code has expired or was already used. Show a new one on the Mac and try again."
             } else {
                 self.message = text
             }
+        case .pairingCode, .devices:
+            break
         }
     }
 

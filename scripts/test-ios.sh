@@ -29,7 +29,8 @@ xcrun simctl bootstatus "$DEVICE" -b >/dev/null
 xcrun simctl keychain "$DEVICE" reset
 
 # TEST_RUNNER_ variables are handed to the test process without the prefix.
-export TEST_RUNNER_AGENTTY_PAIR_URL="agentty://pair?host=127.0.0.1&port=$PORT&token=$(cat "$STATE/token")&name=Test%20Mac"
+# A pairing link works once and for five minutes, which covers the build below.
+export TEST_RUNNER_AGENTTY_PAIR_URL="$(AGENTTY_STATE_DIR="$STATE" "$(swift build --show-bin-path)/agenttyd" pairing-link --port "$PORT" --host 127.0.0.1)"
 export TEST_RUNNER_AGENTTY_LAUNCH="${AGENTTY_LAUNCH:-Start Shell}"
 if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export TEST_RUNNER_AGENTTY_SHOT_DIR="$SHOTS"; fi
 
