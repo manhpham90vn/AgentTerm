@@ -104,6 +104,49 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(session.waitForExistence(timeout: 5))
         capture("7-session-listed")
 
+        // The folder's git changes and its history, as in the Mac's side
+        // panel. The script that runs this test sets up the project.
+        if environment["AGENTTY_TEST_PROJECT"] != nil {
+            app.buttons["folder-details"].firstMatch.tap()
+            XCTAssertTrue(app.staticTexts["notes.txt"].waitForExistence(timeout: 10), "the changed file is not listed")
+            capture("7a-changes")
+            app.staticTexts["notes.txt"].tap()
+            XCTAssertTrue(app.staticTexts["+second line"].waitForExistence(timeout: 10), "the diff is not shown")
+            capture("7b-diff")
+            app.navigationBars.buttons.firstMatch.tap()
+
+            app.buttons["History"].tap()
+            let conversation = app.staticTexts["write tests for the parser"]
+            XCTAssertTrue(conversation.waitForExistence(timeout: 10), "the conversation is not listed")
+            capture("7c-history")
+            conversation.tap()
+            XCTAssertTrue(app.buttons["Resume in Claude Code"].waitForExistence(timeout: 5))
+            capture("7d-conversation")
+            app.buttons["Close"].tap()
+            app.navigationBars.buttons.firstMatch.tap()
+
+            // Any folder on the Mac can be picked to start in.
+            app.buttons["Open Another Folder…"].tap()
+            XCTAssertTrue(app.buttons["Projects"].waitForExistence(timeout: 10), "the home folder is not listed")
+            capture("7e-browse-home")
+            app.buttons["Projects"].tap()
+            XCTAssertTrue(app.buttons["demo"].waitForExistence(timeout: 10))
+            app.buttons["demo"].tap()
+            let startHere = app.buttons["Start Shell here"]
+            XCTAssertTrue(startHere.waitForExistence(timeout: 10))
+            XCTAssertTrue(app.staticTexts["Start in demo"].waitForExistence(timeout: 5))
+            capture("7f-browse-demo")
+            startHere.tap()
+            XCTAssertTrue(compose.waitForExistence(timeout: 10), "no terminal opened for the picked folder")
+            compose.tap()
+            compose.typeText("pwd")
+            app.buttons["Send"].tap()
+            sleep(2)
+            capture("7g-started-in-picked-folder")
+            app.navigationBars.buttons.firstMatch.tap()
+            XCTAssertTrue(app.staticTexts["demo"].waitForExistence(timeout: 5), "the session's folder is not listed")
+        }
+
         // A second Mac can be paired. It becomes the one on screen, with
         // nothing of the first Mac's sessions.
         guard let second = environment["AGENTTY_SECOND_PAIR_URL"] else { return }

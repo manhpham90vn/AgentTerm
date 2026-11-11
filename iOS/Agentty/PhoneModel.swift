@@ -9,6 +9,17 @@ enum LinkStatus: Equatable {
     case offline(String?)
 }
 
+/// A screen that can be pushed onto the navigation stack.
+enum Route: Hashable {
+    case session(SessionID)
+    /// A folder's changes and history.
+    case folder(String)
+    /// The diff of one changed file.
+    case file(folder: String, file: String)
+    /// Every conversation on the Mac.
+    case allHistory
+}
+
 /// A project folder on the Mac with the sessions running in it.
 struct FolderGroup: Identifiable {
     /// `nil` is the home directory, offered when the Mac has no folders yet.
@@ -34,8 +45,17 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var folders: [String] = []
     @Published private(set) var agents: [AgentInfo] = []
     @Published private(set) var agentsLoaded = false
-    /// The session on screen, if any. Drives navigation.
-    @Published var path: [SessionID] = []
+    /// The screens on the navigation stack.
+    @Published var path: [Route] = []
+    /// A folder's uncommitted changes, by folder. Without the diffs.
+    @Published private(set) var diffs: [String: DiffSnapshot] = [:]
+    /// The diff of a file, by `patchKey`. A missing file is stored as nil.
+    @Published private(set) var patches: [String: FileDiff?] = [:]
+    /// Conversations by folder. The empty key is "everywhere on the Mac".
+    @Published private(set) var histories: [String: [Conversation]] = [:]
+    /// The folder shown in the folder picker.
+    @Published private(set) var listing: DirectoryListing?
+    @Published var showBrowser = false
     @Published private(set) var controller: TerminalController?
     @Published private(set) var foreignSize: TermSize?
     @Published var message: String?
@@ -78,6 +98,19 @@ final class PhoneModel: ObservableObject {
     }
 
     func session(_ id: SessionID) -> SessionInfo? { sessions.first { $0.id == id } }
+
+    /// The session whose terminal is on screen, if one is on top.
+    var openSessionID: SessionID? {
+        if case .session(let id)? = path.last { return id }
+        return nil
+    }
+
+    static func patchKey(folder: String, file: String) -> String { folder + "\n" + file }
+
+    /// Agents a conversation of `agent` can be handed to.
+    func handoffTargets(from agent: String) -> [AgentInfo] {
+        installedAgents.filter { $0.id != agent }
+    }
 
     func agentID(for session: SessionInfo) -> String {
         agents.first { $0.name == session.title }?.id ?? "shell"
@@ -138,6 +171,10 @@ final class PhoneModel: ObservableObject {
         folders = []
         agents = []
         agentsLoaded = false
+        diffs = [:]
+        patches = [:]
+        histories = [:]
+        listing = nil
     }
 
     // MARK: Connection
@@ -188,6 +225,7 @@ final class PhoneModel: ObservableObject {
         controller = nil
         foreignSize = nil
         path = []
+        showBrowser = false
         status = .offline(nil)
     }
 
@@ -239,15 +277,16 @@ final class PhoneModel: ObservableObject {
             connection?.send(.agents(refresh: false))
         case .sessions(let list):
             sessions = list
-            if let open = path.last, !list.contains(where: { $0.id == open }) {
-                path = []
+            if let open = openSessionID, !list.contains(where: { $0.id == open }) {
+                // The session ended: back to the screen it was opened from.
+                path.removeLast()
                 controller = nil
                 foreignSize = nil
             }
             if reattachAfterConnect {
                 reattachAfterConnect = false
                 // The connection was lost while a terminal was on screen.
-                if let open = path.last {
+                if let open = openSessionID {
                     controller = nil
                     self.open(open)
                 }
@@ -263,7 +302,10 @@ final class PhoneModel: ObservableObject {
                 openCreatedSession = false
                 controller = makeController(for: info.id)
                 foreignSize = nil
-                path = [info.id]
+                showBrowser = false
+                // On top of wherever it was started from, so Back returns there.
+                path.removeAll { if case .session = $0 { return true } else { return false } }
+                path.append(.session(info.id))
             }
         case .resized(let id, let size, let driver):
             if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].size = size }
@@ -292,8 +334,24 @@ final class PhoneModel: ObservableObject {
             } else if text == "invalid pairing code" {
                 self.message = "That pairing code has expired or was already used. Show a new one on the Mac and try again."
             } else {
+                // A request that was going to open a session failed.
+                openCreatedSession = false
                 self.message = text
             }
+        case .diff(let folder, let snapshot):
+            diffs[folder] = snapshot
+        case .diffFile(let folder, let file):
+            // The host answers per folder; the file asked for is the one waiting.
+            if let file {
+                patches[Self.patchKey(folder: folder, file: file.path)] = file
+            } else if let waiting = pendingPatch, waiting.folder == folder {
+                patches[Self.patchKey(folder: folder, file: waiting.file)] = .some(nil)
+            }
+            pendingPatch = nil
+        case .history(let folder, let conversations):
+            histories[folder ?? ""] = conversations
+        case .directory(let listing):
+            self.listing = listing
         case .pairingCode, .devices:
             break
         }
@@ -333,6 +391,50 @@ final class PhoneModel: ObservableObject {
         connection?.send(.detach(session: id))
         controller = nil
         foreignSize = nil
+    }
+
+    // MARK: Changes, history, folders
+
+    private var pendingPatch: (folder: String, file: String)?
+
+    func loadDiff(_ folder: String) {
+        connection?.send(.diff(path: folder))
+    }
+
+    func loadPatch(folder: String, file: String) {
+        pendingPatch = (folder, file)
+        connection?.send(.diffFile(path: folder, file: file))
+    }
+
+    /// `folder` nil loads every conversation on the Mac.
+    func loadHistory(_ folder: String?) {
+        connection?.send(.history(path: folder))
+    }
+
+    /// Reopens a conversation in its agent and shows its terminal.
+    func resume(_ conversation: Conversation) {
+        guard status == .connected else { return }
+        openCreatedSession = true
+        connection?.send(.resume(agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd, size: TermSize(cols: 48, rows: 30)))
+    }
+
+    /// Hands a conversation's work to another agent and shows its terminal.
+    func handoff(_ conversation: Conversation, to target: AgentInfo, note: String) {
+        guard status == .connected else { return }
+        openCreatedSession = true
+        connection?.send(.handoff(
+            agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd,
+            target: target.id, note: note, size: TermSize(cols: 48, rows: 30)
+        ))
+    }
+
+    /// Shows the folders inside `path`, or inside the home folder.
+    func browse(_ path: String?) {
+        connection?.send(.listDirectory(path: path))
+    }
+
+    func addFolder(_ path: String) {
+        connection?.send(.addFolder(path: path))
     }
 
     func end(_ id: SessionID) {

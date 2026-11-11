@@ -11,6 +11,7 @@ signal(SIGPIPE, SIG_IGN)
 
 var port = agenttyDefaultPort
 var listenOnTailscale = true
+var home = NSHomeDirectory()
 var arguments = CommandLine.arguments.dropFirst()
 
 // `agenttyd pairing-link` asks the running daemon for a pairing code and
@@ -48,6 +49,9 @@ while let argument = arguments.popFirst() {
         port = value
     case "--local-only":
         listenOnTailscale = false
+    case "--home":
+        guard let value = arguments.popFirst() else { fail("--home needs a folder", status: 2) }
+        home = value
     case "--help", "-h":
         print("""
         Usage: agenttyd [--port N] [--local-only]
@@ -55,6 +59,8 @@ while let argument = arguments.popFirst() {
 
           --port N       TCP port to listen on, or of the daemon to ask (default \(agenttyDefaultPort))
           --local-only   Listen on 127.0.0.1 only, not on the Tailscale address
+          --home DIR     Read agent history from DIR instead of the home folder,
+                         and start the folder picker there (for tests)
 
         pairing-link prints a link that pairs one device with the running
         daemon. It works once and for five minutes. --host sets the name the
@@ -72,7 +78,7 @@ while let argument = arguments.popFirst() {
 let server: HostServer
 do {
     let token = try HostEnvironment.loadOrCreateToken()
-    server = HostServer(configuration: .init(port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile))
+    server = HostServer(configuration: .init(port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home))
     let bound = try server.start()
     print("agenttyd listening on 127.0.0.1:\(bound)")
 } catch {

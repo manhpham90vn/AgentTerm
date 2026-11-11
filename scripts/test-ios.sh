@@ -24,8 +24,22 @@ LOG="$(mktemp)"
 
 swift build --product agenttyd
 AGENTTYD="$(swift build --show-bin-path)/agenttyd"
+# Something for the first host to show: a project with uncommitted changes,
+# a conversation an agent had in it, and folders to browse.
+PROJECT="$STATE/project"
+FAKE_HOME="$STATE/home"
+mkdir -p "$PROJECT" "$FAKE_HOME/Projects/demo"
+git -C "$PROJECT" init -q -b main
+printf 'first line\n' > "$PROJECT/notes.txt"
+git -C "$PROJECT" add . && git -C "$PROJECT" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m init
+printf 'first line\nsecond line\n' > "$PROJECT/notes.txt"
+HISTORY="$FAKE_HOME/.claude/projects/$(printf '%s' "$PROJECT" | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$HISTORY"
+printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"write tests for the parser"}}\n' "$PROJECT" > "$HISTORY/c-1.jsonl"
+printf '["%s"]' "$PROJECT" > "$STATE/folders.json"
+
 # Two hosts with their own state, standing in for two Macs.
-AGENTTY_STATE_DIR="$STATE" "$AGENTTYD" --port "$PORT" --local-only > "$STATE/daemon.log" 2>&1 &
+AGENTTY_STATE_DIR="$STATE" "$AGENTTYD" --port "$PORT" --local-only --home "$FAKE_HOME" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 AGENTTY_STATE_DIR="$SECOND_STATE" "$AGENTTYD" --port "$SECOND_PORT" --local-only > "$SECOND_STATE/daemon.log" 2>&1 &
 SECOND_DAEMON=$!
@@ -53,6 +67,7 @@ fi
 export TEST_RUNNER_AGENTTY_PAIR_URL="$(AGENTTY_STATE_DIR="$STATE" "$AGENTTYD" pairing-link --port "$PORT" --host 127.0.0.1 --name "First Mac")"
 export TEST_RUNNER_AGENTTY_SECOND_PAIR_URL="$(AGENTTY_STATE_DIR="$SECOND_STATE" "$AGENTTYD" pairing-link --port "$SECOND_PORT" --host 127.0.0.1 --name "Second Mac")"
 export TEST_RUNNER_AGENTTY_LAUNCH="${AGENTTY_LAUNCH:-Start Shell}"
+export TEST_RUNNER_AGENTTY_TEST_PROJECT=1
 if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export TEST_RUNNER_AGENTTY_SHOT_DIR="$SHOTS"; fi
 
 if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then

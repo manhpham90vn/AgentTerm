@@ -17,6 +17,16 @@ struct SessionsView: View {
                     ForEach(model.groups) { group in
                         FolderSection(group: group)
                     }
+                    if model.status == .connected {
+                        // Any folder on the Mac, not only the listed ones.
+                        Button { model.showBrowser = true } label: {
+                            Label("Open Another Folder…", systemImage: "folder.badge.plus")
+                                .font(.subheadline.weight(.medium))
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Palette.hairline))
+                        }
+                    }
                     if model.status == .connected && model.folders.isEmpty {
                         Text("Add project folders in Agentty on your Mac and they show up here.")
                             .font(.footnote)
@@ -48,6 +58,7 @@ struct SessionsView: View {
                             }
                             Button { model.showPairSheet = true } label: { Label("Pair Another Mac…", systemImage: "plus") }
                         }
+                        NavigationLink(value: Route.allHistory) { Label("All Conversations", systemImage: "clock.arrow.circlepath") }
                         Button { model.refreshAgents() } label: { Label("Check Agents Again", systemImage: "arrow.clockwise") }
                         Button(role: .destructive) { confirmingForget = true } label: { Label("Forget This Mac", systemImage: "xmark.circle") }
                     } label: {
@@ -68,8 +79,25 @@ struct SessionsView: View {
                 .environmentObject(model)
                 .preferredColorScheme(.dark)
             }
-            .navigationDestination(for: SessionID.self) { id in
-                TerminalScreen(session: id)
+            .navigationDestination(for: Route.self) { route in
+                switch route {
+                case .session(let id):
+                    TerminalScreen(session: id)
+                case .folder(let folder):
+                    FolderScreen(folder: folder)
+                case .file(let folder, let file):
+                    PatchScreen(folder: folder, file: file)
+                case .allHistory:
+                    HistoryList(folder: nil)
+                        .background(Palette.canvas.ignoresSafeArea())
+                        .navigationTitle("All Conversations")
+                        .navigationBarTitleDisplayMode(.inline)
+                }
+            }
+            .sheet(isPresented: $model.showBrowser) {
+                BrowseSheet()
+                    .environmentObject(model)
+                    .preferredColorScheme(.dark)
             }
             .confirmationDialog("Forget this Mac?", isPresented: $confirmingForget, titleVisibility: .visible) {
                 Button("Forget", role: .destructive) { model.forgetMac() }
@@ -131,12 +159,24 @@ private struct FolderSection: View {
                     .font(.system(size: 17, weight: .semibold))
                     .lineLimit(1)
                 Spacer(minLength: 0)
+                if let path = group.path {
+                    // The folder's git changes and conversations, as in the
+                    // Mac's side panel.
+                    NavigationLink(value: Route.folder(path)) {
+                        HStack(spacing: 4) {
+                            Text("Git & History")
+                            Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold))
+                        }
+                        .font(.footnote.weight(.medium))
+                    }
+                    .accessibilityIdentifier("folder-details")
+                }
             }
             .padding(.horizontal, 4)
 
             VStack(spacing: 0) {
                 ForEach(group.sessions) { session in
-                    NavigationLink(value: session.id) {
+                    NavigationLink(value: Route.session(session.id)) {
                         SessionRow(session: session)
                     }
                     .buttonStyle(.plain)

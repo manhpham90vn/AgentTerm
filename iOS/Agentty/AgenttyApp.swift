@@ -33,4 +33,5 @@ enum Palette {
     static let hairline = Color.white.opacity(0.09)
     static let tint = Color(red: 0.45, green: 0.62, blue: 0.98)
     static let danger = Color(red: 0.96, green: 0.45, blue: 0.47)
+    static let added = Color(red: 0.36, green: 0.80, blue: 0.52)
 }
