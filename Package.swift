@@ -25,8 +25,10 @@ let package = Package(
             name: "AgenttyTerminal",
             dependencies: ["AgenttyProtocol", .product(name: "SwiftTerm", package: "SwiftTerm")]
         ),
+        // Starts a program on a pseudo terminal. C, because it needs fork().
+        .target(name: "CAgenttyPTY"),
         // macOS only: PTY ownership, session management, WebSocket server.
-        .target(name: "AgenttyHost", dependencies: ["AgenttyProtocol"]),
+        .target(name: "AgenttyHost", dependencies: ["AgenttyProtocol", "CAgenttyPTY"]),
         .executableTarget(name: "agenttyd", dependencies: ["AgenttyHost", "AgenttyClient"]),
         .executableTarget(
             name: "AgenttyMac",

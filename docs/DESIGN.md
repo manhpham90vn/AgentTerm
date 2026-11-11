@@ -42,16 +42,23 @@ endpoint the WebSocket handshake is aborted.
 
 ## Pseudo terminals
 
-`PTYProcess` opens a PTY with `posix_openpt` and starts the child with
-`posix_spawn`, not `fork`, which is unsafe in a multithreaded Swift process.
+`PTYProcess` starts the child through `agentty_spawn_pty`, a small C function
+(target `CAgenttyPTY`) that forks, calls `setsid()` and `ioctl(TIOCSCTTY)` on
+the slave side, sets the window size, and execs.
 
-- `POSIX_SPAWN_SETSID` makes the child a session leader. A file action opens
-  the slave side as file descriptor 0 inside the child, which makes the PTY
-  its controlling terminal. Job control and Ctrl-C then work as usual.
-- `POSIX_SPAWN_CLOEXEC_DEFAULT` keeps the daemon's sockets and other PTYs out
-  of the child.
-- The parent holds the slave open until the child has started. On macOS a
-  window size set before any slave is open is lost.
+- The pseudo terminal has to be the child's *controlling* terminal, or the
+  child gets no terminal signals: no SIGWINCH on resize, so a full screen
+  program never redraws for a new size. `posix_spawn` cannot do this, because
+  it cannot run an ioctl in the child, and opening the slave from a spawn file
+  action does not make it the controlling terminal. An earlier version did
+  exactly that and seemed to work, because bash claims the terminal itself at
+  start-up. zsh does not, so everything started through a zsh login shell,
+  which is every agent, ran without one.
+- Between `fork()` and `execve()` the child only calls async-signal-safe
+  functions, which is what makes `fork()` acceptable in a threaded process.
+- The child closes every descriptor but the terminal, so the daemon's sockets
+  and other terminals are not passed on, and resets signal handling.
+- A failed exec is reported back through a close-on-exec pipe.
 - Output is read by a dispatch source on the host queue. Writes run on a
   separate queue because they block when the program is not reading, and
   output must keep flowing meanwhile.
@@ -99,18 +106,16 @@ it opens, and detaches when leaving it, so the Mac gets its size back as soon
 as the phone stops looking. The Mac takes control only when the user types or
 asks for it.
 
-What a client's emulator does with a foreign size depends on whether that
-size fits inside its own grid:
+While a session has a foreign size, every client's emulator takes that grid,
+so all of them draw exactly what the driver sees. The Mac keeps its terminal
+view at the pane's size, so the size that fits the window is still known, and
+only moves the view's origin to bring the smaller grid to the middle. A frame
+and a dimmed surround are drawn around it. The grid's exact size comes from
+SwiftTerm's `getOptimalFrameSize()`.
 
-- **It fits** (a phone drives, a Mac watches). The emulator keeps its own
-  grid and shows the output as it comes. Programs that draw relative to the
-  cursor, which is how Claude Code and shells work, come out right, just
-  narrower. Shrinking the grid instead would re-wrap what is on screen and
-  squeeze everything into a corner. Programs that address the whole screen
-  absolutely draw in the top-left part.
-- **It does not fit** (a Mac drives, a phone watches). The emulator takes the
-  foreign grid, and the view shows as much of it as it can. Lines longer than
-  the view could not be shown otherwise.
+Keeping the Mac's own, larger grid and letting the narrower output flow into
+it was tried and dropped: it reads well for programs that draw relative to
+the cursor, but the picture on the Mac is then not the picture on the phone.
 
 ### Input that is not typing
 

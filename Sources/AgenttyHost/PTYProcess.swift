@@ -1,5 +1,6 @@
 #if os(macOS)
 import AgenttyProtocol
+import CAgenttyPTY
 import Darwin
 import Foundation
 
@@ -22,10 +23,10 @@ private let ioctlGetWindowSize: UInt = 0x4008_7468 // TIOCGWINSZ
 
 /// A child process attached to a pseudo terminal.
 ///
-/// The child is started with `posix_spawn` rather than `fork`, which is not
-/// safe in a multithreaded Swift process. It becomes a session leader and
-/// opens the slave side itself, which makes the PTY its controlling terminal,
-/// so job control and Ctrl-C work as in any terminal.
+/// The child runs in its own session with the pseudo terminal as its
+/// controlling terminal, so it is told about resizes (SIGWINCH) and job
+/// control and Ctrl-C work as in any terminal. See `agentty_spawn_pty` for
+/// why starting it takes a small piece of C.
 ///
 /// `onOutput` and `onExit` are called on the queue given at init. `onExit` is
 /// called once, after all remaining output has been delivered.
@@ -51,43 +52,6 @@ public final class PTYProcess {
     ) throws {
         self.queue = queue
 
-        let master = posix_openpt(O_RDWR | O_NOCTTY)
-        guard master >= 0 else { throw PTYError.openFailed(errno) }
-        guard grantpt(master) == 0, unlockpt(master) == 0, let name = ptsname(master) else {
-            let code = errno
-            close(master)
-            throw PTYError.openFailed(code)
-        }
-        let slavePath = String(cString: name)
-        _ = fcntl(master, F_SETFD, FD_CLOEXEC)
-        self.master = master
-        // The size only sticks while the slave side is open, so hold it open
-        // here until the child has opened it too.
-        let slave = open(slavePath, O_RDWR | O_NOCTTY)
-        defer { if slave >= 0 { close(slave) } }
-        Self.setSize(size, on: master)
-
-        var actions: posix_spawn_file_actions_t?
-        posix_spawn_file_actions_init(&actions)
-        defer { posix_spawn_file_actions_destroy(&actions) }
-        // Opening the slave in the new session makes it the controlling terminal.
-        posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, slavePath, O_RDWR, 0)
-        posix_spawn_file_actions_adddup2(&actions, STDIN_FILENO, STDOUT_FILENO)
-        posix_spawn_file_actions_adddup2(&actions, STDIN_FILENO, STDERR_FILENO)
-        posix_spawn_file_actions_addchdir_np(&actions, cwd)
-
-        var attributes: posix_spawnattr_t?
-        posix_spawnattr_init(&attributes)
-        defer { posix_spawnattr_destroy(&attributes) }
-        var allSignals = sigset_t()
-        sigfillset(&allSignals)
-        posix_spawnattr_setsigdefault(&attributes, &allSignals)
-        var noSignals = sigset_t()
-        sigemptyset(&noSignals)
-        posix_spawnattr_setsigmask(&attributes, &noSignals)
-        let flags = POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK
-        posix_spawnattr_setflags(&attributes, Int16(flags))
-
         let argv: [UnsafeMutablePointer<CChar>?] = arguments.map { strdup($0) } + [nil]
         let envp: [UnsafeMutablePointer<CChar>?] = environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
         defer {
@@ -95,12 +59,12 @@ public final class PTYProcess {
             envp.forEach { free($0) }
         }
 
-        var pid: pid_t = 0
-        let result = posix_spawn(&pid, executable, &actions, &attributes, argv, envp)
-        guard result == 0 else {
-            close(master)
-            throw PTYError.spawnFailed(result)
-        }
+        let clamped = size.clamped
+        var master: Int32 = -1
+        var failure: Int32 = 0
+        let pid = agentty_spawn_pty(&master, &failure, executable, argv, envp, cwd, UInt16(clamped.rows), UInt16(clamped.cols))
+        guard pid > 0 else { throw PTYError.spawnFailed(failure) }
+        self.master = master
         self.pid = pid
 
         let readSource = DispatchSource.makeReadSource(fileDescriptor: master, queue: queue)

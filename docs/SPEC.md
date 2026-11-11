@@ -58,11 +58,9 @@ itself.
   lists and shows every session, including the ones a phone is typing in; it
   takes a session's size only when the user types in it on the Mac or presses
   "Use This Window's Size".
-- While a phone is using a session, the Mac keeps its terminal at the
-  window's size and just shows the output, which is as narrow as the phone
-  makes it. An agent then looks the way a shell does when its lines are
-  short, not squeezed into a corner. A line above the terminal says the
-  session is in use elsewhere and at what size.
+- While another device is using a session, the Mac shows that device's
+  terminal centered in a frame, like a preview of its screen, with a line
+  above saying so. This is the same for shells and for agents.
 - What a terminal sends by itself (answers to the program's questions, focus
   changes, the pointer passing over the window) is not use of the session and
   never changes its size.

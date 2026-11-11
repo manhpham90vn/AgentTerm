@@ -11,13 +11,22 @@ final class PTYProcessTests: XCTestCase {
         size: TermSize = .default,
         during: ((PTYProcess, @escaping () -> String) -> Void)? = nil
     ) throws -> (output: String, status: Int32) {
+        try run(executable: "/bin/sh", arguments: ["sh", "-c", script], size: size, during: during)
+    }
+
+    private func run(
+        executable: String,
+        arguments: [String],
+        size: TermSize = .default,
+        during: ((PTYProcess, @escaping () -> String) -> Void)? = nil
+    ) throws -> (output: String, status: Int32) {
         let exited = expectation(description: "exit")
         var output = Data()
         var status: Int32 = -1
         var environment = ProcessInfo.processInfo.environment
         environment["LC_ALL"] = "en_US.UTF-8"
         let process = try PTYProcess(
-            executable: "/bin/sh", arguments: ["sh", "-c", script],
+            executable: executable, arguments: arguments,
             environment: environment, cwd: "/tmp", size: size, queue: queue
         )
         queue.sync {
@@ -60,6 +69,38 @@ final class PTYProcessTests: XCTestCase {
             XCTAssertEqual(process.size, TermSize(cols: 50, rows: 20))
         }
         XCTAssertTrue(result.output.contains("20 50"), result.output)
+    }
+
+    /// zsh, unlike bash, does not claim the terminal for itself. A program
+    /// started through it only hears about a resize if the terminal was made
+    /// its controlling terminal when it was started.
+    func testAProgramStartedThroughZshIsToldAboutAResize() throws {
+        let exited = expectation(description: "exit")
+        var output = Data()
+        let script = "trap 'echo GOT-WINCH; exit 0' WINCH; echo ready; while :; do sleep 0.05; done"
+        // -f: no startup files, so the test does not depend on the user's setup.
+        // "exec zsh" replaces the first shell the way a login shell replaces
+        // itself with the last command, which is how agents are started.
+        let process = try PTYProcess(
+            executable: "/bin/zsh", arguments: ["zsh", "-f", "-c", "exec /bin/zsh -f -c \"$0\"", script],
+            environment: ["TERM": "xterm-256color"], cwd: "/tmp", size: .default, queue: queue
+        )
+        queue.sync {
+            process.onOutput = { output.append($0) }
+            process.onExit = { _ in exited.fulfill() }
+        }
+        waitUntil { self.queue.sync { String(decoding: output, as: UTF8.self).contains("ready") } }
+        process.resize(TermSize(cols: 50, rows: 20))
+        wait(for: [exited], timeout: 10)
+        XCTAssertTrue(queue.sync { String(decoding: output, as: UTF8.self) }.contains("GOT-WINCH"))
+    }
+
+    func testEveryProgramGetsAControllingTerminal() throws {
+        // The terminal's name is only known to a process that has one.
+        for executable in ["/bin/zsh", "/bin/sh"] {
+            let result = try run(executable: executable, arguments: [(executable as NSString).lastPathComponent, "-c", "exec /bin/ps -o tty= -p $$"])
+            XCTAssertTrue(result.output.contains("ttys"), "\(executable): \(result.output)")
+        }
     }
 
     func testControlCInterruptsTheForegroundProgram() throws {
