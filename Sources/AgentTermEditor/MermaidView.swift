@@ -103,6 +103,7 @@ private struct MermaidWebView: WebViewRepresentable {
             let html = """
             <!doctype html>
             <html><head><meta charset="utf-8">
+            <meta name="viewport" content="width=device-width, initial-scale=1">
             <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data:; font-src data:">
             <style>
               html, body { margin: 0; background: transparent; color: #d9dbe2; font: 13px -apple-system, sans-serif; }

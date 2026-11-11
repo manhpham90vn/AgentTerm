@@ -2,6 +2,7 @@
 #
 #   ios beta      build the iPhone app and upload it to TestFlight
 #   ios build     the same without the upload, to check signing
+#   ios screenshots   upload the App Store screenshots in fastlane/screenshots
 #   mac release   build AgentTerm.app, sign it with Developer ID, notarize it, make a .dmg
 #   mac sign      the same without notarizing, to check signing
 #
@@ -76,6 +77,22 @@ platform :ios do
       xcargs: "MARKETING_VERSION=#{app_version} CURRENT_PROJECT_VERSION=#{number} -skipPackagePluginValidation",
       output_directory: DIST,
       output_name: "AgentTerm.ipa"
+    )
+  end
+
+  desc "Upload the App Store screenshots in fastlane/screenshots"
+  lane :screenshots do
+    upload_to_app_store(
+      api_key: asc_key,
+      app_identifier: APP_ID,
+      screenshots_path: File.join(ROOT, "fastlane/screenshots"),
+      overwrite_screenshots: true,
+      skip_binary_upload: true,
+      skip_metadata: true,
+      precheck_include_in_app_purchases: false,
+      run_precheck_before_submit: false,
+      submit_for_review: false,
+      force: true
     )
   end
 

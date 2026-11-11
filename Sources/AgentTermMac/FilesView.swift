@@ -239,7 +239,18 @@ private struct FileTreeRow: View {
 
 /// A file open in the middle pane: an editor for text, a picture for an image.
 struct DocumentView: View {
+    @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var files: FilesModel
+
+    /// Where the file is: inside the selected project, its place in the
+    /// project ("my-app/src"); anywhere else, its folder on the Mac.
+    private var location: String {
+        let directory = (document.path as NSString).deletingLastPathComponent
+        if let folder = model.selectedFolder, directory == folder || directory.hasPrefix(folder + "/") {
+            return (folder as NSString).lastPathComponent + directory.dropFirst(folder.count)
+        }
+        return (directory as NSString).abbreviatingWithTildeInPath
+    }
     let document: OpenDocument
     /// Markdown opens rendered. Editing is one click away.
     @State private var previewing = true
@@ -257,7 +268,7 @@ struct DocumentView: View {
     private var bar: some View {
         HStack(spacing: 8) {
             Image(systemName: "folder").font(.system(size: 10.5)).foregroundStyle(.secondary)
-            Text(((document.path as NSString).deletingLastPathComponent as NSString).abbreviatingWithTildeInPath)
+            Text(location)
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
