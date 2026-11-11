@@ -92,7 +92,10 @@ another one should finish it.
 
 ### macOS window
 
-Three panes, like a code editor:
+Three panes, like a code editor. The toolbar follows them: the button that
+hides the folder list is at the far left, the launch buttons for the agents
+are in the middle, and at the far right are the pairing button and, in the
+corner, the button that hides the side panel.
 
 - **Left: folders.** Project folders the user added, each with its running
   sessions underneath. The list belongs to the host, so the iPhone shows the

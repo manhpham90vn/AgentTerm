@@ -7,8 +7,10 @@ struct RootView: View {
 
     var body: some View {
         HSplitView {
-            SidebarView()
-                .frame(minWidth: 210, idealWidth: 250, maxWidth: 380)
+            if model.showSidebar {
+                SidebarView()
+                    .frame(minWidth: 210, idealWidth: 250, maxWidth: 380)
+            }
             CenterView()
                 .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
@@ -19,9 +21,24 @@ struct RootView: View {
         }
         .background(Theme.canvas)
         .toolbar {
-            ToolbarItemGroup(placement: .navigation) {
+            // Far left: the folder list's toggle, next to the list it hides.
+            ToolbarItem(placement: .navigation) {
+                Button { model.showSidebar.toggle() } label: {
+                    Label("Folders", systemImage: "sidebar.leading")
+                }
+                .help(model.showSidebar ? "Hide the folder list" : "Show the folder list")
+            }
+            // Middle: starting an agent is the main thing to do here.
+            ToolbarItem(placement: .principal) {
                 LaunchBar()
             }
+            // Without this flexible space the items below sit right after
+            // the agents instead of at the window's edge.
+            ToolbarItem(placement: .primaryAction) {
+                Spacer()
+            }
+            // Far right: pairing, then the side panel's toggle in the corner
+            // above the panel it hides.
             ToolbarItemGroup(placement: .primaryAction) {
                 Button { model.showPairing = true } label: {
                     Label("Pair iPhone", systemImage: "qrcode")

@@ -42,7 +42,14 @@ final class AppModel: ObservableObject {
             refreshHistory()
         }
     }
-    @Published var showDiff = true
+    /// The folder list on the left.
+    @Published var showSidebar = UserDefaults.standard.object(forKey: "showSidebar") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(showSidebar, forKey: "showSidebar") }
+    }
+    /// The Git and History panel on the right.
+    @Published var showDiff = UserDefaults.standard.object(forKey: "showSidePanel") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(showDiff, forKey: "showSidePanel") }
+    }
     @Published var showPairing = false
     @Published private(set) var lastError: String?
     /// Shown in an alert, for problems that are not tied to the launch screen.
