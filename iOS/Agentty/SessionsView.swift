@@ -174,7 +174,7 @@ private struct FolderSection: View {
                     // Mac's side panel.
                     NavigationLink(value: Route.folder(path)) {
                         HStack(spacing: 4) {
-                            Text("Git & History")
+                            Text("Git, History, Files")
                             Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold))
                         }
                         .font(.footnote.weight(.medium))
