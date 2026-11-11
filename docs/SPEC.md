@@ -62,26 +62,41 @@ itself.
 ### Usage
 
 Under an agent's terminal, on the Mac and on the iPhone, one line says what
-the session has used: the model, how full its context is, and what is left
-of the account's limits with when each starts over, the figures the agent's
-own `/usage` or `/status` shows.
+the session has used and what the account has left: the model, how full the
+context is, and each limit of the account with when it starts over.
+Clicking the line opens everything the agent's own usage screen shows.
 
-| Agent | Context | Limits left and reset time |
-|---|---|---|
-| Claude Code | Tokens and share of the window | Five-hour and weekly, for claude.ai subscribers, after the session's first reply |
-| Codex | Tokens and share of the window | Five-hour and weekly, after the session's first reply |
-| Copilot CLI | Tokens and share of the window | Not recorded. Premium requests spent in the session are shown |
-| Antigravity | Tokens | Not recorded |
+| Agent | What is shown, as `/usage` or `/status` shows it |
+|---|---|
+| Claude Code | Current session, current week (all models), current week per model, each as "% used" with its reset time. The plan, extra usage, and banked limit resets where Anthropic reports them (it does not to Claude Code's own sign-in on every account). Context with its share of the window |
+| Codex | 5h limit and weekly limit, each as "% left" with its reset time. The plan, banked limit resets and when the first expires, credits. Context with its share of the window |
+| Antigravity | Each group of models (Gemini, Claude and GPT, and any separate quota such as Gemini 4 Argon) with its weekly and five-hour limit, as "% left" with reset times. The plan. Context tokens |
+| Copilot CLI | Premium requests left of the month's allowance, with the reset date. The plan. Context with its share of the window |
 
-A limit turns amber at 70% used and red at 90%. The line updates every few
-seconds. Agentty reads only what the agents themselves record or report on
-this Mac. It does not read their sign-in or ask their services anything.
+A limit turns amber at 70% used and red at 90%. The session's figures update
+every few seconds, the account's every two minutes while the agent has a
+session, and on request.
 
-For Claude Code this takes a status line command of Agentty's own on the
-sessions Agentty starts. A status line the user has set up still runs and
-shows as before. For someone without one, Claude Code hides some of its
-keyboard hints once any status line is set, which is Claude Code's doing.
-A `claude` typed by hand in a shell session is not covered.
+Where the figures come from:
+
+- **The account's limits** come from the agent's own service: Anthropic,
+  ChatGPT, Google, GitHub. The request needs the agent's sign-in, which
+  Agentty reads where the agent keeps it on this Mac (the login keychain for
+  Claude Code and Antigravity, `~/.codex/auth.json` for Codex, `gh` for
+  Copilot). It is used for that request, sent only to the service that
+  issued it, never renewed, saved, logged or sent to an iPhone. When a
+  sign-in has run out, the line says so and the agent renews it itself with
+  its next message. `agenttyd --no-account-usage` turns all of this off.
+- **The context** comes from what the agent records on this Mac. Claude
+  Code also reports it, with its limits, to its status line: sessions
+  Agentty starts get a status line command of Agentty's own for that, which
+  then runs the status line the user had set up, so theirs still shows. For
+  someone without one, Claude Code hides some of its keyboard hints once any
+  status line is set, which is Claude Code's doing.
+
+These are the services' own endpoints for their own apps, not public APIs,
+and may change without notice. A figure that cannot be read is left out
+rather than guessed.
 
 ### Terminal size
 

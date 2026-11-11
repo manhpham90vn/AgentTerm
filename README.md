@@ -22,9 +22,12 @@ to the same sessions over [Tailscale](https://tailscale.com).
 - Files: browse the folder, create, rename and trash files and folders. Files
   open as tabs next to the sessions, to edit text with syntax coloring and
   preview Markdown, Mermaid diagrams included. The iPhone app has the same.
-- A usage line under each agent's terminal: model, context, and what is left
-  of the five-hour and weekly limits with their reset times (Claude Code and
-  Codex).
+- A usage line under each agent's terminal: model, context, and what the
+  account has left with reset times, as the agent's own `/usage` or `/status`
+  shows it, for Claude Code, Codex, Antigravity and Copilot CLI. To ask the
+  agents' services, Agentty reads each agent's sign-in on your Mac and sends
+  it only to the service that issued it; `agenttyd --no-account-usage` turns
+  that off.
 - Real PTYs: job control, Ctrl-C, colors, resize, UTF-8 (Vietnamese included).
 - Sessions live in the `agenttyd` daemon and survive closing the app.
 - A session can be watched from several clients. The client being used decides

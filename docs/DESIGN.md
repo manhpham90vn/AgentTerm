@@ -291,9 +291,27 @@ with the same input and prints what that prints. The host prefers this
 report over the conversation file, since it has the limits and the size of
 the context window. The file is removed when the session ends.
 
-The other way to get these numbers, calling the services' usage endpoints
-with the agents' sign-in tokens, was left out on purpose: it would mean
-reading another app's credentials.
+What an account has left is a second thing, `AccountUsage`, kept per agent
+and sent to clients as `accountUsage` when it changes. `AccountUsageFetcher`
+asks the agent's service, on the work queue, every two minutes while that
+agent has a session:
+
+| Agent | Sign-in read from | Asked |
+|---|---|---|
+| Claude Code | Keychain item `Claude Code-credentials`, else `~/.claude/.credentials.json` | `GET api.anthropic.com/api/oauth/usage?cedar_ember=1` (the query asks for banked limit resets) |
+| Codex | `$CODEX_HOME/auth.json` | `GET chatgpt.com/backend-api/wham/usage`, and `wham/rate-limit-reset-credits` when resets are banked |
+| Antigravity | Keychain item `gemini` / `antigravity` (go-keyring), else `~/.gemini/antigravity-cli/antigravity-oauth-token` | `POST cloudcode-pa.googleapis.com/v1internal:loadCodeAssist`, then `retrieveUserQuotaSummary` |
+| Copilot CLI | `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN`, else `gh auth token` | `GET api.github.com/copilot_internal/user` |
+
+Google answers by client name: the request says `antigravity/cli/<version of agy>`,
+which is what returns every group of models.
+
+The rules it keeps: HTTPS only, to those hosts only, redirects not followed;
+a sign-in is never refreshed or written back, since renewing it is the
+agent's business and doing it here could sign the agent out; an expired one
+is not sent at all; nothing of it is logged, stored or put in a message to
+a client. The outside world is passed in as `Environment`, so the tests run
+against canned answers and never touch a keychain or the network.
 
 ## Conversation history
 

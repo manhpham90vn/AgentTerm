@@ -7,6 +7,7 @@ struct TerminalScreen: View {
     @EnvironmentObject private var model: PhoneModel
     let session: SessionID
     @State private var confirmingEnd = false
+    @State private var showingUsage = false
 
     private var controller: TerminalController? {
         model.controller?.session == session ? model.controller : nil
@@ -23,8 +24,16 @@ struct TerminalScreen: View {
                     .padding(.leading, model.foreignSize == nil ? 6 : 0)
                     .padding(.top, model.foreignSize == nil ? 4 : 0)
                 if let info = model.session(session), let agent = info.agent {
-                    UsageBar(agent: agent, name: info.title, usage: info.usage, compact: true)
+                    UsageBar(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent], compact: true) { showingUsage = true }
                         .background(Palette.panel)
+                        .sheet(isPresented: $showingUsage) {
+                            ScrollView {
+                                UsageDetails(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent]) { model.refreshAccountUsage() }
+                            }
+                            .background(Palette.canvas.ignoresSafeArea())
+                            .presentationDetents([.medium, .large])
+                            .preferredColorScheme(.dark)
+                        }
                 }
                 KeyBar(controller: controller)
                 ComposeBar(controller: controller)

@@ -24,6 +24,7 @@ final class ProtocolTests: XCTestCase {
             .gitStage(path: "/Users/me/app", files: []),
             .gitUnstage(path: "/Users/me/app", files: ["src/a b.swift"]),
             .gitCommit(path: "/Users/me/app", message: "feat: thêm dòng\n\nchi tiết"),
+            .accountUsage(refresh: true),
             .files(path: "/Users/me/app"),
             .readFile(path: "/Users/me/app/ghi chú.md"),
             .writeFile(path: "/Users/me/app/ghi chú.md", text: "# Tiêu đề\n"),
@@ -66,6 +67,11 @@ final class ProtocolTests: XCTestCase {
             .file(path: "/Users/me/app/a.txt", content: .text("xin chào"), data: nil),
             .file(path: "/Users/me/app/big.bin", content: .tooLarge(bytes: 3_000_000), data: nil),
             .fileSaved(path: "/Users/me/app/a.txt"),
+            .accountUsage([AccountUsage(
+                agent: "claude", plan: "Max 5x", showsRemaining: false,
+                groups: [AccountUsageGroup(title: nil, note: "ghi chú", limits: [AccountLimit(id: "session-0", title: "Current session", shortTitle: "Session", usedPercent: 55, resetsAt: Date(timeIntervalSince1970: 1_794_397_800), detail: nil)])],
+                notes: [AccountUsageNote(label: "Extra usage", value: "Off")], fetchedAt: Date(timeIntervalSince1970: 1_794_380_000), problem: nil
+            )]),
             .fileCreated(path: "/Users/me/app/mới.txt", isDirectory: false),
             .history(path: nil, conversations: [Conversation(agent: "agy", sessionID: "c-1", title: "Rà soát", updatedAt: Date(timeIntervalSince1970: 1_800_000_000), cwd: "/Users/me/app")]),
             .handoffPlan(id: "p-1", prompt: "You are taking over…"),

@@ -65,6 +65,14 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var diffs: [String: DiffSnapshot] = [:]
     /// The diff of a file, by `patchKey`. A missing file is stored as nil.
     @Published private(set) var patches: [String: FileDiff?] = [:]
+    /// What each agent's account has used and has left, by agent.
+    @Published private(set) var accountUsage: [String: AccountUsage] = [:]
+
+    /// Asks the agents' services again.
+    func refreshAccountUsage() {
+        connection?.send(.accountUsage(refresh: true))
+    }
+
     /// The files and folders in a folder of the Mac, by folder.
     @Published private(set) var fileListings: [String: [FileEntry]] = [:]
     /// Files of the Mac that were opened, by path.
@@ -206,6 +214,7 @@ final class PhoneModel: ObservableObject {
         patches = [:]
         commitDrafts = [:]
         committing = nil
+        accountUsage = [:]
         fileListings = [:]
         remoteFiles = [:]
         savingFile = nil
@@ -417,6 +426,8 @@ final class PhoneModel: ObservableObject {
             self.listing = listing
         case .handoffPlan(let id, let prompt):
             handoffPlan = HandoffPlan(id: id, prompt: prompt)
+        case .accountUsage(let list):
+            accountUsage = Dictionary(list.map { ($0.agent, $0) }, uniquingKeysWith: { $1 })
         case .files(let directory, let entries):
             fileListings[directory] = entries
         case .file(let path, let content, let data):

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttyProtocolVersion = 3
+public let agenttyProtocolVersion = 4
 
 /// Default TCP port the host daemon listens on.
 public let agenttyDefaultPort: UInt16 = 7717
@@ -164,6 +164,9 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case gitUnstage(path: String, files: [String])
     /// Commits what is staged.
     case gitCommit(path: String, message: String)
+    /// Asks for what the agents' accounts have used and have left. With
+    /// `refresh`, the agents' services are asked again first.
+    case accountUsage(refresh: Bool)
     /// Asks for the files and folders in a folder. Answered with `files`.
     case files(path: String)
     /// Asks for what a file holds. Answered with `file`.
@@ -220,6 +223,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case directory(DirectoryListing)
     /// Answer to `handoffPlan`: the prompt, and an id to hand off with.
     case handoffPlan(id: String, prompt: String)
+    /// What the accounts of the agents in use have used and have left. Sent
+    /// when asked for and whenever it changes.
+    case accountUsage([AccountUsage])
     /// The files and folders in a folder.
     case files(path: String, entries: [FileEntry])
     /// What a file holds. `data` carries the bytes of an image.

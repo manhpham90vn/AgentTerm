@@ -177,6 +177,7 @@ struct LaunchButton: View {
 struct CenterView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var files: FilesModel
+    @State private var showingUsage = false
 
     var body: some View {
         ZStack {
@@ -226,8 +227,16 @@ struct CenterView: View {
                         if let info, let agent = info.agent {
                             // What the agent's session has used, under its terminal.
                             Theme.hairline.frame(height: 1)
-                            UsageBar(agent: agent, name: info.title, usage: info.usage)
+                            UsageBar(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent]) { showingUsage = true }
                                 .background(Theme.panel)
+                                .help("Show the account's usage")
+                                .popover(isPresented: $showingUsage, arrowEdge: .bottom) {
+                                    ScrollView {
+                                        UsageDetails(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent]) { model.refreshAccountUsage() }
+                                    }
+                                    .frame(width: 380)
+                                    .frame(maxHeight: 520)
+                                }
                         }
                     }
                 } else {

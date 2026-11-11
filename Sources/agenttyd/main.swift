@@ -11,6 +11,7 @@ signal(SIGPIPE, SIG_IGN)
 
 var port = agenttyDefaultPort
 var listenOnTailscale = true
+var askServices = true
 var home = NSHomeDirectory()
 var arguments = CommandLine.arguments.dropFirst()
 
@@ -59,6 +60,8 @@ while let argument = arguments.popFirst() {
         port = value
     case "--local-only":
         listenOnTailscale = false
+    case "--no-account-usage":
+        askServices = false
     case "--home":
         guard let value = arguments.popFirst() else { fail("--home needs a folder", status: 2) }
         home = value
@@ -69,6 +72,9 @@ while let argument = arguments.popFirst() {
 
           --port N       TCP port to listen on, or of the daemon to ask (default \(agenttyDefaultPort))
           --local-only   Listen on 127.0.0.1 only, not on the Tailscale address
+          --no-account-usage
+                         Do not ask the agents' services what their accounts
+                         have left. Their sign-ins are then never read.
           --home DIR     Read agent history from DIR instead of the home folder,
                          and start the folder picker there (for tests)
 
@@ -88,7 +94,7 @@ while let argument = arguments.popFirst() {
 let server: HostServer
 do {
     let token = try HostEnvironment.loadOrCreateToken()
-    server = HostServer(configuration: .init(port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home, statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory))
+    server = HostServer(configuration: .init(port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home, statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil))
     let bound = try server.start()
     print("agenttyd listening on 127.0.0.1:\(bound)")
 } catch {

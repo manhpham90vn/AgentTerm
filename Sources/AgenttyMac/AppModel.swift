@@ -43,6 +43,14 @@ final class AppModel: ObservableObject {
     /// The commit message being written, by folder.
     @Published var commitMessages: [String: String] = [:]
     @Published private(set) var isCommitting = false
+    /// What each agent's account has used and has left, by agent.
+    @Published private(set) var accountUsage: [String: AccountUsage] = [:]
+
+    /// Asks the agents' services again.
+    func refreshAccountUsage() {
+        connection?.send(.accountUsage(refresh: true))
+    }
+
     /// A request to close many tabs that would end running sessions, and so
     /// waits to be confirmed.
     @Published var pendingCloseRequest: CloseRequest?
@@ -274,6 +282,8 @@ final class AppModel: ObservableObject {
                 pairingCode = nil
             }
             devices = list
+        case .accountUsage(let list):
+            accountUsage = Dictionary(list.map { ($0.agent, $0) }, uniquingKeysWith: { $1 })
         case .paired, .diff, .diffFile, .history, .directory, .handoffPlan, .files, .file, .fileSaved, .fileCreated:
             // The Mac app reads changes, history and folders directly: it
             // runs on the machine they are on.

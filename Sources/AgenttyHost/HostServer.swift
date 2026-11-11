@@ -27,6 +27,9 @@ public final class HostServer {
         public var statusLineTool: String?
         /// Where those reports are kept, one file per session.
         public var usageDirectory: URL?
+        /// Asks the agents' services what their accounts have left. `nil`
+        /// asks nobody, which is what tests want.
+        public var fetchAccountUsage: ((String) -> AccountUsage?)?
 
         public init(
             port: UInt16 = agenttyDefaultPort,
@@ -38,7 +41,8 @@ public final class HostServer {
             devicesFile: URL? = nil,
             home: String = NSHomeDirectory(),
             statusLineTool: String? = nil,
-            usageDirectory: URL? = nil
+            usageDirectory: URL? = nil,
+            fetchAccountUsage: ((String) -> AccountUsage?)? = nil
         ) {
             self.port = port
             self.token = token
@@ -50,6 +54,7 @@ public final class HostServer {
             self.home = home
             self.statusLineTool = statusLineTool
             self.usageDirectory = usageDirectory
+            self.fetchAccountUsage = fetchAccountUsage
         }
     }
 
@@ -110,6 +115,12 @@ public final class HostServer {
     private var tailscaleTimer: DispatchSourceTimer?
     private var summaryTimer: DispatchSourceTimer?
     private var summarizing = false
+    /// What each agent's account has left, and when its service was last asked.
+    private var accountUsage: [String: AccountUsage] = [:]
+    private var accountAsked: [String: Date] = [:]
+    private var accountAsking: Set<String> = []
+    /// Services are asked this often while an agent has a session.
+    private static let accountInterval: TimeInterval = 120
     private var clients: [ClientID: Client] = [:]
     private var sessions: [SessionID: Session] = [:]
     private var nextClientID: ClientID = 1
@@ -421,6 +432,10 @@ public final class HostServer {
                 server.diffCache[path] = (snapshot, Date())
                 server.send(.diffFile(path: path, file: snapshot.files.first { $0.path == file && $0.isStaged == staged }), to: client)
             }
+        case .accountUsage(let refresh):
+            // Asking again is allowed, but not in a tight loop.
+            if refresh { refreshAccountUsage(olderThan: 15) }
+            send(.accountUsage(accountUsageList()), to: client)
         case .files(let path):
             work(for: client, { FileBrowser.list(path) }) { server, client, entries in
                 server.send(.files(path: path, entries: entries), to: client)
@@ -572,11 +587,47 @@ public final class HostServer {
 
     /// Looks up what each agent session is about and tells the clients when
     /// a session's name changed. Reads the agents' files, so off this queue.
+    /// Asks the services of the agents that have a session, where the last
+    /// answer is older than `age`.
+    private func refreshAccountUsage(olderThan age: TimeInterval) {
+        guard let fetch = configuration.fetchAccountUsage else { return }
+        let now = Date()
+        for agent in Set(sessions.values.compactMap(\.info.agent)) where !accountAsking.contains(agent) {
+            if let asked = accountAsked[agent], now.timeIntervalSince(asked) < age { continue }
+            accountAsking.insert(agent)
+            accountAsked[agent] = now
+            workQueue.async { [weak self] in
+                let answer = fetch(agent)
+                self?.queue.async {
+                    guard let self else { return }
+                    self.accountAsking.remove(agent)
+                    guard var answer else { return }
+                    // An answer that failed keeps the figures already known,
+                    // with their age, and says what went wrong.
+                    if answer.problem != nil, answer.groups.isEmpty, let known = self.accountUsage[agent], !known.groups.isEmpty {
+                        var kept = known
+                        kept.problem = answer.problem
+                        answer = kept
+                    }
+                    guard self.accountUsage[agent] != answer else { return }
+                    self.accountUsage[agent] = answer
+                    let message = ServerMessage.accountUsage(self.accountUsageList())
+                    for client in self.clients.values where client.identity != nil { self.send(message, to: client) }
+                }
+            }
+        }
+    }
+
+    private func accountUsageList() -> [AccountUsage] {
+        accountUsage.values.sorted { $0.agent < $1.agent }
+    }
+
     private func usageFile(for id: SessionID) -> URL? {
         configuration.usageDirectory?.appendingPathComponent("session-\(id).json")
     }
 
     private func refreshSummaries() {
+        refreshAccountUsage(olderThan: Self.accountInterval)
         guard !summarizing else { return }
         let running = sessions.values.compactMap { session -> SessionSummaries.Running? in
             guard let agent = session.info.agent else { return nil }
@@ -645,6 +696,7 @@ public final class HostServer {
         client.identity = identity
         send(.welcome(version: agenttyProtocolVersion, host: Host.current().localizedName ?? "Mac"), to: client)
         send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
+        if !accountUsage.isEmpty { send(.accountUsage(accountUsageList()), to: client) }
         send(.folders(folders), to: client)
         if client.isAdmin {
             send(.devices(deviceList()), to: client)
@@ -769,6 +821,8 @@ public final class HostServer {
 
         attach(client, to: session, size: size)
         broadcastSessions()
+        // An agent that was not in use until now: ask its service right away.
+        refreshAccountUsage(olderThan: Self.accountInterval)
     }
 
     private func attach(_ client: Client, to session: Session, size: TermSize) {
