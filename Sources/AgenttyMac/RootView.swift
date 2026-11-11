@@ -37,22 +37,24 @@ struct RootView: View {
                 }
                 .help(model.showSidebar ? "Hide the folder list" : "Show the folder list")
             }
-            // Middle: starting an agent is the main thing to do here.
+            // Middle: starting an agent is the main thing to do here, and
+            // pairing an iPhone is what sets the app apart, so it sits with
+            // them and stands out.
             ToolbarItem(placement: .principal) {
-                LaunchBar()
+                HStack(spacing: 10) {
+                    LaunchBar()
+                    Theme.hairline.frame(width: 1, height: 16)
+                    PairButton()
+                }
             }
             // Without this flexible space the items below sit right after
             // the agents instead of at the window's edge.
             ToolbarItem(placement: .primaryAction) {
                 Spacer()
             }
-            // Far right: pairing, then the side panel's toggle in the corner
-            // above the panel it hides.
+            // Far right: the side panel's toggle, in the corner above the
+            // panel it hides.
             ToolbarItemGroup(placement: .primaryAction) {
-                Button { model.showPairing = true } label: {
-                    Label("Pair iPhone", systemImage: "qrcode")
-                }
-                .help("Pair an iPhone with a QR code")
                 Button { model.showDiff.toggle() } label: {
                     Label("Side Panel", systemImage: "sidebar.trailing")
                 }
@@ -106,6 +108,36 @@ struct LaunchBar: View {
                 .help("Start a shell in \(model.workingDirectory)")
         }
         .disabled(model.status != .connected)
+    }
+}
+
+/// Opens the pairing sheet. Filled, so it is the one button of the toolbar
+/// that catches the eye.
+struct PairButton: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var hovering = false
+
+    private static let tint = Color(red: 0.33, green: 0.52, blue: 0.96)
+
+    var body: some View {
+        Button { model.showPairing = true } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "qrcode").font(.system(size: 11, weight: .bold))
+                Text("Pair iPhone").font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Self.tint.opacity(hovering ? 1 : 0.88))
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("Pair an iPhone with a QR code to use this Mac's sessions from it")
+        .accessibilityLabel("Pair iPhone")
     }
 }
 
