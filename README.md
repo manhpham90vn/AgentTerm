@@ -28,6 +28,7 @@ to the same sessions over [Tailscale](https://tailscale.com).
   agents' services, Agentty reads each agent's sign-in on your Mac and sends
   it only to the service that issued it; `agenttyd --no-account-usage` turns
   that off.
+- Stays in the menu bar when its window is closed, if you want it to.
 - Real PTYs: job control, Ctrl-C, colors, resize, UTF-8 (Vietnamese included).
 - Sessions live in the `agenttyd` daemon and survive closing the app.
 - A session can be watched from several clients. The client being used decides

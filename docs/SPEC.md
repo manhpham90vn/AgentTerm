@@ -198,6 +198,19 @@ panel.
     subfolder belong to that subfolder. A switch at the top changes the list
     to **All**: every conversation on the Mac, each row naming its folder.
 
+### Menu bar (Mac)
+
+Agentty keeps an icon in the menu bar, and closing its window does not quit
+it: the window and the Dock icon go, the menu bar icon stays. Its menu opens
+the window again, lists the running sessions (picking one opens it), starts
+an agent or a shell, opens pairing and Settings, and quits. Quit is there
+and ⌘Q.
+
+The setting "Keep Agentty in the menu bar when its window is closed", in
+Settings (⌘,), is on by default. With it off there is no icon, and closing
+the window quits the app. Sessions keep running either way, since the host
+that holds them is a separate program.
+
 ### What the two apps share
 
 The Mac and the iPhone offer the same things wherever the device allows:
