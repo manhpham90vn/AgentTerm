@@ -7,6 +7,13 @@ struct RootView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var files: FilesModel
 
+    private var closeQuestion: String {
+        guard let request = model.pendingCloseRequest else { return "" }
+        let count = model.sessionsEnded(by: request).count
+        let kept = request.keepSession != nil || request.keepFile != nil || request.keepDiff
+        return "End \(count) \(count == 1 ? "session" : "sessions") and close \(kept ? "every other tab" : "every tab")?"
+    }
+
     var body: some View {
         HSplitView {
             if model.showSidebar {
@@ -138,13 +145,6 @@ struct LaunchButton: View {
 struct CenterView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var files: FilesModel
-
-    private var closeQuestion: String {
-        guard let request = model.pendingCloseRequest else { return "" }
-        let count = model.sessionsEnded(by: request).count
-        let kept = request.keepSession != nil || request.keepFile != nil || request.keepDiff
-        return "End \(count) \(count == 1 ? "session" : "sessions") and close \(kept ? "every other tab" : "every tab")?"
-    }
 
     var body: some View {
         ZStack {
