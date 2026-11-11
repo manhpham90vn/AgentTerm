@@ -21,6 +21,25 @@ scripts/release.sh mac release    # ... and notarize it
 `APP_VERSION` of the project's `release.env`, or the one in
 `iOS/project.yml`.
 
+## Released builds and development builds
+
+A build made on your own machine is not the released app. `scripts/run-mac.sh`
+and a Debug build of the iPhone project produce **AgentTerm Dev**, an app of
+its own that can be installed next to the released one:
+
+| | Released | Development |
+|---|---|---|
+| Name | AgentTerm | AgentTerm Dev |
+| Bundle identifier | `com.manhpham.agentterm` | `com.manhpham.agentterm.dev` |
+| Data on the Mac | `~/Library/Application Support/AgentTerm` | `~/Library/Application Support/AgentTerm Dev` |
+| Host port | 7717 | 7718 |
+| Pairing links | `agentterm://` | `agentterm-dev://` |
+
+So trying a change never touches the installed app's sessions or paired
+devices. Either app understands the other's pairing links. The release lanes
+build the released app (`CHANNEL=release` for the Mac, the Release
+configuration for the iPhone); nothing else does.
+
 ## What it needs
 
 - Xcode, `brew install fastlane xcodegen`.

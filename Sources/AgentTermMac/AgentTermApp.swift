@@ -1,3 +1,4 @@
+import AgentTermProtocol
 import SwiftUI
 
 @main
@@ -8,7 +9,7 @@ struct AgentTermApp: App {
     @AppStorage(MenuBarMode.key) private var staysInMenuBar = MenuBarMode.defaultValue
 
     var body: some Scene {
-        Window("AgentTerm", id: "main") {
+        Window(AppChannel.current.appName, id: "main") {
             RootView()
                 .environmentObject(model)
                 .environmentObject(model.files)
@@ -54,7 +55,7 @@ struct AgentTermApp: App {
         }
 
         // The icon in the menu bar, while the setting is on.
-        MenuBarExtra("AgentTerm", systemImage: "terminal.fill", isInserted: $staysInMenuBar) {
+        MenuBarExtra(AppChannel.current.appName, systemImage: AppChannel.current == .release ? "terminal.fill" : "terminal", isInserted: $staysInMenuBar) {
             MenuBarMenu(model: model)
         }
 
@@ -78,7 +79,7 @@ private struct MenuBarMenu: View {
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
-        Button("Open AgentTerm") { showWindow() }
+        Button("Open \(AppChannel.current.appName)") { showWindow() }
         Divider()
         if model.sessions.isEmpty {
             Text("No sessions running")
@@ -109,7 +110,7 @@ private struct MenuBarMenu: View {
         }
         SettingsLink { Text("Settings…") }
         Divider()
-        Button("Quit AgentTerm") { NSApp.terminate(nil) }
+        Button("Quit \(AppChannel.current.appName)") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
     }
 

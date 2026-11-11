@@ -1,4 +1,5 @@
 #if os(macOS)
+import AgentTermProtocol
 import Darwin
 import Foundation
 
@@ -11,11 +12,13 @@ public enum HostEnvironment {
             return URL(fileURLWithPath: custom, isDirectory: true)
         }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let directory = base.appendingPathComponent("AgentTerm", isDirectory: true)
+        // A development build keeps its files apart from the released app's.
+        let directory = base.appendingPathComponent(AppChannel.current.appName, isDirectory: true)
         // The app was called Agentty before. What it kept, the paired
-        // devices above all, moves over the first time the new name runs.
+        // devices above all, moves over the first time the released app
+        // runs under the new name.
         let former = base.appendingPathComponent("Agentty", isDirectory: true)
-        if !FileManager.default.fileExists(atPath: directory.path), FileManager.default.fileExists(atPath: former.path) {
+        if AppChannel.current == .release, !FileManager.default.fileExists(atPath: directory.path), FileManager.default.fileExists(atPath: former.path) {
             try? FileManager.default.moveItem(at: former, to: directory)
         }
         return directory

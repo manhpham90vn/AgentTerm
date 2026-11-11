@@ -22,7 +22,7 @@ public struct PairingInfo: Equatable, Sendable {
 
     public var url: URL {
         var c = URLComponents()
-        c.scheme = "agentterm"
+        c.scheme = AppChannel.current.linkScheme
         c.host = "pair"
         c.queryItems = [
             URLQueryItem(name: "host", value: host),
@@ -34,7 +34,9 @@ public struct PairingInfo: Equatable, Sendable {
     }
 
     public init?(url: URL) {
-        guard url.scheme == "agentterm", url.host == "pair",
+        // A link of either channel is understood: a development app can be
+        // paired with a released Mac app and the other way round.
+        guard let scheme = url.scheme, AppChannel.linkSchemes.contains(scheme), url.host == "pair",
               let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
         else { return nil }
         func value(_ name: String) -> String? { items.first { $0.name == name }?.value }

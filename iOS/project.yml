@@ -26,7 +26,6 @@ targets:
         product: AgentTermEditor
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.manhpham.agentterm
         PRODUCT_NAME: AgentTerm
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: 0.1.0
@@ -35,10 +34,21 @@ targets:
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
         ENABLE_USER_SCRIPT_SANDBOXING: YES
+      # A build made on a developer's machine is an app of its own next to the
+      # one from TestFlight: its own identifier, name and pairing link scheme.
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.manhpham.agentterm.dev
+          APP_DISPLAY_NAME: AgentTerm Dev
+          APP_LINK_SCHEME: agentterm-dev
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: com.manhpham.agentterm
+          APP_DISPLAY_NAME: AgentTerm
+          APP_LINK_SCHEME: agentterm
     info:
       path: AgentTerm/Info.plist
       properties:
-        CFBundleDisplayName: AgentTerm
+        CFBundleDisplayName: $(APP_DISPLAY_NAME)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
@@ -52,7 +62,7 @@ targets:
         CFBundleURLTypes:
           - CFBundleURLName: com.manhpham.agentterm.pair
             CFBundleURLSchemes:
-              - agentterm
+              - $(APP_LINK_SCHEME)
   AgentTermUITests:
     type: bundle.ui-testing
     platform: iOS

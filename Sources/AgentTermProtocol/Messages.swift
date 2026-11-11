@@ -4,7 +4,7 @@ import Foundation
 public let agenttermProtocolVersion = 4
 
 /// Default TCP port the host daemon listens on.
-public let agenttermDefaultPort: UInt16 = 7717
+public var agenttermDefaultPort: UInt16 { AppChannel.current.defaultPort }
 
 public typealias SessionID = UInt32
 

@@ -1,15 +1,28 @@
 #!/usr/bin/env bash
-# Builds AgentTerm.app into dist/. The app is ad-hoc signed, which is enough to
+# Builds the Mac app into dist/. The app is ad-hoc signed, which is enough to
 # run it on the Mac that built it.
 #
 #   CONFIG=debug ./scripts/bundle-mac.sh    # default: release
 #   VERSION=0.2.0 ./scripts/bundle-mac.sh
+#   CHANNEL=release ./scripts/bundle-mac.sh # default: dev
+#
+# CHANNEL decides which app this is. "dev", the default, builds
+# "AgentTerm Dev.app" (com.manhpham.agentterm.dev): it has its own data
+# folder, port and pairing links, so it runs next to an installed AgentTerm
+# without touching its sessions or paired devices. "release" builds
+# AgentTerm.app itself, which is what the release lanes do.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 VERSION="${VERSION:-0.1.0}"
 CONFIG="${CONFIG:-release}"
-APP="dist/AgentTerm.app"
+CHANNEL="${CHANNEL:-dev}"
+case "$CHANNEL" in
+    release) NAME="AgentTerm"; BUNDLE_ID="com.manhpham.agentterm" ;;
+    dev) NAME="AgentTerm Dev"; BUNDLE_ID="com.manhpham.agentterm.dev" ;;
+    *) echo "bundle-mac.sh: CHANNEL must be dev or release" >&2; exit 2 ;;
+esac
+APP="dist/$NAME.app"
 
 swift build -c "$CONFIG" --product AgentTermMac
 swift build -c "$CONFIG" --product agenttermd
@@ -36,9 +49,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>AgentTerm</string>
-    <key>CFBundleDisplayName</key><string>AgentTerm</string>
-    <key>CFBundleIdentifier</key><string>com.manhpham.agentterm</string>
+    <key>CFBundleName</key><string>${NAME}</string>
+    <key>CFBundleDisplayName</key><string>${NAME}</string>
+    <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
     <key>CFBundleExecutable</key><string>AgentTerm</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>

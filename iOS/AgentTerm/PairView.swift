@@ -1,3 +1,4 @@
+import AgentTermProtocol
 import SwiftUI
 import VisionKit
 
@@ -29,7 +30,7 @@ struct PairView: View {
             }
         }
         .alert("Pairing Link", isPresented: $enteringLink) {
-            TextField("agentterm://pair?…", text: $link)
+            TextField("\(AppChannel.current.linkScheme)://pair?…", text: $link)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
             Button("Pair") { model.pair(withText: link) }
@@ -173,7 +174,7 @@ private struct QRScanner: UIViewControllerRepresentable {
         func dataScanner(_ dataScanner: DataScannerViewController, didAdd addedItems: [RecognizedItem], allItems: [RecognizedItem]) {
             guard !done else { return }
             for case .barcode(let code) in addedItems {
-                guard let text = code.payloadStringValue, let url = URL(string: text), url.scheme == "agentterm" else { continue }
+                guard let text = code.payloadStringValue, let url = URL(string: text), let scheme = url.scheme, AppChannel.linkSchemes.contains(scheme) else { continue }
                 done = true
                 onFound(url)
                 return

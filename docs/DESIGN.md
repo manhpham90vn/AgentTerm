@@ -270,6 +270,15 @@ text, and Mermaid runs with `securityLevel: 'strict'`.
 Highlightr and `AgentTermEditor` each bring a resource bundle, which
 `scripts/bundle-mac.sh` copies into the app's `Contents/Resources`.
 
+## Channels
+
+`AppChannel.current` is `.release` only when the code runs in a bundle whose
+identifier is `com.manhpham.agentterm`; a development bundle, a bare
+`swift run` and the test runner are `.dev`. The channel decides the app's
+name, the folder the host keeps its files in, the default port and the scheme
+of pairing links, which keeps a development build apart from an installed
+release. See docs/RELEASE.md.
+
 ## Usage
 
 `SessionInfo.usage` carries a `SessionUsage`: model, context tokens and

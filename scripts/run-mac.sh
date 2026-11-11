@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Builds AgentTerm and opens it on this Mac.
+# Builds the development app, "AgentTerm Dev", and opens it on this Mac. It
+# has its own data folder and port, so an installed AgentTerm and its
+# sessions are left alone.
 #
 #   ./scripts/run-mac.sh                  # debug build, restart the host daemon
 #   ./scripts/run-mac.sh --release        # optimized build
@@ -21,14 +23,15 @@ for argument in "$@"; do
     esac
 done
 
-CONFIG="$CONFIG" ./scripts/bundle-mac.sh
+CONFIG="$CONFIG" CHANNEL=dev ./scripts/bundle-mac.sh
 
-# Quit a running copy so the new build is the one that opens.
-pkill -x AgentTerm 2>/dev/null || true
+# Quit a running copy so the new build is the one that opens. Only the
+# development app and its own daemon: the installed app is not ours to stop.
+pkill -f "AgentTerm Dev.app/Contents/MacOS/AgentTerm" 2>/dev/null || true
 if [ "$KEEP_SESSIONS" -eq 0 ]; then
-    pkill -x agenttermd 2>/dev/null || true
+    pkill -f "AgentTerm Dev.app/Contents/MacOS/agenttermd" 2>/dev/null || true
 fi
 sleep 0.5
 
-open dist/AgentTerm.app
-echo "AgentTerm is running. Daemon log: ~/Library/Application Support/AgentTerm/agenttermd.log"
+open "dist/AgentTerm Dev.app"
+echo "AgentTerm Dev is running. Daemon log: ~/Library/Application Support/AgentTerm Dev/agenttermd.log"

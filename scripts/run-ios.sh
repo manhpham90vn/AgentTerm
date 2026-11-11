@@ -39,6 +39,7 @@ fi
 rm -f "$LOG"
 
 xcrun simctl install "$DEVICE" .build/ios/Build/Products/Debug-iphonesimulator/AgentTerm.app
-xcrun simctl launch "$DEVICE" com.manhpham.agentterm >/dev/null
+# A build made here is the development app, next to the one from TestFlight.
+xcrun simctl launch "$DEVICE" com.manhpham.agentterm.dev >/dev/null
 echo "AgentTerm is running on $SIM_NAME."
 echo "The simulator has no camera. With AgentTerm open on this Mac, pair it with: ./scripts/pair-ios.sh \"$SIM_NAME\""

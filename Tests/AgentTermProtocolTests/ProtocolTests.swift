@@ -107,7 +107,13 @@ final class ProtocolTests: XCTestCase {
 
     func testPairingURLRoundTrip() {
         let info = PairingInfo(host: "macbook.tail1234.ts.net", port: 7717, code: "abc-_123", name: "Mạnh's MacBook")
-        XCTAssertEqual(info.url.scheme, "agentterm")
+        XCTAssertEqual(info.url.scheme, "agentterm-dev", "the test runner is a development build")
+        // Links of the released app are understood too.
+        XCTAssertEqual(PairingInfo(url: URL(string: "agentterm://pair?host=mac&port=7717&code=c0de&name=Mac")!)?.code, "c0de")
+        XCTAssertNil(PairingInfo(url: URL(string: "https://pair?host=mac&port=7717&code=c0de")!))
+        XCTAssertEqual(AppChannel.current, .dev)
+        XCTAssertEqual([AppChannel.release.defaultPort, AppChannel.dev.defaultPort], [7717, 7718])
+        XCTAssertEqual([AppChannel.release.appName, AppChannel.dev.appName], ["AgentTerm", "AgentTerm Dev"])
         XCTAssertEqual(PairingInfo(url: info.url), info)
     }
 

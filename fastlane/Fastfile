@@ -96,7 +96,7 @@ platform :mac do
     version = app_version
     app = File.join(DIST, "AgentTerm.app")
     dmg = File.join(DIST, "AgentTerm-#{version}.dmg")
-    Dir.chdir(ROOT) { sh({ "VERSION" => version, "CONFIG" => "release" }, "./scripts/bundle-mac.sh") }
+    Dir.chdir(ROOT) { sh({ "VERSION" => version, "CONFIG" => "release", "CHANNEL" => "release" }, "./scripts/bundle-mac.sh") }
 
     # The certificate goes into a keychain of its own for the length of the
     # run, so the login keychain is left as it was.
