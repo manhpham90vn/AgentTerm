@@ -71,7 +71,8 @@ itself.
 Three panes, like a code editor:
 
 - **Left: folders.** Project folders the user added, each with its running
-  sessions underneath. Sessions started elsewhere are listed under "Other".
+  sessions underneath. The list belongs to the host, so the iPhone shows the
+  same folders. Sessions started elsewhere are listed under "Other".
 - **Middle: terminal.** The selected session. With no session selected, a
   launch screen for the selected folder.
 - **Right: changes.** Uncommitted git changes of the selected folder: the
@@ -97,7 +98,10 @@ Three panes, like a code editor:
 - A compose field for writing a prompt with the normal iOS keyboard,
   autocorrect and input methods, sent to the terminal in one go.
 - Quick launch for the installed agents, in any folder known to the Mac.
-- A read-only view of a folder's changes.
+- Text size can be changed, which changes how many columns fit.
+- When the connection drops, the app reconnects on its own and returns to the
+  session that was open.
+- A read-only view of a folder's changes (not built yet).
 
 ### Notifications (later)
 
@@ -129,6 +133,6 @@ needs a push provider and is not part of the first release.
 | Milestone | Scope | Status |
 |---|---|---|
 | M1 Mac core | Host daemon, PTY sessions, protocol, macOS three-pane app, agent detection and quick launch, changes pane, pairing QR code | Done, except the Vietnamese input matrix, which is checked by hand and not yet run |
-| M2 iPhone | iOS app: scan to pair, session list, terminal sized to the phone, key bar, compose field | Not started |
+| M2 iPhone | iOS app: scan to pair, session list, terminal sized to the phone, key bar, compose field | Works in the iOS Simulator. Not yet run on a real iPhone, so QR scanning with the camera, Tailscale from the phone and typing with the Vietnamese keyboard are unverified |
 | M3 Polish | Host as a login item, screen snapshot on attach, changes pane on iPhone, app icon, signed and notarized Mac build | Not started |
 | M4 Awareness | Agent state (working, waiting, done) and notifications | Not started |

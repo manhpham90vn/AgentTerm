@@ -1,6 +1,7 @@
 import AgenttyClient
 import AgenttyHost
 import AgenttyProtocol
+import AgenttyTerminal
 import AppKit
 import SwiftUI
 
@@ -42,11 +43,9 @@ final class AppModel: ObservableObject {
     private var diffTimer: Timer?
     private var diffGeneration = 0
     private let foldersKey = "folders"
+    private var pendingFolderSelection: String?
 
     init() {
-        let saved = UserDefaults.standard.stringArray(forKey: foldersKey) ?? []
-        folders = saved.filter { FileManager.default.fileExists(atPath: $0) }.map(Folder.init)
-        selectedFolder = folders.first?.path
         if let value = ProcessInfo.processInfo.environment["AGENTTY_PORT"].flatMap(UInt16.init) { port = value }
         connect()
         folderChanged()
@@ -155,6 +154,10 @@ final class AppModel: ObservableObject {
         case .agents(let list):
             agents = list
             agentsLoaded = true
+        case .folders(let list):
+            folders = list.map(Folder.init)
+            if selectedFolder == nil || !list.contains(selectedFolder ?? "") { selectedFolder = list.first }
+            migrateLocalFolders(known: list)
         case .attached(let info):
             if controllers[info.id] == nil { controllers[info.id] = makeController(for: info.id) }
             if !sessions.contains(where: { $0.id == info.id }) { sessions.append(info) }
@@ -163,6 +166,7 @@ final class AppModel: ObservableObject {
                 selectedSession = info.id
             }
         case .resized(let id, let size, let driver):
+            if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].size = size }
             guard let controller = controllers[id] else { return }
             controller.hostResized(to: size, driver: driver)
             foreignSizes[id] = controller.foreignSize
@@ -222,21 +226,25 @@ final class AppModel: ObservableObject {
         panel.prompt = "Add"
         panel.message = "Choose project folders to work in"
         guard panel.runModal() == .OK else { return }
-        for url in panel.urls where !folders.contains(where: { $0.path == url.path }) {
-            folders.append(Folder(path: url.path))
-        }
-        saveFolders()
-        if let first = panel.urls.first { selectedFolder = first.path }
+        // The host owns the list, so other devices see the same folders.
+        for url in panel.urls { connection?.send(.addFolder(path: url.path)) }
+        if let first = panel.urls.first { pendingFolderSelection = first.standardizedFileURL.path }
     }
 
     func remove(_ folder: Folder) {
-        folders.removeAll { $0 == folder }
-        saveFolders()
-        if selectedFolder == folder.path { selectedFolder = folders.first?.path }
+        connection?.send(.removeFolder(path: folder.path))
     }
 
-    private func saveFolders() {
-        UserDefaults.standard.set(folders.map(\.path), forKey: foldersKey)
+    /// Earlier builds kept the folder list in this app's preferences. Hand
+    /// those folders to the host once.
+    private func migrateLocalFolders(known: [String]) {
+        if let pending = pendingFolderSelection, known.contains(pending) {
+            pendingFolderSelection = nil
+            selectedFolder = pending
+        }
+        guard let saved = UserDefaults.standard.stringArray(forKey: foldersKey) else { return }
+        UserDefaults.standard.removeObject(forKey: foldersKey)
+        for path in saved where !known.contains(path) { connection?.send(.addFolder(path: path)) }
     }
 
     // MARK: Changes

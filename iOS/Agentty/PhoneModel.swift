@@ -1,0 +1,287 @@
+import AgenttyClient
+import AgenttyProtocol
+import AgenttyTerminal
+import SwiftUI
+
+enum LinkStatus: Equatable {
+    case connecting
+    case connected
+    case offline(String?)
+}
+
+/// A project folder on the Mac with the sessions running in it.
+struct FolderGroup: Identifiable {
+    /// `nil` is the home directory, offered when the Mac has no folders yet.
+    let path: String?
+    let sessions: [SessionInfo]
+
+    var id: String { path ?? "~" }
+    var name: String { path.map { ($0 as NSString).lastPathComponent } ?? "Home" }
+}
+
+@MainActor
+final class PhoneModel: ObservableObject {
+    @Published private(set) var pairing: PairingInfo?
+    @Published private(set) var status: LinkStatus = .offline(nil)
+    @Published private(set) var sessions: [SessionInfo] = []
+    @Published private(set) var folders: [String] = []
+    @Published private(set) var agents: [AgentInfo] = []
+    @Published private(set) var agentsLoaded = false
+    /// The session on screen, if any. Drives navigation.
+    @Published var path: [SessionID] = []
+    @Published private(set) var controller: TerminalController?
+    @Published private(set) var foreignSize: TermSize?
+    @Published var message: String?
+    @Published private(set) var fontSize: Double
+
+    private var connection: AgenttyConnection?
+    private var openCreatedSession = false
+    private var reattachAfterConnect = false
+    private var retryScheduled = false
+    private var active = true
+    private static let fontSizeKey = "terminalFontSize"
+    static let fontSizes: ClosedRange<Double> = 9...18
+
+    init() {
+        let saved = UserDefaults.standard.double(forKey: Self.fontSizeKey)
+        fontSize = Self.fontSizes.contains(saved) ? saved : 12
+        pairing = PairingStore.load()
+        if pairing != nil { connect() }
+    }
+
+    // MARK: Derived state
+
+    var installedAgents: [AgentInfo] { agents.filter(\.isInstalled) }
+
+    var groups: [FolderGroup] {
+        var result = folders.map { folder in
+            FolderGroup(path: folder, sessions: sessions.filter { $0.cwd == folder })
+        }
+        // Sessions started outside the listed folders still need a home.
+        let known = Set(folders)
+        let loose = Dictionary(grouping: sessions.filter { !known.contains($0.cwd) }, by: \.cwd)
+        result += loose.keys.sorted().map { FolderGroup(path: $0, sessions: loose[$0] ?? []) }
+        if result.isEmpty { result = [FolderGroup(path: nil, sessions: [])] }
+        return result
+    }
+
+    func session(_ id: SessionID) -> SessionInfo? { sessions.first { $0.id == id } }
+
+    func agentID(for session: SessionInfo) -> String {
+        agents.first { $0.name == session.title }?.id ?? "shell"
+    }
+
+    // MARK: Pairing
+
+    func pair(with url: URL) {
+        guard let info = PairingInfo(url: url) else {
+            message = "That is not an Agentty pairing code."
+            return
+        }
+        PairingStore.save(info)
+        disconnect()
+        pairing = info
+        message = nil
+        connect()
+    }
+
+    func pair(withText text: String) {
+        guard let url = URL(string: text.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            message = "That is not an Agentty pairing code."
+            return
+        }
+        pair(with: url)
+    }
+
+    func forgetMac() {
+        disconnect()
+        PairingStore.clear()
+        pairing = nil
+        sessions = []
+        folders = []
+        agents = []
+        agentsLoaded = false
+    }
+
+    // MARK: Connection
+
+    /// Called when the app comes to the front.
+    func resume() {
+        active = true
+        if pairing != nil, connection == nil { connect() }
+    }
+
+    func retry() {
+        if connection == nil { connect() }
+    }
+
+    private func connect() {
+        guard let pairing else { return }
+        status = .connecting
+        let connection = AgenttyConnection(host: pairing.host, port: pairing.port, token: pairing.token, clientName: UIDevice.current.name)
+        self.connection = connection
+        connection.onState = { [weak self, weak connection] state in
+            MainActor.assumeIsolated {
+                guard let self, let connection, self.connection === connection else { return }
+                self.connectionChanged(state)
+            }
+        }
+        connection.onMessage = { [weak self, weak connection] message in
+            MainActor.assumeIsolated {
+                guard let self, let connection, self.connection === connection else { return }
+                self.handle(message)
+            }
+        }
+        connection.onOutput = { [weak self] session, data in
+            MainActor.assumeIsolated {
+                guard let controller = self?.controller, controller.session == session else { return }
+                controller.feed(data)
+            }
+        }
+        connection.connect()
+    }
+
+    private func disconnect() {
+        connection?.close()
+        connection = nil
+        controller = nil
+        foreignSize = nil
+        path = []
+        status = .offline(nil)
+    }
+
+    private func connectionChanged(_ state: AgenttyConnection.State) {
+        switch state {
+        case .connecting:
+            break
+        case .connected:
+            // Wait for `welcome`: a wrong token is only known after that.
+            break
+        case .closed(let reason):
+            connection = nil
+            status = .offline(reason)
+            scheduleRetry()
+        }
+    }
+
+    /// Keeps trying while the app is in front, so walking back into coverage
+    /// reconnects without a tap.
+    private func scheduleRetry() {
+        guard !retryScheduled, pairing != nil else { return }
+        retryScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+            guard let self else { return }
+            self.retryScheduled = false
+            if self.connection == nil, self.pairing != nil, UIApplication.shared.applicationState == .active {
+                self.connect()
+            }
+        }
+    }
+
+    private func handle(_ message: ServerMessage) {
+        switch message {
+        case .welcome:
+            status = .connected
+            reattachAfterConnect = true
+            connection?.send(.agents(refresh: false))
+        case .sessions(let list):
+            sessions = list
+            if let open = path.last, !list.contains(where: { $0.id == open }) {
+                path = []
+                controller = nil
+                foreignSize = nil
+            }
+            if reattachAfterConnect {
+                reattachAfterConnect = false
+                // The connection was lost while a terminal was on screen.
+                if let open = path.last {
+                    controller = nil
+                    self.open(open)
+                }
+            }
+        case .agents(let list):
+            agents = list
+            agentsLoaded = true
+        case .folders(let list):
+            folders = list
+        case .attached(let info):
+            if !sessions.contains(where: { $0.id == info.id }) { sessions.append(info) }
+            if openCreatedSession {
+                openCreatedSession = false
+                controller = makeController(for: info.id)
+                foreignSize = nil
+                path = [info.id]
+            }
+        case .resized(let id, let size, let driver):
+            if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].size = size }
+            guard let controller, controller.session == id else { return }
+            controller.hostResized(to: size, driver: driver)
+            foreignSize = controller.foreignSize
+        case .exited:
+            break
+        case .error(let text):
+            if text == "invalid token" {
+                self.message = "This Mac no longer accepts the saved pairing. Scan its code again."
+                forgetMac()
+            } else {
+                self.message = text
+            }
+        }
+    }
+
+    private func makeController(for id: SessionID) -> TerminalController {
+        let controller = TerminalController(session: id, fontSize: fontSize)
+        controller.onInput = { [weak self] data in self?.connection?.sendInput(data, to: id) }
+        controller.onResize = { [weak self] size in self?.connection?.send(.resize(session: id, size: size)) }
+        return controller
+    }
+
+    // MARK: Actions
+
+    /// Starts an agent, or a shell when `agent` is nil, and opens it.
+    func launch(_ agent: AgentInfo?, in folder: String?) {
+        guard status == .connected else { return }
+        openCreatedSession = true
+        // A typical portrait grid. The real one is reported once the view is laid out.
+        let size = TermSize(cols: 48, rows: 30)
+        connection?.send(.create(CreateRequest(command: agent?.id, cwd: folder, title: agent?.name, size: size)))
+    }
+
+    /// Attaches to a session so its terminal can be shown.
+    func open(_ id: SessionID) {
+        guard controller?.session != id else { return }
+        controller = makeController(for: id)
+        foreignSize = nil
+        // Attach with the size the session already has; ours follows after layout.
+        connection?.send(.attach(session: id, size: session(id)?.size ?? .default))
+    }
+
+    /// Stops watching a session. The Mac gets its own size back.
+    func leave(_ id: SessionID) {
+        guard controller?.session == id else { return }
+        connection?.send(.detach(session: id))
+        controller = nil
+        foreignSize = nil
+    }
+
+    func end(_ id: SessionID) {
+        connection?.send(.kill(session: id))
+    }
+
+    func takeControl() {
+        controller?.claimSize()
+    }
+
+    func refreshAgents() {
+        agentsLoaded = false
+        connection?.send(.agents(refresh: true))
+    }
+
+    func changeFontSize(by delta: Double) {
+        let size = min(max(fontSize + delta, Self.fontSizes.lowerBound), Self.fontSizes.upperBound)
+        guard size != fontSize else { return }
+        fontSize = size
+        UserDefaults.standard.set(size, forKey: Self.fontSizeKey)
+        controller?.setFontSize(size)
+    }
+}

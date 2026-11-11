@@ -157,6 +157,44 @@ final class EndToEndTests: XCTestCase {
         XCTAssertEqual(agents.filter(\.isInstalled).map(\.id), ["claude"])
     }
 
+    func testFolderListIsSharedBetweenClients() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentty-folder-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.standardizedFileURL.path
+
+        func folders(_ client: TestClient) -> [String]? {
+            client.messages.compactMap { if case .folders(let list) = $0 { return list } else { return nil } }.last
+        }
+        let mac = connect("mac")
+        let phone = connect("phone")
+        waitUntil("initial list") { folders(mac) == [] && folders(phone) == [] }
+        mac.connection.send(.addFolder(path: path))
+        mac.connection.send(.addFolder(path: path))
+        mac.connection.send(.addFolder(path: path + "/missing"))
+        waitUntil("phone sees the folder") { folders(phone) == [path] }
+        waitUntil("missing folder is refused") { mac.messages.contains { if case .error = $0 { return true } else { return false } } }
+
+        // A later client gets the list on connecting.
+        let late = connect("late")
+        waitUntil("late client") { folders(late) == [path] }
+        phone.connection.send(.removeFolder(path: path))
+        waitUntil("removed everywhere") { folders(mac) == [] && folders(late) == [] }
+    }
+
+    func testFolderListIsSavedToDisk() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("agentty-folders-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        try JSONEncoder().encode(["/tmp"]).write(to: file)
+        let saved = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false, foldersFile: file))
+        let savedPort = try saved.start()
+        defer { saved.stop() }
+        let client = TestClient(port: savedPort, token: token, name: "test")
+        waitUntil("saved list is served") { client.messages.contains(.folders(["/tmp"])) }
+        client.connection.send(.addFolder(path: "/usr"))
+        waitUntil("written") { (try? JSONDecoder().decode([String].self, from: Data(contentsOf: file))) == ["/tmp", "/usr"] }
+    }
+
     func testInputToASessionTheClientIsNotAttachedToIsIgnored() {
         let owner = connect("owner")
         owner.connection.send(.create(CreateRequest(command: "cat")))

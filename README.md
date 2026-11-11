@@ -1,14 +1,15 @@
 # Agentty
 
-A native macOS terminal for coding agents, with an iPhone remote on the way.
+A native macOS terminal for coding agents, with an iPhone remote.
 
 Agentty runs Claude Code, Codex, Antigravity (`agy`) and GitHub Copilot CLI in
 real terminals on your Mac. A small host daemon owns the terminals, so the
 sessions keep running when the window is closed, and other devices can attach
 to the same sessions over [Tailscale](https://tailscale.com).
 
-> Status: early. The macOS app and the host daemon work. The iPhone app is not
-> written yet. See [docs/SPEC.md](docs/SPEC.md) for the plan and what is done.
+> Status: early. The macOS app, the host daemon and a first iPhone app work.
+> The iPhone app has only been run in the iOS Simulator so far. See
+> [docs/SPEC.md](docs/SPEC.md) for the plan and what is done.
 
 ## What works today
 
@@ -21,25 +22,50 @@ to the same sessions over [Tailscale](https://tailscale.com).
 - Sessions live in the `agenttyd` daemon and survive closing the app.
 - A session can be watched from several clients. The client being used decides
   the terminal size; the others follow.
-- A pairing QR code for the upcoming iPhone app.
+- iPhone app: pair by scanning the Mac's QR code, see the Mac's folders and
+  sessions, start an agent, and use a terminal sized to the phone, with a key
+  bar (Esc, Tab, Shift+Tab, Ctrl-C, arrows) and a compose field for writing
+  prompts with the normal iOS keyboard.
 
 ## Requirements
 
 - macOS 14 or later
-- Xcode 16 or later (Swift 5.10+) to build
+- iOS 17 or later for the iPhone app
+- Xcode 16 or later (Swift 5.10+) to build, and
+  [XcodeGen](https://github.com/yonaskolb/XcodeGen) for the iPhone app
 - Tailscale on the Mac and the iPhone, for remote access
 
 ## Build and run
 
-```sh
-swift build
-swift run AgenttyMac          # starts agenttyd next to it when needed
+macOS:
 
-./scripts/bundle-mac.sh       # or build dist/Agentty.app
-open dist/Agentty.app
+```sh
+./scripts/run-mac.sh              # build, then open dist/Agentty.app
+./scripts/run-mac.sh --release    # optimized build
+./scripts/bundle-mac.sh           # only build dist/Agentty.app
 ```
 
-Run the tests with `swift test`.
+`run-mac.sh` restarts the host daemon so the new build is used, which ends
+running sessions. Pass `--keep-sessions` to leave it alone.
+
+iPhone, in the iOS Simulator:
+
+```sh
+brew install xcodegen
+./scripts/run-ios.sh              # the booted simulator, or "iPhone 17"
+```
+
+The simulator has no camera, so pair it with the link instead of the QR code:
+`xcrun simctl openurl booted '<pairing link>'`, or "Enter a pairing link" in
+the app. On a real iPhone, run `xcodegen` in `iOS/`, open
+`iOS/Agentty.xcodeproj`, pick your team under Signing and run.
+
+Tests:
+
+```sh
+swift test                # protocol, PTY, host server, end to end
+./scripts/test-ios.sh     # iPhone UI test against a throwaway host
+```
 
 ## Layout
 
@@ -49,7 +75,10 @@ Run the tests with `swift test`.
 | `Sources/AgenttyHost` | macOS only: PTYs, sessions, WebSocket server, agent detection, git diff |
 | `Sources/agenttyd` | The host daemon |
 | `Sources/AgenttyClient` | WebSocket client for macOS and iOS |
-| `Sources/AgenttyMac` | The macOS app (SwiftUI + [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)) |
+| `Sources/AgenttyTerminal` | Terminal view bound to a session, shared by both apps ([SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)) |
+| `Sources/AgenttyMac` | The macOS app (SwiftUI) |
+| `iOS/` | The iPhone app (SwiftUI) and its UI test; the Xcode project is generated from `project.yml` |
+| `scripts/` | Build, run and test scripts |
 | `docs/SPEC.md` | Product spec and roadmap |
 | `docs/DESIGN.md` | Architecture, protocol and design decisions |
 

@@ -1,4 +1,5 @@
 import AgenttyProtocol
+import AgenttyTerminal
 import SwiftUI
 
 struct SidebarView: View {

@@ -92,6 +92,9 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Reports the sender's grid size and makes it the session's driver.
     case resize(session: SessionID, size: TermSize)
     case kill(session: SessionID)
+    /// Adds a project folder to the list every client shares.
+    case addFolder(path: String)
+    case removeFolder(path: String)
 }
 
 /// JSON text frames sent by the host.
@@ -99,6 +102,8 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case welcome(version: Int, host: String)
     case sessions([SessionInfo])
     case agents([AgentInfo])
+    /// Project folders on the host, in the order they were added.
+    case folders([String])
     case attached(SessionInfo)
     /// The PTY now has this size. `driver` is true when the receiving client
     /// is the one whose size was chosen.

@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
-# Builds a release Agentty.app into dist/. The app is ad-hoc signed, which is
-# enough to run it on the Mac that built it.
+# Builds Agentty.app into dist/. The app is ad-hoc signed, which is enough to
+# run it on the Mac that built it.
+#
+#   CONFIG=debug ./scripts/bundle-mac.sh    # default: release
+#   VERSION=0.2.0 ./scripts/bundle-mac.sh
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 VERSION="${VERSION:-0.1.0}"
+CONFIG="${CONFIG:-release}"
 APP="dist/Agentty.app"
 
-swift build -c release --product AgenttyMac
-swift build -c release --product agenttyd
-BIN="$(swift build -c release --show-bin-path)"
+swift build -c "$CONFIG" --product AgenttyMac
+swift build -c "$CONFIG" --product agenttyd
+BIN="$(swift build -c "$CONFIG" --show-bin-path)"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"

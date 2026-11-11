@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .library(name: "AgenttyProtocol", targets: ["AgenttyProtocol"]),
         .library(name: "AgenttyClient", targets: ["AgenttyClient"]),
+        .library(name: "AgenttyTerminal", targets: ["AgenttyTerminal"]),
         .library(name: "AgenttyHost", targets: ["AgenttyHost"]),
         .executable(name: "agenttyd", targets: ["agenttyd"]),
         .executable(name: "AgenttyMac", targets: ["AgenttyMac"]),
@@ -19,6 +20,11 @@ let package = Package(
         .target(name: "AgenttyProtocol"),
         // WebSocket client used by the macOS app and, later, the iOS app.
         .target(name: "AgenttyClient", dependencies: ["AgenttyProtocol"]),
+        // Terminal emulator view bound to a session, shared by the macOS and iOS apps.
+        .target(
+            name: "AgenttyTerminal",
+            dependencies: ["AgenttyProtocol", .product(name: "SwiftTerm", package: "SwiftTerm")]
+        ),
         // macOS only: PTY ownership, session management, WebSocket server.
         .target(name: "AgenttyHost", dependencies: ["AgenttyProtocol"]),
         .executableTarget(name: "agenttyd", dependencies: ["AgenttyHost"]),
@@ -27,7 +33,7 @@ let package = Package(
             dependencies: [
                 "AgenttyClient",
                 "AgenttyHost",
-                .product(name: "SwiftTerm", package: "SwiftTerm"),
+                "AgenttyTerminal",
             ]
         ),
         .testTarget(name: "AgenttyProtocolTests", dependencies: ["AgenttyProtocol"]),

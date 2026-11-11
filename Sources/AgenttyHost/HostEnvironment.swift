@@ -4,12 +4,19 @@ import Foundation
 
 /// Where the host keeps its files and how it starts user programs.
 public enum HostEnvironment {
+    /// Token, folder list and log live here. `AGENTTY_STATE_DIR` moves them,
+    /// which keeps test runs away from the real pairing.
     public static var supportDirectory: URL {
+        if let custom = ProcessInfo.processInfo.environment["AGENTTY_STATE_DIR"], !custom.isEmpty {
+            return URL(fileURLWithPath: custom, isDirectory: true)
+        }
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         return base.appendingPathComponent("Agentty", isDirectory: true)
     }
 
     public static var tokenFile: URL { supportDirectory.appendingPathComponent("token") }
+
+    public static var foldersFile: URL { supportDirectory.appendingPathComponent("folders.json") }
 
     public static var homeDirectory: String { NSHomeDirectory() }
 

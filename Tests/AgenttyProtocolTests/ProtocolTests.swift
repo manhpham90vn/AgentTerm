@@ -12,6 +12,8 @@ final class ProtocolTests: XCTestCase {
             .detach(session: 7),
             .resize(session: 7, size: TermSize(cols: 50, rows: 20)),
             .kill(session: 7),
+            .addFolder(path: "/Users/me/dự án"),
+            .removeFolder(path: "/Users/me/dự án"),
         ]
         for message in messages {
             let decoded = MessageCoding.decode(ClientMessage.self, from: MessageCoding.encode(message))
@@ -25,6 +27,7 @@ final class ProtocolTests: XCTestCase {
             .welcome(version: agenttyProtocolVersion, host: "Mac"),
             .sessions([info]),
             .agents([AgentInfo(id: "claude", name: "Claude Code", path: "/usr/local/bin/claude"), AgentInfo(id: "agy", name: "Antigravity", path: nil)]),
+            .folders(["/Users/me/app"]),
             .attached(info),
             .resized(session: 3, size: TermSize(cols: 48, rows: 30), driver: true),
             .exited(session: 3, status: 130),

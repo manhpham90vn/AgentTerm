@@ -16,19 +16,23 @@ public final class HostServer {
         public var scrollbackLimit: Int
         /// Overrides agent detection, mainly for tests.
         public var detectAgents: () -> [AgentInfo]
+        /// Where the shared folder list is saved. `nil` keeps it in memory only.
+        public var foldersFile: URL?
 
         public init(
             port: UInt16 = agenttyDefaultPort,
             token: String,
             listenOnTailscale: Bool = true,
             scrollbackLimit: Int = 512 * 1024,
-            detectAgents: @escaping () -> [AgentInfo] = AgentDetector.detect
+            detectAgents: @escaping () -> [AgentInfo] = AgentDetector.detect,
+            foldersFile: URL? = nil
         ) {
             self.port = port
             self.token = token
             self.listenOnTailscale = listenOnTailscale
             self.scrollbackLimit = scrollbackLimit
             self.detectAgents = detectAgents
+            self.foldersFile = foldersFile
         }
     }
 
@@ -80,9 +84,14 @@ public final class HostServer {
     private var agentWaiters: [ClientID] = []
     private var detecting = false
     private var boundPort: UInt16 = 0
+    private var folders: [String] = []
 
     public init(configuration: Configuration) {
         self.configuration = configuration
+        if let file = configuration.foldersFile, let data = try? Data(contentsOf: file),
+           let saved = try? JSONDecoder().decode([String].self, from: data) {
+            folders = saved
+        }
     }
 
     // MARK: Lifecycle
@@ -281,6 +290,7 @@ public final class HostServer {
             client.authenticated = true
             send(.welcome(version: agenttyProtocolVersion, host: Host.current().localizedName ?? "Mac"), to: client)
             send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
+            send(.folders(folders), to: client)
             return
         }
         guard client.authenticated else {
@@ -314,6 +324,30 @@ public final class HostServer {
             guard let session = sessions[id] else { return }
             session.process.hangUp()
             queue.asyncAfter(deadline: .now() + 3) { [weak session] in session?.process.forceKill() }
+        case .addFolder(let path):
+            let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: standardized, isDirectory: &isDirectory), isDirectory.boolValue else {
+                send(.error("not a folder: \(path)"), to: client)
+                return
+            }
+            guard !folders.contains(standardized) else { return }
+            folders.append(standardized)
+            foldersChanged()
+        case .removeFolder(let path):
+            guard folders.contains(path) else { return }
+            folders.removeAll { $0 == path }
+            foldersChanged()
+        }
+    }
+
+    private func foldersChanged() {
+        if let file = configuration.foldersFile, let data = try? JSONEncoder().encode(folders) {
+            try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? data.write(to: file, options: .atomic)
+        }
+        for client in clients.values where client.authenticated {
+            send(.folders(folders), to: client)
         }
     }
 

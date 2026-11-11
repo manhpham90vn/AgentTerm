@@ -38,7 +38,7 @@ while let argument = arguments.popFirst() {
 let server: HostServer
 do {
     let token = try HostEnvironment.loadOrCreateToken()
-    server = HostServer(configuration: .init(port: port, token: token, listenOnTailscale: listenOnTailscale))
+    server = HostServer(configuration: .init(port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile))
     let bound = try server.start()
     print("agenttyd listening on 127.0.0.1:\(bound)")
 } catch {
