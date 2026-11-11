@@ -8,6 +8,7 @@ let package = Package(
         .library(name: "AgenttyProtocol", targets: ["AgenttyProtocol"]),
         .library(name: "AgenttyClient", targets: ["AgenttyClient"]),
         .library(name: "AgenttyTerminal", targets: ["AgenttyTerminal"]),
+        .library(name: "AgenttyEditor", targets: ["AgenttyEditor"]),
         .library(name: "AgenttyHost", targets: ["AgenttyHost"]),
         .executable(name: "agenttyd", targets: ["agenttyd"]),
         .executable(name: "AgenttyMac", targets: ["AgenttyMac"]),
@@ -29,6 +30,18 @@ let package = Package(
             name: "AgenttyTerminal",
             dependencies: ["AgenttyProtocol", .product(name: "SwiftTerm", package: "SwiftTerm")]
         ),
+        // Code editor with syntax coloring, Markdown preview and Mermaid
+        // diagrams, shared by the macOS and iOS apps.
+        .target(
+            name: "AgenttyEditor",
+            dependencies: [
+                .product(name: "Highlightr", package: "Highlightr"),
+                .product(name: "MarkdownUI", package: "swift-markdown-ui"),
+            ],
+            exclude: ["Resources/THIRD-PARTY.md"],
+            // Mermaid, to draw diagrams without a network.
+            resources: [.copy("Resources/mermaid.min.js")]
+        ),
         // Starts a program on a pseudo terminal. C, because it needs fork().
         .target(name: "CAgenttyPTY"),
         // macOS only: PTY ownership, session management, WebSocket server.
@@ -38,14 +51,10 @@ let package = Package(
             name: "AgenttyMac",
             dependencies: [
                 "AgenttyClient",
+                "AgenttyEditor",
                 "AgenttyHost",
                 "AgenttyTerminal",
-                .product(name: "Highlightr", package: "Highlightr"),
-                .product(name: "MarkdownUI", package: "swift-markdown-ui"),
-            ],
-            exclude: ["Resources/THIRD-PARTY.md"],
-            // Mermaid, to draw diagrams in Markdown previews without a network.
-            resources: [.copy("Resources/mermaid.min.js")]
+            ]
         ),
         .testTarget(name: "AgenttyProtocolTests", dependencies: ["AgenttyProtocol"]),
         .testTarget(name: "AgenttyHostTests", dependencies: ["AgenttyHost", "AgenttyClient"]),

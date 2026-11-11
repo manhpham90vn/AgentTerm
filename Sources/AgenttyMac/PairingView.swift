@@ -156,10 +156,13 @@ struct PairingView: View {
 
     private var devices: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("PAIRED DEVICES")
+            Text("PAIRED DEVICES (\(model.devices.count))")
                 .font(.system(size: 10.5, weight: .semibold))
                 .foregroundStyle(.secondary)
-            VStack(spacing: 0) {
+            // A long list scrolls in place, so the sheet never grows past the
+            // screen and hides what is under it.
+            ScrollView {
+              VStack(spacing: 0) {
                 ForEach(model.devices) { device in
                     HStack(spacing: 9) {
                         Image(systemName: "iphone")
@@ -181,11 +184,16 @@ struct PairingView: View {
                         Theme.hairline.frame(height: 1).padding(.leading, 34)
                     }
                 }
+              }
             }
+            .frame(height: min(CGFloat(model.devices.count) * Self.deviceRowHeight, Self.deviceRowHeight * 3.4))
             .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.black.opacity(0.22)))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    /// Height of one device in the list, its separator included.
+    private static let deviceRowHeight: CGFloat = 43
 
     private static let relative: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()

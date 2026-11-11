@@ -87,6 +87,8 @@ struct SessionsView: View {
                     FolderScreen(folder: folder)
                 case .file(let folder, let file, let staged):
                     PatchScreen(folder: folder, file: file, staged: staged)
+                case .document(let path):
+                    DocumentScreen(path: path)
                 case .allHistory:
                     HistoryList(folder: nil)
                         .background(Palette.canvas.ignoresSafeArea())

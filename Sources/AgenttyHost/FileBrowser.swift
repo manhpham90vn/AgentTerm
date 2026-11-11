@@ -1,30 +1,6 @@
 #if os(macOS)
+import AgenttyProtocol
 import Foundation
-
-/// One file or folder in a listing.
-public struct FileEntry: Identifiable, Equatable, Sendable {
-    public var path: String
-    public var name: String
-    public var isDirectory: Bool
-
-    public var id: String { path }
-
-    public init(path: String, name: String, isDirectory: Bool) {
-        self.path = path
-        self.name = name
-        self.isDirectory = isDirectory
-    }
-}
-
-/// What a file turned out to hold when it was opened.
-public enum FileContent: Equatable, Sendable {
-    case text(String)
-    /// An image the system can draw. The viewer loads it from the path.
-    case image
-    /// Not text in UTF-8, so not something to edit here.
-    case binary
-    case tooLarge(bytes: Int)
-}
 
 public enum FileBrowserError: Error, Equatable, CustomStringConvertible {
     case invalidName(String)
@@ -44,6 +20,16 @@ public enum FileBrowserError: Error, Equatable, CustomStringConvertible {
 public enum FileBrowser {
     /// Files larger than this are not opened in the editor.
     public static let maxTextBytes = 2 * 1024 * 1024
+    /// Images larger than this are not sent to another device.
+    public static let maxImageBytes = 8 * 1024 * 1024
+
+    /// The bytes of an image, to show it on a device that cannot read the
+    /// file itself. Nil when it is too large or cannot be read.
+    public static func imageData(_ path: String) -> Data? {
+        let url = URL(fileURLWithPath: path)
+        guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize, size <= maxImageBytes else { return nil }
+        return try? Data(contentsOf: url)
+    }
 
     /// Never listed: git's own data and Finder's litter.
     private static let skipped: Set<String> = [".git", ".DS_Store"]

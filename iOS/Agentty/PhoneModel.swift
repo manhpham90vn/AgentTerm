@@ -18,6 +18,15 @@ enum Route: Hashable {
     case file(folder: String, file: String, staged: Bool)
     /// Every conversation on the Mac.
     case allHistory
+    /// A file on the Mac, to read or edit.
+    case document(path: String)
+}
+
+/// A file on the Mac as it was last read.
+struct RemoteFile: Equatable {
+    var content: FileContent
+    /// The bytes of an image.
+    var data: Data?
 }
 
 struct HandoffPlan: Equatable {
@@ -56,6 +65,15 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var diffs: [String: DiffSnapshot] = [:]
     /// The diff of a file, by `patchKey`. A missing file is stored as nil.
     @Published private(set) var patches: [String: FileDiff?] = [:]
+    /// The files and folders in a folder of the Mac, by folder.
+    @Published private(set) var fileListings: [String: [FileEntry]] = [:]
+    /// Files of the Mac that were opened, by path.
+    @Published private(set) var remoteFiles: [String: RemoteFile] = [:]
+    /// The file being saved and not answered yet.
+    @Published private(set) var savingFile: String?
+    /// A file that was just created on the Mac, for the tree to open.
+    @Published var createdFile: String?
+    private var savingText: String?
     /// The commit message being written, by folder.
     @Published var commitDrafts: [String: String] = [:]
     /// The folder a commit was asked for and not answered yet.
@@ -188,6 +206,10 @@ final class PhoneModel: ObservableObject {
         patches = [:]
         commitDrafts = [:]
         committing = nil
+        fileListings = [:]
+        remoteFiles = [:]
+        savingFile = nil
+        createdFile = nil
         histories = [:]
         listing = nil
         handoffPlan = nil
@@ -354,6 +376,8 @@ final class PhoneModel: ObservableObject {
                 openCreatedSession = false
                 // So did a commit, if one was waiting. Its message is kept.
                 committing = nil
+                // And a save: the edits stay in the editor.
+                savingFile = nil
                 self.message = text
             }
         case .diff(let folder, let snapshot):
@@ -393,6 +417,16 @@ final class PhoneModel: ObservableObject {
             self.listing = listing
         case .handoffPlan(let id, let prompt):
             handoffPlan = HandoffPlan(id: id, prompt: prompt)
+        case .files(let directory, let entries):
+            fileListings[directory] = entries
+        case .file(let path, let content, let data):
+            remoteFiles[path] = RemoteFile(content: content, data: data)
+        case .fileSaved(let path):
+            if savingFile == path, let text = savingText { remoteFiles[path] = RemoteFile(content: .text(text), data: nil) }
+            savingFile = nil
+            savingText = nil
+        case .fileCreated(let path, let isDirectory):
+            if !isDirectory { createdFile = path }
         case .pairingCode, .devices:
             break
         }
@@ -460,6 +494,37 @@ final class PhoneModel: ObservableObject {
     func loadPatch(folder: String, file: String, staged: Bool) {
         pendingPatch = (folder, file, staged)
         connection?.send(.diffFile(path: folder, file: file, staged: staged))
+    }
+
+    // MARK: Files
+
+    func loadFiles(_ directory: String) {
+        connection?.send(.files(path: directory))
+    }
+
+    func loadFile(_ path: String) {
+        connection?.send(.readFile(path: path))
+    }
+
+    func saveFile(_ path: String, text: String) {
+        guard savingFile == nil else { return }
+        savingFile = path
+        savingText = text
+        connection?.send(.writeFile(path: path, text: text))
+    }
+
+    func createFile(named name: String, in directory: String, isDirectory: Bool) {
+        connection?.send(.createFile(directory: directory, name: name, isDirectory: isDirectory))
+    }
+
+    func renameFile(_ path: String, to name: String) {
+        remoteFiles[path] = nil
+        connection?.send(.renameFile(path: path, name: name))
+    }
+
+    func trashFile(_ path: String) {
+        remoteFiles[path] = nil
+        connection?.send(.trashFile(path: path))
     }
 
     /// Stages files for the next commit. No files means every change.

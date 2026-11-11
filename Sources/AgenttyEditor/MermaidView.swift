@@ -8,19 +8,29 @@ import WebKit
 /// network. The diagram's source is put into the page as text, never as
 /// markup, and Mermaid runs in its strict mode, which keeps scripts and
 /// click handlers out of diagrams.
-struct MermaidView: View {
+public struct MermaidView: View {
     let code: String
     /// The diagram's height once it is drawn. A guess until then.
     @State private var height: CGFloat = 160
 
-    var body: some View {
+    public init(code: String) {
+        self.code = code
+    }
+
+    public var body: some View {
         MermaidWebView(code: code, height: $height)
             .frame(height: height)
             .frame(maxWidth: .infinity)
     }
 }
 
-private struct MermaidWebView: NSViewRepresentable {
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+private typealias WebViewRepresentable = NSViewRepresentable
+#else
+private typealias WebViewRepresentable = UIViewRepresentable
+#endif
+
+private struct MermaidWebView: WebViewRepresentable {
     let code: String
     @Binding var height: CGFloat
 
@@ -32,26 +42,44 @@ private struct MermaidWebView: NSViewRepresentable {
 
     func makeCoordinator() -> Coordinator { Coordinator(height: $height) }
 
-    func makeNSView(context: Context) -> WKWebView {
+    private func makeWebView(_ coordinator: Coordinator) -> WKWebView {
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
-        configuration.userContentController.add(context.coordinator, name: "size")
+        configuration.userContentController.add(coordinator, name: "size")
         let webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.navigationDelegate = context.coordinator
+        webView.navigationDelegate = coordinator
         // Shows the panel's own background behind the diagram.
+        #if canImport(AppKit) && !targetEnvironment(macCatalyst)
         webView.setValue(false, forKey: "drawsBackground")
-        context.coordinator.load(code, into: webView)
+        #else
+        webView.isOpaque = false
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
+        // The page around it scrolls; the diagram is shown whole.
+        webView.scrollView.isScrollEnabled = false
+        #endif
+        coordinator.load(code, into: webView)
         return webView
     }
 
-    func updateNSView(_ webView: WKWebView, context: Context) {
-        context.coordinator.height = $height
-        if context.coordinator.shown != code { context.coordinator.load(code, into: webView) }
+    private func update(_ webView: WKWebView, _ coordinator: Coordinator) {
+        coordinator.height = $height
+        if coordinator.shown != code { coordinator.load(code, into: webView) }
     }
 
+    #if canImport(AppKit) && !targetEnvironment(macCatalyst)
+    func makeNSView(context: Context) -> WKWebView { makeWebView(context.coordinator) }
+    func updateNSView(_ webView: WKWebView, context: Context) { update(webView, context.coordinator) }
     static func dismantleNSView(_ webView: WKWebView, coordinator: Coordinator) {
         webView.configuration.userContentController.removeScriptMessageHandler(forName: "size")
     }
+    #else
+    func makeUIView(context: Context) -> WKWebView { makeWebView(context.coordinator) }
+    func updateUIView(_ webView: WKWebView, context: Context) { update(webView, context.coordinator) }
+    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        webView.configuration.userContentController.removeScriptMessageHandler(forName: "size")
+    }
+    #endif
 
     final class Coordinator: NSObject, WKScriptMessageHandler, WKNavigationDelegate {
         var height: Binding<CGFloat>
@@ -110,7 +138,11 @@ private struct MermaidWebView: NSViewRepresentable {
         /// A diagram has nowhere to go: links open in the browser instead.
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             if action.navigationType == .linkActivated, let url = action.request.url, ["http", "https"].contains(url.scheme?.lowercased()) {
+                #if canImport(AppKit) && !targetEnvironment(macCatalyst)
                 NSWorkspace.shared.open(url)
+                #else
+                UIApplication.shared.open(url)
+                #endif
                 decisionHandler(.cancel)
             } else {
                 decisionHandler(action.navigationType == .other ? .allow : .cancel)

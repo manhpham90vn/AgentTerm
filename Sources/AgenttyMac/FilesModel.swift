@@ -1,3 +1,5 @@
+import AgenttyProtocol
+import AgenttyEditor
 import AgenttyHost
 import AppKit
 import SwiftUI
@@ -14,9 +16,9 @@ struct OpenDocument: Equatable {
     var name: String { (path as NSString).lastPathComponent }
     var isText: Bool { if case .text = content { return true } else { return false } }
     var isDirty: Bool { isText && text != savedText }
-    var isMarkdown: Bool { ["md", "markdown", "mdx"].contains((path as NSString).pathExtension.lowercased()) }
+    var isMarkdown: Bool { FileLanguage.isMarkdown(path) }
     /// A file that is one Mermaid diagram.
-    var isMermaid: Bool { ["mmd", "mermaid"].contains((path as NSString).pathExtension.lowercased()) }
+    var isMermaid: Bool { FileLanguage.isMermaid(path) }
     /// Text that has a rendered form to look at besides its source.
     var hasPreview: Bool { isText && (isMarkdown || isMermaid) }
 }

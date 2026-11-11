@@ -1,10 +1,19 @@
-import AppKit
 import Highlightr
 import MarkdownUI
 import SwiftUI
 
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
+import AppKit
+public typealias PlatformFont = NSFont
+public typealias PlatformColor = NSColor
+#else
+import UIKit
+public typealias PlatformFont = UIFont
+public typealias PlatformColor = UIColor
+#endif
+
 /// Names highlight.js knows, by file name. Anything else is shown as plain text.
-enum FileLanguage {
+public enum FileLanguage {
     private static let byExtension: [String: String] = [
         "swift": "swift", "js": "javascript", "mjs": "javascript", "cjs": "javascript", "jsx": "javascript",
         "ts": "typescript", "tsx": "typescript", "py": "python", "pyi": "python", "rb": "ruby", "go": "go", "rs": "rust",
@@ -24,10 +33,26 @@ enum FileLanguage {
         "package.swift": "swift",
     ]
 
-    static func forFile(_ path: String) -> String {
+    public static func forFile(_ path: String) -> String {
         let name = (path as NSString).lastPathComponent.lowercased()
         return byName[name] ?? byExtension[(name as NSString).pathExtension] ?? "plaintext"
     }
+
+    public static func isMarkdown(_ path: String) -> Bool {
+        ["md", "markdown", "mdx"].contains((path as NSString).pathExtension.lowercased())
+    }
+
+    /// A file that is one Mermaid diagram.
+    public static func isMermaid(_ path: String) -> Bool {
+        ["mmd", "mermaid"].contains((path as NSString).pathExtension.lowercased())
+    }
+}
+
+/// Colors the editor and the previews share: the terminal's background, so a
+/// file next to a terminal does not look like another app.
+public enum EditorStyle {
+    public static let background = PlatformColor(red: 0.075, green: 0.078, blue: 0.098, alpha: 1)
+    public static let text = PlatformColor(white: 0.86, alpha: 1)
 }
 
 /// One highlighter for the app: it loads highlight.js into a JavaScript
@@ -42,29 +67,37 @@ enum Highlighting {
         return highlightr
     }()
 
-    static func font(size: CGFloat) -> NSFont { .monospacedSystemFont(ofSize: size, weight: .regular) }
+    static func font(size: CGFloat) -> PlatformFont { .monospacedSystemFont(ofSize: size, weight: .regular) }
+
+    /// Text storage that recolors what is edited, or a plain one if the
+    /// highlighter could not be loaded.
+    static func storage(for path: String, fontSize: CGFloat) -> NSTextStorage {
+        guard let highlightr = shared else { return NSTextStorage() }
+        highlightr.theme.setCodeFont(font(size: fontSize))
+        let highlighted = CodeAttributedString(highlightr: highlightr)
+        highlighted.language = FileLanguage.forFile(path)
+        return highlighted
+    }
 }
 
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
 /// A plain text editor with syntax coloring.
-struct CodeEditor: NSViewRepresentable {
+public struct CodeEditor: NSViewRepresentable {
     @Binding var text: String
     /// What the text belongs to. A change means another file was opened.
     let path: String
-    var fontSize: CGFloat = 12.5
+    var fontSize: CGFloat
 
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
+    public init(text: Binding<String>, path: String, fontSize: CGFloat = 12.5) {
+        _text = text
+        self.path = path
+        self.fontSize = fontSize
+    }
 
-    func makeNSView(context: Context) -> NSScrollView {
-        // The text storage is Highlightr's, which recolors what is edited.
-        let storage: NSTextStorage
-        if let highlightr = Highlighting.shared {
-            highlightr.theme.setCodeFont(Highlighting.font(size: fontSize))
-            let highlighted = CodeAttributedString(highlightr: highlightr)
-            highlighted.language = FileLanguage.forFile(path)
-            storage = highlighted
-        } else {
-            storage = NSTextStorage()
-        }
+    public func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    public func makeNSView(context: Context) -> NSScrollView {
+        let storage = Highlighting.storage(for: path, fontSize: fontSize)
         let layout = NSLayoutManager()
         storage.addLayoutManager(layout)
         // Lines are not wrapped: code reads better scrolled sideways.
@@ -77,8 +110,8 @@ struct CodeEditor: NSViewRepresentable {
         textView.isRichText = false
         textView.allowsUndo = true
         textView.font = Highlighting.font(size: fontSize)
-        textView.textColor = NSColor(white: 0.86, alpha: 1)
-        textView.backgroundColor = TerminalBackground.color
+        textView.textColor = EditorStyle.text
+        textView.backgroundColor = EditorStyle.background
         textView.insertionPointColor = .white
         textView.drawsBackground = true
         textView.textContainerInset = NSSize(width: 8, height: 8)
@@ -102,13 +135,13 @@ struct CodeEditor: NSViewRepresentable {
         scroll.hasVerticalScroller = true
         scroll.hasHorizontalScroller = true
         scroll.drawsBackground = true
-        scroll.backgroundColor = TerminalBackground.color
+        scroll.backgroundColor = EditorStyle.background
         context.coordinator.textView = textView
         context.coordinator.path = path
         return scroll
     }
 
-    func updateNSView(_ scroll: NSScrollView, context: Context) {
+    public func updateNSView(_ scroll: NSScrollView, context: Context) {
         context.coordinator.parent = self
         guard let textView = context.coordinator.textView else { return }
         if context.coordinator.path != path {
@@ -124,7 +157,7 @@ struct CodeEditor: NSViewRepresentable {
         }
     }
 
-    final class Coordinator: NSObject, NSTextViewDelegate {
+    public final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CodeEditor
         weak var textView: NSTextView?
         var path = ""
@@ -133,16 +166,89 @@ struct CodeEditor: NSViewRepresentable {
             self.parent = parent
         }
 
-        func textDidChange(_ notification: Notification) {
+        public func textDidChange(_ notification: Notification) {
             guard let textView else { return }
             if parent.text != textView.string { parent.text = textView.string }
         }
     }
 }
+#else
+/// A plain text editor with syntax coloring.
+public struct CodeEditor: UIViewRepresentable {
+    @Binding var text: String
+    /// What the text belongs to. A change means another file was opened.
+    let path: String
+    var fontSize: CGFloat
 
-enum TerminalBackground {
-    static let color = NSColor(srgbRed: 0.075, green: 0.078, blue: 0.098, alpha: 1)
+    public init(text: Binding<String>, path: String, fontSize: CGFloat = 13) {
+        _text = text
+        self.path = path
+        self.fontSize = fontSize
+    }
+
+    public func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    public func makeUIView(context: Context) -> UITextView {
+        let storage = Highlighting.storage(for: path, fontSize: fontSize)
+        let layout = NSLayoutManager()
+        storage.addLayoutManager(layout)
+        // Lines wrap: a phone is too narrow to scroll code sideways while typing.
+        let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        layout.addTextContainer(container)
+
+        let textView = UITextView(frame: .zero, textContainer: container)
+        textView.delegate = context.coordinator
+        textView.font = Highlighting.font(size: fontSize)
+        textView.textColor = EditorStyle.text
+        textView.backgroundColor = EditorStyle.background
+        textView.tintColor = .white
+        textView.textContainerInset = UIEdgeInsets(top: 10, left: 8, bottom: 10, right: 8)
+        textView.alwaysBounceVertical = true
+        textView.keyboardDismissMode = .interactive
+        textView.keyboardAppearance = .dark
+        // Code is not prose: none of the typing aids.
+        textView.autocapitalizationType = .none
+        textView.autocorrectionType = .no
+        textView.spellCheckingType = .no
+        textView.smartQuotesType = .no
+        textView.smartDashesType = .no
+        textView.smartInsertDeleteType = .no
+        textView.accessibilityIdentifier = "code-editor"
+        textView.text = text
+        context.coordinator.path = path
+        return textView
+    }
+
+    public func updateUIView(_ textView: UITextView, context: Context) {
+        context.coordinator.parent = self
+        if context.coordinator.path != path {
+            context.coordinator.path = path
+            (textView.textStorage as? CodeAttributedString)?.language = FileLanguage.forFile(path)
+            textView.text = text
+            textView.undoManager?.removeAllActions()
+            textView.setContentOffset(.zero, animated: false)
+        } else if textView.text != text, textView.markedTextRange == nil {
+            // Changed from outside the editor, such as discarding edits. Not
+            // while a character is being composed, which this would break.
+            textView.text = text
+        }
+    }
+
+    public final class Coordinator: NSObject, UITextViewDelegate {
+        var parent: CodeEditor
+        var path = ""
+
+        init(_ parent: CodeEditor) {
+            self.parent = parent
+        }
+
+        public func textViewDidChange(_ textView: UITextView) {
+            if parent.text != textView.text { parent.text = textView.text }
+        }
+    }
 }
+#endif
 
 /// Colors code blocks in a Markdown preview with the editor's highlighter.
 struct PreviewCodeHighlighter: CodeSyntaxHighlighter {
@@ -153,17 +259,26 @@ struct PreviewCodeHighlighter: CodeSyntaxHighlighter {
             let name = language?.lowercased()
             let known = name.flatMap { highlightr.supportedLanguages().contains($0) ? $0 : nil }
             guard let highlighted = highlightr.highlight(code, as: known ?? "plaintext") else { return nil }
+            #if canImport(AppKit) && !targetEnvironment(macCatalyst)
             return try? AttributedString(highlighted, including: \.appKit)
+            #else
+            return try? AttributedString(highlighted, including: \.uiKit)
+            #endif
         }
         return attributed.map { Text($0) } ?? Text(code)
     }
 }
 
 /// A rendered Markdown document.
-struct MarkdownPreview: View {
+public struct MarkdownPreview: View {
     let text: String
     /// Folder of the document, so links and images relative to it resolve.
     let baseURL: URL?
+
+    public init(text: String, baseURL: URL?) {
+        self.text = text
+        self.baseURL = baseURL
+    }
 
     /// GitHub's look, with code blocks marked "mermaid" drawn as diagrams.
     private static let theme = MarkdownUI.Theme.gitHub
@@ -189,7 +304,7 @@ struct MarkdownPreview: View {
             }
         }
 
-    var body: some View {
+    public var body: some View {
         ScrollView {
             Markdown(text, baseURL: baseURL)
                 .markdownTheme(Self.theme)
@@ -198,6 +313,6 @@ struct MarkdownPreview: View {
                 .padding(16)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Theme.canvas)
+        .background(Color(EditorStyle.background))
     }
 }

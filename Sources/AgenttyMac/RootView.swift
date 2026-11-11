@@ -1,3 +1,4 @@
+import AgenttyEditor
 import AgenttyProtocol
 import AgenttyTerminal
 import SwiftUI

@@ -2,8 +2,8 @@ import AgenttyProtocol
 import AgenttyTerminal
 import SwiftUI
 
-/// A folder's git changes and the conversations agents had in it: what the
-/// Mac shows in its side panel.
+/// A folder's git changes, the conversations agents had in it and its
+/// files: what the Mac shows in its side panel.
 struct FolderScreen: View {
     @EnvironmentObject private var model: PhoneModel
     let folder: String
@@ -14,12 +14,15 @@ struct FolderScreen: View {
             Picker("Show", selection: $tab) {
                 Text("Git").tag("git")
                 Text("History").tag("history")
+                Text("Files").tag("files")
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
             if tab == "history" {
                 HistoryList(folder: folder)
+            } else if tab == "files" {
+                FilesList(folder: folder)
             } else {
                 ChangesList(folder: folder)
             }

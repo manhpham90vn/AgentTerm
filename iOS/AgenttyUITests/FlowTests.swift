@@ -149,6 +149,37 @@ final class FlowTests: XCTestCase {
             XCTAssertTrue(app.staticTexts["No uncommitted changes."].waitForExistence(timeout: 15), "the commit was not made")
             capture("7b4-committed")
 
+            // The folder's files: open one, edit it, save it, make a new one.
+            app.buttons["Files"].tap()
+            XCTAssertTrue(app.staticTexts["notes.txt"].waitForExistence(timeout: 10), "the file is not listed")
+            capture("7b5-files")
+            app.staticTexts["notes.txt"].tap()
+            let editor = app.textViews["code-editor"]
+            XCTAssertTrue(editor.waitForExistence(timeout: 10), "the editor did not open")
+            XCTAssertTrue((editor.value as? String)?.contains("second line") == true, "the file's text is not shown")
+            editor.tap()
+            editor.typeText("edited ")
+            XCTAssertTrue(app.buttons["Save"].waitForExistence(timeout: 5))
+            capture("7b6-editing")
+            app.buttons["Save"].tap()
+            let saved = NSPredicate(format: "exists == false")
+            expectation(for: saved, evaluatedWith: app.buttons["Save"])
+            waitForExpectations(timeout: 10)
+            app.navigationBars.buttons.firstMatch.tap()
+
+            app.buttons["New File"].tap()
+            let name = app.alerts.textFields.firstMatch
+            XCTAssertTrue(name.waitForExistence(timeout: 5))
+            name.typeText("plan.md")
+            app.alerts.buttons["Create"].tap()
+            XCTAssertTrue(app.navigationBars["plan.md"].waitForExistence(timeout: 10), "the new file did not open")
+            capture("7b7-new-file")
+            app.navigationBars.buttons.firstMatch.tap()
+            XCTAssertTrue(app.staticTexts["plan.md"].waitForExistence(timeout: 10))
+            // The edit is a change git sees.
+            app.buttons["Git"].tap()
+            XCTAssertTrue(app.buttons["Stage notes.txt"].waitForExistence(timeout: 10), "the saved edit is not a change")
+
             app.buttons["History"].tap()
             let conversation = app.staticTexts["write tests for the parser"]
             XCTAssertTrue(conversation.waitForExistence(timeout: 10), "the conversation is not listed")

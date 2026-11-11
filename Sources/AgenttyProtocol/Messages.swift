@@ -161,6 +161,20 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case gitUnstage(path: String, files: [String])
     /// Commits what is staged.
     case gitCommit(path: String, message: String)
+    /// Asks for the files and folders in a folder. Answered with `files`.
+    case files(path: String)
+    /// Asks for what a file holds. Answered with `file`.
+    case readFile(path: String)
+    /// Replaces a file's text. Answered with `fileSaved`.
+    case writeFile(path: String, text: String)
+    /// Creates an empty file or a folder. Answered with `fileCreated`, then
+    /// with `files` for the folder it is in.
+    case createFile(directory: String, name: String, isDirectory: Bool)
+    /// Gives a file or folder another name in the same place. Answered with
+    /// `files` for the folder it is in.
+    case renameFile(path: String, name: String)
+    /// Moves a file or folder to the Mac's Trash. Answered with `files`.
+    case trashFile(path: String)
     /// Asks for the conversations agents had in a folder, or everywhere on
     /// the host when `path` is nil.
     case history(path: String?)
@@ -203,6 +217,12 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case directory(DirectoryListing)
     /// Answer to `handoffPlan`: the prompt, and an id to hand off with.
     case handoffPlan(id: String, prompt: String)
+    /// The files and folders in a folder.
+    case files(path: String, entries: [FileEntry])
+    /// What a file holds. `data` carries the bytes of an image.
+    case file(path: String, content: FileContent, data: Data?)
+    case fileSaved(path: String)
+    case fileCreated(path: String, isDirectory: Bool)
 }
 
 public enum MessageCoding {

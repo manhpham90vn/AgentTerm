@@ -379,6 +379,64 @@ final class EndToEndTests: XCTestCase {
         waitUntil("not a repository") { phone.messages.contains(.diff(path: "/", snapshot: .notARepository)) }
     }
 
+    func testBrowsingAndEditingFilesFromAClient() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentty-e2e-files-\(UUID().uuidString)").standardizedFileURL
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("src"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try "xin chào\n".write(to: directory.appendingPathComponent("ghi chú.md"), atomically: true, encoding: .utf8)
+        try Data([0x89, 0x50, 0x4e, 0x47, 0, 1, 2]).write(to: directory.appendingPathComponent("a.png"))
+        let root = directory.path
+
+        let phone = connect("phone")
+        /// The newest listing of a folder the phone was sent.
+        func names(in folder: String) -> [String]? {
+            phone.messages.compactMap { message -> [String]? in
+                if case .files(folder, let entries) = message { return entries.map { $0.name + ($0.isDirectory ? "/" : "") } }
+                return nil
+            }.last
+        }
+        func content(of path: String) -> (FileContent, Data?)? {
+            phone.messages.compactMap { message -> (FileContent, Data?)? in
+                if case .file(path, let content, let data) = message { return (content, data) }
+                return nil
+            }.last
+        }
+
+        phone.connection.send(.files(path: root))
+        waitUntil("listing") { names(in: root) == ["src/", "a.png", "ghi chú.md"] }
+
+        phone.connection.send(.readFile(path: root + "/ghi chú.md"))
+        waitUntil("text") { content(of: root + "/ghi chú.md")?.0 == .text("xin chào\n") }
+        phone.connection.send(.readFile(path: root + "/a.png"))
+        waitUntil("image") { content(of: root + "/a.png")?.1 == Data([0x89, 0x50, 0x4e, 0x47, 0, 1, 2]) }
+
+        phone.connection.send(.writeFile(path: root + "/ghi chú.md", text: "đã sửa\n"))
+        waitUntil("saved") { phone.messages.contains(.fileSaved(path: root + "/ghi chú.md")) }
+        XCTAssertEqual(try String(contentsOfFile: root + "/ghi chú.md", encoding: .utf8), "đã sửa\n")
+
+        phone.connection.send(.createFile(directory: root + "/src", name: "main.swift", isDirectory: false))
+        waitUntil("created") { phone.messages.contains(.fileCreated(path: root + "/src/main.swift", isDirectory: false)) }
+        waitUntil("listed") { names(in: root + "/src") == ["main.swift"] }
+        phone.connection.send(.createFile(directory: root, name: "docs", isDirectory: true))
+        waitUntil("folder") { names(in: root) == ["docs/", "src/", "a.png", "ghi chú.md"] }
+
+        phone.connection.send(.renameFile(path: root + "/src/main.swift", name: "app.swift"))
+        waitUntil("renamed") { names(in: root + "/src") == ["app.swift"] }
+
+        // A name that is taken is refused and nothing is overwritten.
+        phone.connection.send(.createFile(directory: root, name: "ghi chú.md", isDirectory: false))
+        waitUntil("refused") {
+            phone.messages.contains { if case .error(let text) = $0 { return text.contains("already exists") } else { return false } }
+        }
+        XCTAssertEqual(try String(contentsOfFile: root + "/ghi chú.md", encoding: .utf8), "đã sửa\n")
+        // Nor can a name reach out of the folder.
+        phone.connection.send(.createFile(directory: root, name: "../escape.txt", isDirectory: false))
+        waitUntil("refused again") {
+            phone.messages.contains { if case .error(let text) = $0 { return text.contains("cannot be used as a name") } else { return false } }
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.deletingLastPathComponent().appendingPathComponent("escape.txt").path))
+    }
+
     func testStagingAndCommittingFromAClient() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentty-e2e-commit-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

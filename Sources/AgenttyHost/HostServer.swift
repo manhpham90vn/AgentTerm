@@ -412,6 +412,32 @@ public final class HostServer {
                 server.diffCache[path] = (snapshot, Date())
                 server.send(.diffFile(path: path, file: snapshot.files.first { $0.path == file && $0.isStaged == staged }), to: client)
             }
+        case .files(let path):
+            work(for: client, { FileBrowser.list(path) }) { server, client, entries in
+                server.send(.files(path: path, entries: entries), to: client)
+            }
+        case .readFile(let path):
+            work(for: client, { () -> (FileContent, Data?) in
+                let content = FileBrowser.read(path)
+                guard content == .image else { return (content, nil) }
+                // The client cannot read the Mac's disk, so the picture travels.
+                if let data = FileBrowser.imageData(path) { return (.image, data) }
+                let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+                return (.tooLarge(bytes: size), nil)
+            }) { server, client, result in
+                server.send(.file(path: path, content: result.0, data: result.1), to: client)
+            }
+        case .writeFile(let path, let text):
+            files(for: client, in: nil, { try FileBrowser.write(text, to: path); return .fileSaved(path: path) })
+        case .createFile(let directory, let name, let isDirectory):
+            files(for: client, in: directory) {
+                let path = isDirectory ? try FileBrowser.createFolder(named: name, in: directory) : try FileBrowser.createFile(named: name, in: directory)
+                return .fileCreated(path: path, isDirectory: isDirectory)
+            }
+        case .renameFile(let path, let name):
+            files(for: client, in: (path as NSString).deletingLastPathComponent) { try FileBrowser.rename(path, to: name); return nil }
+        case .trashFile(let path):
+            files(for: client, in: (path as NSString).deletingLastPathComponent) { try FileBrowser.trash(path); return nil }
         case .gitStage(let path, let files):
             git(for: client, in: path) { GitActions.stage(files, in: path) }
         case .gitUnstage(let path, let files):
@@ -486,6 +512,19 @@ public final class HostServer {
             server.diffCache[path] = (result.1, Date())
             if let problem = result.0 { server.send(.error(problem), to: client) }
             server.send(.diff(path: path, snapshot: result.1.withoutPatches), to: client)
+        }
+    }
+
+    /// Runs a change to the files, answers with what it returns or with the
+    /// problem, then with the folder's listing as it is now.
+    private func files(for client: Client, in directory: String?, _ action: @escaping () throws -> ServerMessage?) {
+        work(for: client, { () -> (ServerMessage?, [FileEntry]?) in
+            var answer: ServerMessage?
+            do { answer = try action() } catch { answer = .error("\(error)") }
+            return (answer, directory.map { FileBrowser.list($0) })
+        }) { server, client, result in
+            if let answer = result.0 { server.send(answer, to: client) }
+            if let directory, let entries = result.1 { server.send(.files(path: directory, entries: entries), to: client) }
         }
     }
 

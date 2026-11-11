@@ -22,6 +22,8 @@ targets:
         product: AgenttyClient
       - package: Agentty
         product: AgenttyTerminal
+      - package: Agentty
+        product: AgenttyEditor
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: click.manhdev.agentty.ios

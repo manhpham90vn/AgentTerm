@@ -135,3 +135,28 @@ public struct DirectoryListing: Codable, Equatable, Sendable {
         self.isHome = isHome
     }
 }
+
+/// One file or folder in a listing.
+public struct FileEntry: Codable, Identifiable, Equatable, Sendable {
+    public var path: String
+    public var name: String
+    public var isDirectory: Bool
+
+    public var id: String { path }
+
+    public init(path: String, name: String, isDirectory: Bool) {
+        self.path = path
+        self.name = name
+        self.isDirectory = isDirectory
+    }
+}
+
+/// What a file turned out to hold when it was opened.
+public enum FileContent: Codable, Equatable, Sendable {
+    case text(String)
+    /// An image the system can draw.
+    case image
+    /// Not text in UTF-8, so not something to edit here.
+    case binary
+    case tooLarge(bytes: Int)
+}
