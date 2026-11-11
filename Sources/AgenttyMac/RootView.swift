@@ -211,6 +211,7 @@ struct CenterView: View {
                 } else if let controller = model.currentController {
                     VStack(spacing: 0) {
                         SessionTabs()
+                        let info = model.sessions.first { $0.id == controller.session }
                         if let size = model.foreignSizes[controller.session] {
                             ForeignSizeBanner(size: size)
                         }
@@ -222,6 +223,12 @@ struct CenterView: View {
                             .padding(.leading, foreign == nil ? 10 : 0)
                             .padding(.top, foreign == nil ? 6 : 0)
                             .background(TerminalAreaReader(insets: foreign == nil ? .zero : CGSize(width: 10, height: 6)))
+                        if let info, let agent = info.agent {
+                            // What the agent's session has used, under its terminal.
+                            Theme.hairline.frame(height: 1)
+                            UsageBar(agent: agent, name: info.title, usage: info.usage)
+                                .background(Theme.panel)
+                        }
                     }
                 } else {
                     VStack(spacing: 0) {

@@ -22,6 +22,11 @@ public final class HostServer {
         public var devicesFile: URL?
         /// Home folder whose agent files hold the conversation history.
         public var home: String
+        /// Path of `agenttyd`, which Claude Code sessions run as their status
+        /// line to report their usage. `nil` leaves Claude Code as it is.
+        public var statusLineTool: String?
+        /// Where those reports are kept, one file per session.
+        public var usageDirectory: URL?
 
         public init(
             port: UInt16 = agenttyDefaultPort,
@@ -31,7 +36,9 @@ public final class HostServer {
             detectAgents: @escaping () -> [AgentInfo] = AgentDetector.detect,
             foldersFile: URL? = nil,
             devicesFile: URL? = nil,
-            home: String = NSHomeDirectory()
+            home: String = NSHomeDirectory(),
+            statusLineTool: String? = nil,
+            usageDirectory: URL? = nil
         ) {
             self.port = port
             self.token = token
@@ -41,6 +48,8 @@ public final class HostServer {
             self.foldersFile = foldersFile
             self.devicesFile = devicesFile
             self.home = home
+            self.statusLineTool = statusLineTool
+            self.usageDirectory = usageDirectory
         }
     }
 
@@ -563,6 +572,10 @@ public final class HostServer {
 
     /// Looks up what each agent session is about and tells the clients when
     /// a session's name changed. Reads the agents' files, so off this queue.
+    private func usageFile(for id: SessionID) -> URL? {
+        configuration.usageDirectory?.appendingPathComponent("session-\(id).json")
+    }
+
     private func refreshSummaries() {
         guard !summarizing else { return }
         let running = sessions.values.compactMap { session -> SessionSummaries.Running? in
@@ -575,21 +588,43 @@ public final class HostServer {
         guard !running.isEmpty else { return }
         summarizing = true
         let home = configuration.home
+        var reports: [SessionID: URL] = [:]
+        for session in running where session.agent == "claude" { reports[session.id] = usageFile(for: session.id) }
         workQueue.async { [weak self] in
             var conversations: [Conversation] = []
             for folder in Set(running.map(\.cwd)) {
                 conversations += AgentHistory.conversations(in: folder, home: home)
             }
             let matches = SessionSummaries.assign(running, conversations: conversations)
+            var usage: [SessionID: SessionUsage] = [:]
+            for (id, conversation) in matches {
+                if let file = conversation.source { usage[id] = AgentUsage.read(agent: conversation.agent, file: file) }
+            }
+            // What Claude Code reported itself says more: its limits, and
+            // how large its context is.
+            for (id, file) in reports {
+                if let data = try? Data(contentsOf: file), let reported = StatusLineRelay.usage(from: data) { usage[id] = reported }
+            }
             self?.queue.async {
                 guard let self else { return }
                 self.summarizing = false
                 var changed = false
+                for (id, used) in usage where matches[id] == nil {
+                    // Usage can be known before the conversation is.
+                    guard let session = self.sessions[id], session.info.usage != used else { continue }
+                    session.info.usage = used
+                    changed = true
+                }
                 for (id, conversation) in matches {
                     guard let session = self.sessions[id] else { continue }
                     if session.info.summary != conversation.title || session.info.conversationID != conversation.sessionID {
                         session.info.summary = conversation.title
                         session.info.conversationID = conversation.sessionID
+                        changed = true
+                    }
+                    // A read that found nothing keeps what was known.
+                    if let used = usage[id], session.info.usage != used {
+                        session.info.usage = used
                         changed = true
                     }
                 }
@@ -692,11 +727,18 @@ public final class HostServer {
             cwd = HostEnvironment.homeDirectory
         }
         let size = request.size.clamped
+        let id = nextSessionID
+        var command = request.command
+        // Claude Code reports its usage through its status line.
+        if SessionSummaries.agent(forCommand: command) == "claude", let tool = configuration.statusLineTool, let file = usageFile(for: id) {
+            try? FileManager.default.removeItem(at: file)
+            command = (command ?? "") + StatusLineRelay.launchArguments(tool: tool, file: file.path)
+        }
         let process: PTYProcess
         do {
             process = try PTYProcess(
                 executable: HostEnvironment.shell,
-                arguments: HostEnvironment.shellArguments(command: request.command),
+                arguments: HostEnvironment.shellArguments(command: command),
                 environment: HostEnvironment.sessionEnvironment(),
                 cwd: cwd,
                 size: size,
@@ -707,7 +749,6 @@ public final class HostServer {
             return
         }
 
-        let id = nextSessionID
         nextSessionID += 1
         let fallbackTitle = request.command?.split(separator: " ").first.map(String.init)
             ?? (HostEnvironment.shell as NSString).lastPathComponent
@@ -773,6 +814,7 @@ public final class HostServer {
 
     private func sessionExited(_ id: SessionID, status: Int32) {
         guard let session = sessions.removeValue(forKey: id) else { return }
+        if let file = usageFile(for: id) { try? FileManager.default.removeItem(at: file) }
         for clientID in session.arbiter.clients {
             guard let client = clients[clientID] else { continue }
             client.attached.remove(id)

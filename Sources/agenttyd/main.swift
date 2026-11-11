@@ -14,6 +14,16 @@ var listenOnTailscale = true
 var home = NSHomeDirectory()
 var arguments = CommandLine.arguments.dropFirst()
 
+// `agenttyd statusline <file>` is what Claude Code sessions started by
+// Agentty run as their status line. See StatusLineRelay.
+if arguments.first == "statusline" {
+    arguments.removeFirst()
+    guard let file = arguments.popFirst() else { fail("statusline needs a file", status: 2) }
+    let output = StatusLineRelay.run(input: FileHandle.standardInput.readDataToEndOfFile(), file: file)
+    FileHandle.standardOutput.write(output)
+    exit(0)
+}
+
 // `agenttyd pairing-link` asks the running daemon for a pairing code and
 // prints the link an iPhone can pair with. Meant for the iOS Simulator, which
 // has no camera, and for tests.
@@ -78,7 +88,7 @@ while let argument = arguments.popFirst() {
 let server: HostServer
 do {
     let token = try HostEnvironment.loadOrCreateToken()
-    server = HostServer(configuration: .init(port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home))
+    server = HostServer(configuration: .init(port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home, statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory))
     let bound = try server.start()
     print("agenttyd listening on 127.0.0.1:\(bound)")
 } catch {

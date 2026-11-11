@@ -20,6 +20,9 @@ public enum HostEnvironment {
 
     public static var foldersFile: URL { supportDirectory.appendingPathComponent("folders.json") }
 
+    /// What Claude Code sessions report about their usage, one file each.
+    public static var usageDirectory: URL { supportDirectory.appendingPathComponent("usage", isDirectory: true) }
+
     public static var homeDirectory: String { NSHomeDirectory() }
 
     /// The user's login shell.

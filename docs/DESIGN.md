@@ -270,6 +270,31 @@ text, and Mermaid runs with `securityLevel: 'strict'`.
 Highlightr and `AgenttyEditor` each bring a resource bundle, which
 `scripts/bundle-mac.sh` copies into the app's `Contents/Resources`.
 
+## Usage
+
+`SessionInfo.usage` carries a `SessionUsage`: model, context tokens and
+window, limits (window in minutes, percent used, reset time), premium
+requests. The host fills it on the same six-second timer that names
+sessions, so both apps get it with the session list.
+
+`AgentUsage` reads the end of the conversation's file, the last 768 KB:
+Claude Code's last reply with a `usage` object, Codex's last `token_count`
+event (which carries `rate_limits`), Copilot's last `session.usage_record`,
+Antigravity's last step with `input_tokens`.
+
+Claude Code writes its rate limits nowhere, but hands them to its status
+line command. So a session whose command is `claude` is started with
+`--settings '{"statusLine":{"type":"command","command":"<agenttyd> statusline <file>"}}'`.
+`StatusLineRelay` saves the JSON it is given to `<state>/usage/session-<id>.json`,
+then runs the status line found in the project's or the user's settings
+with the same input and prints what that prints. The host prefers this
+report over the conversation file, since it has the limits and the size of
+the context window. The file is removed when the session ends.
+
+The other way to get these numbers, calling the services' usage endpoints
+with the agents' sign-in tokens, was left out on purpose: it would mean
+reading another app's credentials.
+
 ## Conversation history
 
 `AgentHistory` reads the files each agent CLI keeps about its own

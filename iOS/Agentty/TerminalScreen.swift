@@ -22,6 +22,10 @@ struct TerminalScreen: View {
                     .id(ObjectIdentifier(controller))
                     .padding(.leading, model.foreignSize == nil ? 6 : 0)
                     .padding(.top, model.foreignSize == nil ? 4 : 0)
+                if let info = model.session(session), let agent = info.agent {
+                    UsageBar(agent: agent, name: info.title, usage: info.usage, compact: true)
+                        .background(Palette.panel)
+                }
                 KeyBar(controller: controller)
                 ComposeBar(controller: controller)
             } else {

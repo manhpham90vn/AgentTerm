@@ -42,10 +42,12 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
     public var summary: String?
     /// The agent's own id of that conversation, once it is known.
     public var conversationID: String?
+    /// What the conversation has used, as far as the agent records it.
+    public var usage: SessionUsage?
 
     public init(
         id: SessionID, title: String, cwd: String, size: TermSize, createdAt: Date,
-        agent: String? = nil, summary: String? = nil, conversationID: String? = nil
+        agent: String? = nil, summary: String? = nil, conversationID: String? = nil, usage: SessionUsage? = nil
     ) {
         self.id = id
         self.title = title
@@ -55,6 +57,7 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
         self.agent = agent
         self.summary = summary
         self.conversationID = conversationID
+        self.usage = usage
     }
 
     /// What to call the session in a list: its summary, or its title until

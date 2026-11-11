@@ -59,6 +59,30 @@ itself.
 - The name and the agent's icon are the same on the Mac (folder list and
   tabs) and on the iPhone.
 
+### Usage
+
+Under an agent's terminal, on the Mac and on the iPhone, one line says what
+the session has used: the model, how full its context is, and what is left
+of the account's limits with when each starts over, the figures the agent's
+own `/usage` or `/status` shows.
+
+| Agent | Context | Limits left and reset time |
+|---|---|---|
+| Claude Code | Tokens and share of the window | Five-hour and weekly, for claude.ai subscribers, after the session's first reply |
+| Codex | Tokens and share of the window | Five-hour and weekly, after the session's first reply |
+| Copilot CLI | Tokens and share of the window | Not recorded. Premium requests spent in the session are shown |
+| Antigravity | Tokens | Not recorded |
+
+A limit turns amber at 70% used and red at 90%. The line updates every few
+seconds. Agentty reads only what the agents themselves record or report on
+this Mac. It does not read their sign-in or ask their services anything.
+
+For Claude Code this takes a status line command of Agentty's own on the
+sessions Agentty starts. A status line the user has set up still runs and
+shows as before. For someone without one, Claude Code hides some of its
+keyboard hints once any status line is set, which is Claude Code's doing.
+A `claude` typed by hand in a shell session is not covered.
+
 ### Terminal size
 
 - The terminal resizes to fit the device being used. Opening a session on the
