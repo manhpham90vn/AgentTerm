@@ -36,6 +36,8 @@ end
 platform :ios do
   desc "Build the iPhone app, signed for the App Store"
   lane :build do |options|
+    # On a CI runner: a keychain for the run, which match fills. Does nothing elsewhere.
+    setup_ci
     key = asc_key
     team = ENV.fetch("APPLE_TEAM_ID")
     Dir.chdir(File.join(ROOT, "iOS")) { sh("xcodegen", "generate") }
@@ -135,7 +137,7 @@ platform :mac do
     dmg = sign
     # Uploads the disk image to Apple's notary service, waits for the
     # verdict and staples the ticket to it.
-    notarize(package: dmg, bundle_id: APP_ID, api_key: asc_key, print_log: true)
+    notarize(package: dmg, api_key: asc_key, print_log: true)
     sh("spctl", "--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=2", dmg)
     UI.success("Notarized #{dmg}")
   end

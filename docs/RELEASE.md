@@ -59,3 +59,23 @@ for the verdict, staples the ticket to it and checks it with `spctl`.
 
 The app is built for the Mac it is built on (Apple silicon on an Apple
 silicon Mac). There is no universal build yet.
+
+## From GitHub Actions
+
+`.github/workflows/release.yml` runs the same lanes on GitHub's runners.
+Pushing a tag such as `v0.2.0` releases both apps: the Mac disk image goes
+on a GitHub release of that tag with its checksum, the iPhone app goes to
+TestFlight. A version with a suffix (`v0.2.0-beta.1`) makes the GitHub
+release a prerelease. The workflow can also be run by hand with a version,
+for one of the two apps or both.
+
+Its secrets are set from the dotfiles repo, which shows what it would set
+before setting anything:
+
+```sh
+scripts/sync-agentterm.sh            # in the dotfiles repo: dry run
+scripts/sync-agentterm.sh --apply
+```
+
+`.github/workflows/ci.yml` builds the package and runs its tests on every
+push and pull request.
