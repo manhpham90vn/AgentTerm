@@ -30,6 +30,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var foreignSizes: [SessionID: TermSize] = [:]
     @Published private(set) var diff: DiffSnapshot?
     @Published var selectedDiffFile: String?
+    /// Past agent conversations of the selected folder. `nil` while loading.
+    @Published private(set) var history: [Conversation]?
     @Published var showDiff = true
     @Published var showPairing = false
     @Published private(set) var lastError: String?
@@ -42,6 +44,7 @@ final class AppModel: ObservableObject {
     private var selectNextAttached = false
     private var diffTimer: Timer?
     private var diffGeneration = 0
+    private var historyGeneration = 0
     private let foldersKey = "folders"
     private var pendingFolderSelection: String?
 
@@ -252,7 +255,37 @@ final class AppModel: ObservableObject {
     private func folderChanged() {
         diff = nil
         selectedDiffFile = nil
+        history = nil
         refreshDiff()
+        refreshHistory()
+    }
+
+    // MARK: History
+
+    func refreshHistory() {
+        guard let directory = selectedFolder else {
+            history = []
+            return
+        }
+        historyGeneration += 1
+        let generation = historyGeneration
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let found = AgentHistory.conversations(in: directory)
+            DispatchQueue.main.async {
+                guard let self, generation == self.historyGeneration, self.selectedFolder == directory else { return }
+                if self.history != found { self.history = found }
+            }
+        }
+    }
+
+    /// Reopens a past conversation in its agent, in a new session.
+    func resume(_ conversation: Conversation) {
+        guard status == .connected else { return }
+        lastError = nil
+        selectNextAttached = true
+        let size = currentController?.naturalSize ?? TermSize(cols: 100, rows: 30)
+        let name = agents.first { $0.id == conversation.agent }?.name
+        connection?.send(.create(CreateRequest(command: conversation.resumeCommand, cwd: conversation.cwd, title: name, size: size)))
     }
 
     func refreshDiff() {

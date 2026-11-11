@@ -25,14 +25,15 @@ struct DiffView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text("CHANGES")
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.secondary)
             if let branch = model.diff?.branch {
                 Label(branch, systemImage: "arrow.triangle.branch")
-                    .font(.system(size: 11))
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
+            } else {
+                Text("Changes")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             if let files = model.diff?.files, !files.isEmpty {
@@ -54,7 +55,7 @@ struct DiffView: View {
             .help("Refresh")
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        .padding(.vertical, 9)
     }
 
     @ViewBuilder

@@ -3,7 +3,7 @@ import Foundation
 import Network
 
 /// A WebSocket connection to an Agentty host. Works on macOS and iOS.
-///
+///111
 /// Built on Network.framework rather than URLSession: the host speaks plain
 /// `ws://` inside loopback or a Tailscale tunnel, which App Transport Security
 /// would refuse for URLSession on iOS.

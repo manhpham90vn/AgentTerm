@@ -27,7 +27,7 @@ struct AgenttyApp: App {
                     .keyboardShortcut("o")
             }
             CommandGroup(after: .sidebar) {
-                Button(model.showDiff ? "Hide Changes" : "Show Changes") { model.showDiff.toggle() }
+                Button(model.showDiff ? "Hide Side Panel" : "Show Side Panel") { model.showDiff.toggle() }
                     .keyboardShortcut("d", modifiers: [.command, .shift])
             }
         }

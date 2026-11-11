@@ -13,7 +13,7 @@ struct RootView: View {
                 .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
                 .layoutPriority(1)
             if model.showDiff {
-                DiffView()
+                RightPanel()
                     .frame(minWidth: 280, idealWidth: 420, maxWidth: 760)
             }
         }
@@ -28,9 +28,9 @@ struct RootView: View {
                 }
                 .help("Pair an iPhone with a QR code")
                 Button { model.showDiff.toggle() } label: {
-                    Label("Changes", systemImage: "sidebar.trailing")
+                    Label("Side Panel", systemImage: "sidebar.trailing")
                 }
-                .help(model.showDiff ? "Hide changes" : "Show changes")
+                .help(model.showDiff ? "Hide the side panel" : "Show the side panel")
             }
         }
         .sheet(isPresented: $model.showPairing) {

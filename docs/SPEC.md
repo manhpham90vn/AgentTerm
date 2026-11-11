@@ -75,12 +75,16 @@ Three panes, like a code editor:
   same folders. Sessions started elsewhere are listed under "Other".
 - **Middle: terminal.** The selected session. With no session selected, a
   launch screen for the selected folder.
-- **Right: changes.** Uncommitted git changes of the selected folder: the
-  changed files with added and removed line counts, and the diff of the
-  selected file. An icon in the pane's header switches the file list between
-  a flat list and a tree grouped by folder; folders in the tree can be
-  collapsed and show the totals of what is inside. It refreshes on its own
-  while the app is in front. The pane can be hidden.
+- **Right: side panel**, with two tabs. The panel can be hidden.
+  - **Git.** Uncommitted git changes of the selected folder: the changed files
+    with added and removed line counts, and the diff of the selected file. An
+    icon switches the file list between a flat list and a tree grouped by
+    folder; folders in the tree can be collapsed and show the totals of what
+    is inside. It refreshes on its own while the app is in front.
+  - **History.** The conversations each agent had in the selected folder and
+    its subfolders, one section per agent, newest first, with a title and how
+    long ago it was. A conversation can be resumed, which opens it in its
+    agent in a new session.
 
 ### Pairing and remote access
 

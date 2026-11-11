@@ -138,11 +138,35 @@ again. Clients only offer agents with a path.
 
 ## Changes pane
 
+The right side of the Mac window has two tabs, Git and History.
+
 `GitDiff` shells out to `git`: `diff HEAD` for tracked files and
 `ls-files --others` plus `diff --no-index` for untracked ones, then splits the
 output per file. The Mac app calls it directly every few seconds while it is
 in front. It is not in the protocol yet; the iPhone needs a `diff` message
 (M3).
+
+## Conversation history
+
+`AgentHistory` reads the files each agent CLI keeps about its own
+conversations and lists those that ran in a folder or below it:
+
+| Agent | Where it looks | Title | Resume command |
+|---|---|---|---|
+| Claude Code | `~/.claude/projects/<folder>/<session>.jsonl` | newest `ai-title` line, else the first prompt | `claude --resume <id>` |
+| Codex | `~/.codex/sessions/**/rollout-*.jsonl` (first line has id and directory) | first prompt, from `~/.codex/history.jsonl` | `codex resume <id>` |
+| Antigravity | `~/.gemini/antigravity-cli/cache/conversation_metadata.json` | its `Title` | `agy --conversation <id>` |
+| Copilot CLI | `~/.copilot/session-state/<id>/workspace.yaml` | its `name`, else the first prompt | `copilot --resume=<id>` |
+
+None of these are documented formats, so every reader treats missing or
+unexpected data as "no conversations", and a CLI update can empty a section
+until the reader is adjusted. Session files grow to many megabytes, so only
+the first 256 KB and the last 64 KB are read. Session ids are put on a command
+line that a shell runs, so ids with anything but letters, digits, `-`, `_` and
+`.` are dropped.
+
+Like the changes pane, the Mac app calls this directly. It is not in the
+protocol yet.
 
 ## Pairing and security
 
