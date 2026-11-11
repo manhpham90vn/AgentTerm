@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Runs the iPhone UI test in the iOS Simulator against two throwaway hosts.
 #
-#   ./scripts/test-ios.sh                   # "iPhone Air"
-#   ./scripts/test-ios.sh "iPhone 17 Pro"
+#   ./scripts/test-ios.sh                   # asks which simulator
+#   ./scripts/test-ios.sh "iPhone 17 Pro"   # a simulator by name, or by UDID
+#   ./scripts/test-ios.sh --list            # show the simulators and stop
 #   SHOTS=/some/folder ./scripts/test-ios.sh    # also save screenshots there
 #   AGENTTY_LAUNCH="Start Claude Code" ./scripts/test-ios.sh
 #
@@ -13,9 +14,22 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 command -v xcodegen >/dev/null || { echo "test-ios.sh: xcodegen is not installed (brew install xcodegen)" >&2; exit 1; }
-# Not the simulator run-ios.sh uses by default: this test resets the
-# simulator's keychain, which would unpair the app you are trying out there.
-DEVICE="${1:-iPhone Air}"
+source scripts/lib-simulator.sh
+if [ "${1:-}" = "--list" ] || [ "${1:-}" = "-l" ]; then print_simulators; exit 0; fi
+# The fallback is not the simulator run-ios.sh falls back to: this test
+# resets the simulator's keychain, which unpairs the app you are trying out.
+if [ -z "${1:-}" ] && [ -z "${SIMULATOR:-}" ] && [ -t 0 ] && [ -t 1 ]; then
+    echo "This test resets the chosen simulator's keychain: an app paired there has to pair again."
+fi
+# Unlike the other scripts, never the booted simulator by default: that is
+# most likely the one in use.
+if [ -z "${1:-}" ] && [ -z "${SIMULATOR:-}" ] && ! { [ -t 0 ] && [ -t 1 ]; }; then
+    choose_simulator "iPhone Air" "iPhone Air"
+else
+    choose_simulator "${1:-}" "iPhone Air"
+fi
+DEVICE="$SIM_UDID"
+echo "Testing on $SIM_NAME ($SIM_UDID)."
 PORT=7798
 SECOND_PORT=7799
 STATE="$(mktemp -d)"
@@ -53,7 +67,7 @@ xcrun simctl keychain "$DEVICE" reset
 
 # TEST_RUNNER_ variables are handed to the test process without the prefix.
 XCODEBUILD=(xcodebuild -project iOS/Agentty.xcodeproj -scheme Agentty
-    -destination "platform=iOS Simulator,name=$DEVICE"
+    -destination "platform=iOS Simulator,id=$DEVICE"
     -derivedDataPath .build/ios -skipPackagePluginValidation)
 
 # Build first: a pairing link only lives five minutes, and a clean build can

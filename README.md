@@ -57,18 +57,23 @@ iPhone, in the iOS Simulator:
 
 ```sh
 brew install xcodegen
-./scripts/run-ios.sh              # the booted simulator, or "iPhone 17"
+./scripts/run-ios.sh              # asks which simulator to use
+./scripts/run-ios.sh "iPhone 17"  # or name one (a UDID works too)
+./scripts/run-ios.sh --list       # show the simulators
+./scripts/pair-ios.sh "iPhone 17" # pair it with Agentty running on this Mac
 ```
 
-The simulator has no camera, so pair it with a link instead of the QR code:
-`./scripts/pair-ios.sh`, with Agentty open on the Mac. On a real iPhone, run `xcodegen` in `iOS/`, open
+The simulator has no camera, so `pair-ios.sh` pairs it with a link instead of
+the QR code. `SIMULATOR="iPhone 17"` in the environment works for every iOS
+script. On a real iPhone, run `xcodegen` in `iOS/`, open
 `iOS/Agentty.xcodeproj`, pick your team under Signing and run.
 
 Tests:
 
 ```sh
 swift test                # protocol, PTY, host server, end to end
-./scripts/test-ios.sh     # iPhone UI test against a throwaway host
+./scripts/test-ios.sh     # iPhone UI test against throwaway hosts; resets
+                          # the chosen simulator's keychain
 ```
 
 ## Layout
