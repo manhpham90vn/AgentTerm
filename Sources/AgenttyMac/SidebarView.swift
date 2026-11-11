@@ -149,7 +149,8 @@ struct SessionRow: View {
                 } label: {
                     Image(systemName: "arrowshape.turn.up.right.fill").font(.system(size: 9.5))
                 }
-                .menuStyle(.borderlessButton)
+                .menuStyle(.button)
+                .buttonStyle(.plain)
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .foregroundStyle(.secondary)

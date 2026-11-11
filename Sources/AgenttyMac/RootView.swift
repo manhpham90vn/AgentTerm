@@ -14,7 +14,7 @@ struct RootView: View {
                 .layoutPriority(1)
             if model.showDiff {
                 RightPanel()
-                    .frame(minWidth: 280, idealWidth: 420, maxWidth: 760)
+                    .frame(minWidth: 310, idealWidth: 420, maxWidth: 760)
             }
         }
         .background(Theme.canvas)

@@ -84,10 +84,11 @@ struct HistoryView: View {
                 .controlSize(.small)
                 .fixedSize()
                 .help("Show this folder's conversations, or every conversation on this Mac")
-                Text(model.history.map { "\($0.count)" } ?? "…")
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                Text(model.history.map { $0.count == 1 ? "1 conversation" : "\($0.count) conversations" } ?? "Loading…")
+                    .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel(model.history.map { "\($0.count) conversations" } ?? "Loading")
+                    .lineLimit(1)
+                    .fixedSize()
                 Spacer()
                 Button { model.refreshHistory() } label: {
                     Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
@@ -193,6 +194,47 @@ private struct ConversationRow: View {
         return formatter
     }()
 
+    /// The row's hover color as an opaque color, to put behind the actions.
+    private static let hoverFill = Color(red: 0.152, green: 0.156, blue: 0.178)
+
+    private var actions: some View {
+        HStack(spacing: 10) {
+            if !targets.isEmpty {
+                Menu {
+                    handoffItems
+                } label: {
+                    Label("Hand Off", systemImage: "arrowshape.turn.up.right.fill")
+                        .font(.system(size: 10.5, weight: .semibold))
+                }
+                // A plain button menu: the borderless style draws its label
+                // in the system size and ignores the font set above.
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(.secondary)
+                .help("Give this work to another agent")
+            }
+            Button { model.resume(conversation) } label: {
+                Label("Resume", systemImage: "play.fill")
+                    .font(.system(size: 10.5, weight: .semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.accent(for: conversation.agent))
+            .help("Continue this conversation in a new session")
+        }
+        .padding(.leading, 30)
+        .padding(.trailing, 8)
+        .padding(.vertical, 5)
+        .background(
+            // Fades in from the left so the title does not end at a hard
+            // edge, and is solid before the first icon so no text shows through it.
+            LinearGradient(stops: [.init(color: Self.hoverFill.opacity(0), location: 0), .init(color: Self.hoverFill, location: 0.14)],
+                           startPoint: .leading, endPoint: .trailing)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+
     private var targets: [AgentInfo] { model.handoffTargets(from: conversation.agent) }
 
     @ViewBuilder
@@ -227,37 +269,21 @@ private struct ConversationRow: View {
                 .font(.system(size: 10.5))
                 .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 4)
-            if hovering {
-                if !targets.isEmpty {
-                    Menu {
-                        handoffItems
-                    } label: {
-                        Label("Hand Off", systemImage: "arrowshape.turn.up.right.fill")
-                            .font(.system(size: 10.5, weight: .semibold))
-                    }
-                    .menuStyle(.borderlessButton)
-                    .menuIndicator(.hidden)
-                    .fixedSize()
-                    .foregroundStyle(.secondary)
-                    .help("Give this work to another agent")
-                }
-                Button { model.resume(conversation) } label: {
-                    Label("Resume", systemImage: "play.fill")
-                        .font(.system(size: 10.5, weight: .semibold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(Theme.accent(for: conversation.agent))
-                .help("Continue this conversation in a new session")
-            }
+            Spacer(minLength: 0)
         }
         .padding(.leading, 27)
         .padding(.trailing, 8)
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(hovering ? Color.white.opacity(0.06) : .clear)
+                .fill(hovering ? Self.hoverFill : .clear)
         )
+        // The actions float over the end of the title instead of taking
+        // room in the row, so showing them never squeezes the time and
+        // folder line out of view.
+        .overlay(alignment: .topTrailing) {
+            if hovering { actions }
+        }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(count: 2) { model.resume(conversation) }
