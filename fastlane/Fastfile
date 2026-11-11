@@ -14,6 +14,8 @@
 #   MATCH_GIT_URL, MATCH_PASSWORD             fastlane match (iPhone)
 #   DEVELOPER_ID_P12, DEVELOPER_ID_P12_PASSWORD   Developer ID certificate (Mac)
 
+require "tmpdir"
+
 APP_ID = "com.manhpham.agentterm".freeze
 ROOT = File.expand_path("..", __dir__).freeze
 DIST = File.join(ROOT, "dist").freeze
@@ -139,8 +141,14 @@ platform :mac do
       sh("codesign", *flags, app)
       sh("codesign", "--verify", "--deep", "--strict", "--verbose=2", app)
 
+      # The disk image holds the app and a shortcut to Applications, so
+      # installing is dragging one onto the other.
       FileUtils.rm_f(dmg)
-      sh("hdiutil", "create", "-volname", "AgentTerm", "-srcfolder", app, "-ov", "-format", "UDZO", dmg, log: false)
+      Dir.mktmpdir("agentterm-dmg") do |staging|
+        sh("ditto", app, File.join(staging, "AgentTerm.app"), log: false)
+        File.symlink("/Applications", File.join(staging, "Applications"))
+        sh("hdiutil", "create", "-volname", "AgentTerm", "-srcfolder", staging, "-ov", "-format", "UDZO", dmg, log: false)
+      end
       sh("codesign", "--force", "--timestamp", "--keychain", path, "--sign", identity, dmg)
     ensure
       delete_keychain(name: keychain)

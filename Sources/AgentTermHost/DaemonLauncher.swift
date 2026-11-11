@@ -13,6 +13,29 @@ public enum DaemonLauncher {
         return FileManager.default.isExecutableFile(atPath: path) ? path : nil
     }
 
+    /// The program that listens on a local TCP port, if there is one.
+    public static func listener(onPort port: UInt16) -> (pid: pid_t, path: String)? {
+        guard let result = Subprocess.run("/usr/sbin/lsof", ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-t"], timeout: 5),
+              let pid = String(decoding: result.output, as: UTF8.self).split(whereSeparator: \.isNewline).first.flatMap({ pid_t($0) })
+        else { return nil }
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
+        return (pid, String(cString: buffer))
+    }
+
+    /// Whether a host found running is the one that ships with this app. A
+    /// host left running by another copy of the app, an older version for
+    /// one, answers on the same port and would be used without a word.
+    public static func isBundled(_ path: String) -> Bool {
+        guard let own = bundledExecutable else { return true }
+        return URL(fileURLWithPath: own).resolvingSymlinksInPath().path == URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+    }
+
+    /// Asks a host to stop. Its sessions end with it.
+    public static func stop(_ pid: pid_t) {
+        kill(pid, SIGTERM)
+    }
+
     /// Spawns the daemon in its own session with output going to the log file.
     @discardableResult
     public static func launch(executable: String, arguments: [String] = []) -> Bool {

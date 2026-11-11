@@ -69,7 +69,8 @@ has for the version, and does not wait for Apple to finish processing it.
 
 `mac sign` builds a release `AgentTerm.app`, signs the daemon and then the
 app with the Developer ID certificate, with the hardened runtime and a
-timestamp, and puts the app in `dist/AgentTerm-<version>.dmg`. The
+timestamp, and puts the app in `dist/AgentTerm-<version>.dmg`, next to a
+shortcut to Applications to drag it onto. The
 certificate is imported into a keychain of its own for the run and that
 keychain is deleted afterwards.
 

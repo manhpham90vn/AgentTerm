@@ -20,9 +20,14 @@ struct RootView: View {
                 SidebarView()
                     .frame(minWidth: 210, idealWidth: 250, maxWidth: 380)
             }
-            CenterView()
-                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
-                .layoutPriority(1)
+            VStack(spacing: 0) {
+                if let path = model.otherHost {
+                    OtherHostBanner(path: path)
+                }
+                CenterView()
+            }
+            .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+            .layoutPriority(1)
             if model.showDiff {
                 RightPanel()
                     .frame(minWidth: 310, idealWidth: 420, maxWidth: 760)
@@ -171,6 +176,43 @@ struct LaunchButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+    }
+}
+
+/// Shown when the host in use belongs to another copy of the app.
+private struct OtherHostBanner: View {
+    @EnvironmentObject private var model: AppModel
+    let path: String
+    @State private var confirming = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("These sessions are held by the host of another copy of AgentTerm.")
+                    .font(.system(size: 12, weight: .medium))
+                Text((path as NSString).abbreviatingWithTildeInPath + ". It may be another version, and things may not work as they should.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 8)
+            Button("Use This App's Host…") { confirming = true }
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.yellow.opacity(0.12))
+        .confirmationDialog(
+            model.sessions.isEmpty ? "Restart the host with this app's own?" : "Restart the host and end \(model.sessions.count) \(model.sessions.count == 1 ? "session" : "sessions")?",
+            isPresented: $confirming, titleVisibility: .visible
+        ) {
+            Button("Restart Host", role: .destructive) { model.replaceOtherHost() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The other host is stopped and this app's own is started. Whatever runs in its sessions stops.")
+        }
     }
 }
 

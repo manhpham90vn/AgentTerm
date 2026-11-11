@@ -51,6 +51,37 @@ final class AppModel: ObservableObject {
         connection?.send(.accountUsage(refresh: true))
     }
 
+    /// Set when the host that answered is not the one this app ships with:
+    /// the path of that other host. It may be an older version.
+    @Published private(set) var otherHost: String?
+    private var otherHostPID: pid_t?
+
+    /// Looks at which program is the host, off the main thread.
+    private func checkWhoseHost() {
+        let port = port
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let listener = DaemonLauncher.listener(onPort: port)
+            let foreign = listener.flatMap { DaemonLauncher.isBundled($0.path) ? nil : $0 }
+            DispatchQueue.main.async {
+                self?.otherHost = foreign?.path
+                self?.otherHostPID = foreign?.pid
+            }
+        }
+    }
+
+    /// Stops the other copy's host and starts this app's own in its place.
+    /// The sessions the other host holds end with it.
+    func replaceOtherHost() {
+        guard let pid = otherHostPID else { return }
+        otherHost = nil
+        otherHostPID = nil
+        // The connection closes when the host goes; reconnecting then
+        // starts the bundled one.
+        launchedDaemon = false
+        connectAttempts = 0
+        DaemonLauncher.stop(pid)
+    }
+
     /// A request to close many tabs that would end running sessions, and so
     /// waits to be confirmed.
     @Published var pendingCloseRequest: CloseRequest?
@@ -193,6 +224,7 @@ final class AppModel: ObservableObject {
             connectAttempts = 0
             status = .connected
             connection?.send(.agents(refresh: false))
+            checkWhoseHost()
         case .closed(let reason):
             connection = nil
             controllers.removeAll()

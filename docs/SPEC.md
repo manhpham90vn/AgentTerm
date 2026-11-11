@@ -218,6 +218,15 @@ Settings (⌘,), is on by default. With it off there is no icon, and closing
 the window quits the app. Sessions keep running either way, since the host
 that holds them is a separate program.
 
+### A host from another copy of the app
+
+The host outlives the app, so a newly installed version can find the host of
+an older one still running on its port, and would use it without a word. The
+Mac app checks which program is the host. When it is not the one the app
+ships with, a banner says so, with the other host's path, and offers **Use
+This App's Host…**: the other host is stopped, after asking since its
+sessions end with it, and the app's own is started.
+
 ### What the two apps share
 
 The Mac and the iPhone offer the same things wherever the device allows:
