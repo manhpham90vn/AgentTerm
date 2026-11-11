@@ -180,7 +180,7 @@ final class HandoffTests: XCTestCase {
         let prepared = try Handoff.prepare(conversation("claude", source: source), to: "codex", now: now)
         let relative = String(prepared.file.dropFirst(root.path.count + 1))
         XCTAssertTrue(relative.hasPrefix(".agentty/handoffs/"), relative)
-        XCTAssertTrue(relative.hasSuffix("-claude-to-codex.md"), relative)
+        XCTAssertTrue(relative.hasSuffix("-from-claude.md"), relative)
         XCTAssertTrue(prepared.command.hasPrefix("codex 'You are taking over a task from Claude Code"))
         XCTAssertTrue(prepared.command.contains("Read \(relative) first"))
 
@@ -198,6 +198,36 @@ final class HandoffTests: XCTestCase {
         _ = try Handoff.prepare(conversation("claude", source: source), to: "agy", now: now.addingTimeInterval(1))
         let exclude = try String(contentsOf: root.appendingPathComponent(".git/info/exclude"), encoding: .utf8)
         XCTAssertEqual(exclude.components(separatedBy: ".agentty/").count - 1, 1)
+    }
+
+    func testThePlanIsWhatPrepareUsesUnlessThePromptIsReplaced() throws {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let source = conversation("codex")
+        let plan = Handoff.plan(for: source, now: now)
+        XCTAssertTrue(plan.relativePath.hasPrefix(".agentty/handoffs/"))
+        XCTAssertTrue(plan.relativePath.hasSuffix("-from-codex.md"))
+        XCTAssertTrue(plan.prompt.hasPrefix("You are taking over a task from Codex in this folder. Read \(plan.relativePath) first"))
+        XCTAssertEqual(Handoff.plan(for: source, now: now), plan, "the same for whichever agent receives it")
+
+        // Shown and sent unchanged, even if the handoff happens a little later.
+        let unchanged = try Handoff.prepare(source, to: "claude", plan: plan, prompt: "  \n", now: now.addingTimeInterval(90))
+        XCTAssertEqual(unchanged.command, "claude \(Handoff.shellQuote(plan.prompt))")
+        XCTAssertTrue(unchanged.file.hasSuffix(plan.relativePath))
+
+        // Edited by the user, with instructions added after it.
+        let edited = try Handoff.prepare(
+            source, to: "agy", plan: plan,
+            prompt: "Đọc \(plan.relativePath) rồi làm tiếp.\nĐừng commit.", note: " chỉ viết test \n", now: now
+        )
+        let expected = "Đọc \(plan.relativePath) rồi làm tiếp.\nĐừng commit.\n\nInstructions from the user:\nchỉ viết test"
+        XCTAssertEqual(edited.command, "agy -i \(Handoff.shellQuote(expected))")
+        XCTAssertEqual(edited.file, unchanged.file)
+        let file = try String(contentsOfFile: edited.file, encoding: .utf8)
+        XCTAssertTrue(file.contains("## Instructions from the user\n\nchỉ viết test\n"))
+
+        // A prompt of several lines survives the shell as one argument.
+        let echoed = Subprocess.run("/bin/sh", ["-c", "printf %s \(Handoff.shellQuote(expected))"])
+        XCTAssertEqual(String(decoding: echoed?.output ?? Data(), as: UTF8.self), expected)
     }
 
     func testPrepareWorksOutsideGitAndRejectsUnknownAgents() throws {

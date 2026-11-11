@@ -195,14 +195,18 @@ protocol yet.
    the file leaves out. Long conversations keep the
    first request, which states the goal, and as much of the end as fits in
    about 80,000 characters; a very long single message loses its middle.
-3. The file is written to `<folder>/.agentty/handoffs/<time>-<from>-to-<to>.md`.
+3. The file is written to `<folder>/.agentty/handoffs/<time>-from-<agent>.md`.
+   The name and the default prompt are fixed by `Handoff.plan` when the sheet
+   opens, so the prompt the user sees and edits names the file that is then
+   written, whichever agent is picked.
    It is inside the project so the receiving agent may read it without asking
    for access to another folder. `.agentty/` is added to `.git/info/exclude`
    unless it is already ignored.
 4. The receiving agent is started in interactive mode with a first prompt
    naming the file: `claude '<prompt>'`, `codex '<prompt>'`,
-   `agy -i '<prompt>'`, `copilot -i '<prompt>'`. The prompt is single-quoted
-   for the shell.
+   `agy -i '<prompt>'`, `copilot -i '<prompt>'`. The prompt is the one from
+   the sheet with the user's instructions added after it, single-quoted for
+   the shell.
 
 Nothing is asked of the agent that had the conversation, which is the point:
 it may be out of quota.

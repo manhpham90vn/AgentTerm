@@ -319,11 +319,13 @@ final class AppModel: ObservableObject {
     /// Passes a conversation on to another agent: writes the handoff file,
     /// then starts `target` in a new session with a prompt to read it.
     /// `note` is what the user wants the receiving agent to know.
-    func handoff(_ conversation: Conversation, to target: AgentInfo, note: String) {
+    /// `plan` and `prompt` are what the handoff sheet showed, the prompt
+    /// possibly edited there.
+    func handoff(_ conversation: Conversation, to target: AgentInfo, plan: Handoff.Plan, prompt: String, note: String) {
         guard status == .connected else { return }
         let size = currentController?.naturalSize ?? TermSize(cols: 100, rows: 30)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = Result { try Handoff.prepare(conversation, to: target.id, note: note) }
+            let result = Result { try Handoff.prepare(conversation, to: target.id, plan: plan, prompt: prompt, note: note) }
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch result {

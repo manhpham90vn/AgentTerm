@@ -127,22 +127,52 @@ public enum Handoff {
     private static let transcriptBudget = 80_000
     private static let messageBudget = 12_000
 
-    /// Writes the handoff file and returns the command that starts `target`.
-    /// Blocks on file access and git, so call it off the main thread.
-    public static func prepare(
-        _ conversation: Conversation,
-        to target: String,
-        note: String? = nil,
-        now: Date = Date()
-    ) throws -> Prepared {
+    /// Where a handoff's file will go and what the receiving agent is told.
+    /// Made before the handoff so the prompt can be shown and edited first.
+    public struct Plan: Equatable, Sendable {
+        /// Path of the handoff file, relative to the conversation's folder.
+        public var relativePath: String
+        /// The prompt the receiving agent starts with, unless it is replaced.
+        public var prompt: String
+    }
+
+    public static func plan(for conversation: Conversation, now: Date = Date()) -> Plan {
         let stamp = DateFormatter()
         stamp.locale = Locale(identifier: "en_US_POSIX")
         stamp.dateFormat = "yyyyMMdd-HHmmss"
-        let relative = "\(folder)/\(stamp.string(from: now))-\(conversation.agent)-to-\(target).md"
+        // The name does not mention the receiving agent, so the prompt stays
+        // valid when another agent is picked after it was shown.
+        let relative = "\(folder)/\(stamp.string(from: now))-from-\(conversation.agent).md"
         let prompt = "You are taking over a task from \(name(of: conversation.agent)) in this folder. "
             + "Read \(relative) first: it has the conversation so far and the state of the working tree. "
             + "Then continue the work from where it stopped."
-        guard let command = launchCommand(target: target, prompt: prompt) else { throw Failure.unknownAgent(target) }
+        return Plan(relativePath: relative, prompt: prompt)
+    }
+
+    /// Writes the handoff file and returns the command that starts `target`.
+    /// Blocks on file access and git, so call it off the main thread.
+    ///
+    /// - Parameters:
+    ///   - plan: The plan that was shown to the user, if one was.
+    ///   - prompt: Replaces the plan's prompt. Blank means "use the plan's".
+    ///   - note: The user's instructions. They are added to the end of the
+    ///     prompt, where the agent reads them first, and kept in the file.
+    public static func prepare(
+        _ conversation: Conversation,
+        to target: String,
+        plan: Plan? = nil,
+        prompt: String? = nil,
+        note: String? = nil,
+        now: Date = Date()
+    ) throws -> Prepared {
+        let plan = plan ?? self.plan(for: conversation, now: now)
+        let note = note?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let custom = prompt?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var finalPrompt = custom?.isEmpty == false ? custom! : plan.prompt
+        if let note, !note.isEmpty {
+            finalPrompt += "\n\nInstructions from the user:\n\(note)"
+        }
+        guard let command = launchCommand(target: target, prompt: finalPrompt) else { throw Failure.unknownAgent(target) }
 
         let text = document(
             conversation: conversation,
@@ -152,7 +182,7 @@ public enum Handoff {
             note: note,
             now: now
         )
-        let file = URL(fileURLWithPath: conversation.cwd).appendingPathComponent(relative)
+        let file = URL(fileURLWithPath: conversation.cwd).appendingPathComponent(plan.relativePath)
         do {
             try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try text.write(to: file, atomically: true, encoding: .utf8)

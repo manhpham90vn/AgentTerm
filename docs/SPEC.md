@@ -75,10 +75,12 @@ another one should finish it.
 - Any conversation can be handed off: a session that is running, or a past one
   in the History tab. The agent that had the conversation does not need to be
   able to answer any more.
-- A sheet asks which installed agent should continue and offers a field for
-  instructions to it: what to focus on, what to leave alone, anything that is
-  not in the conversation. The instructions are optional. The agent picked
-  last time is preselected.
+- A sheet asks which installed agent should continue; the agent picked last
+  time is preselected. It shows the prompt the agent will start with, which
+  can be edited and reset, and offers a field for the user's own
+  instructions: what to focus on, what to leave alone, anything that is not
+  in the conversation. The instructions are optional and are added after the
+  prompt.
 - Agentty writes a handoff file into the project with the conversation so far
   (what the user and the agent said, without tool output) and the state of the
   working tree, then starts the receiving agent in a new session with a prompt

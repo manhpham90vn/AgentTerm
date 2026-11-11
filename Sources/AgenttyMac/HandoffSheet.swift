@@ -12,7 +12,13 @@ struct HandoffSheet: View {
     @AppStorage("handoffTarget") private var rememberedTarget = ""
     @State private var targetID = ""
     @State private var note = ""
+    /// Made once when the sheet opens, so the file named in the prompt is
+    /// the file that gets written.
+    @State private var plan: Handoff.Plan?
+    @State private var prompt = ""
     @FocusState private var noteFocused: Bool
+
+    private var promptIsEdited: Bool { plan.map { prompt != $0.prompt } ?? false }
 
     private var targets: [AgentInfo] { model.handoffTargets(from: conversation.agent) }
     private var target: AgentInfo? { targets.first { $0.id == targetID } ?? targets.first }
@@ -44,34 +50,36 @@ struct HandoffSheet: View {
             }
 
             VStack(alignment: .leading, spacing: 7) {
-                Text("Instructions for \(target?.name ?? "the agent") (optional)")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.secondary)
-                ZStack(alignment: .topLeading) {
-                    TextEditor(text: $note)
-                        .font(.system(size: 13))
-                        .scrollContentBackground(.hidden)
-                        .focused($noteFocused)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 8)
-                    if note.isEmpty {
-                        Text("What to focus on, what to leave alone, anything that is not in the conversation.")
-                            .font(.system(size: 13))
-                            .foregroundStyle(.tertiary)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
-                            .allowsHitTesting(false)
+                HStack {
+                    Text("Prompt \(target?.name ?? "the agent") starts with")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if promptIsEdited {
+                        Button("Reset") { prompt = plan?.prompt ?? "" }
+                            .buttonStyle(.plain)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Color.accentColor)
+                            .help("Put the original prompt back")
                     }
                 }
-                .frame(height: 110)
-                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.black.opacity(0.25)))
-                .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Theme.hairline))
+                editor($prompt, height: 86)
+                Text("It can be edited. Keep the line that names the handoff file: that file has the conversation so far and the state of the working tree.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Text("\(target?.name ?? "The agent") gets the conversation so far and the state of the working tree, and starts in a new session. \(sourceName)'s session is left as it is.")
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Your instructions (optional)")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                editor($note, height: 92, placeholder: "What to focus on, what to leave alone, anything that is not in the conversation.")
+                    .focused($noteFocused)
+                Text("Added after the prompt. \(sourceName)'s session is left as it is.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+            }
 
             HStack {
                 Spacer()
@@ -81,22 +89,46 @@ struct HandoffSheet: View {
                 Button("Hand Off") { submit() }
                     .keyboardShortcut(.return, modifiers: .command)
                     .buttonStyle(.borderedProminent)
-                    .disabled(target == nil)
+                    .disabled(target == nil || plan == nil)
                     .help("Hand off (⌘↩)")
             }
         }
         .padding(22)
-        .frame(width: 440)
+        .frame(width: 500)
         .onAppear {
             targetID = targets.contains { $0.id == rememberedTarget } ? rememberedTarget : (targets.first?.id ?? "")
+            let made = Handoff.plan(for: conversation)
+            plan = made
+            prompt = made.prompt
             noteFocused = true
         }
     }
 
+    private func editor(_ text: Binding<String>, height: CGFloat, placeholder: String = "") -> some View {
+        ZStack(alignment: .topLeading) {
+            TextEditor(text: text)
+                .font(.system(size: 13))
+                .scrollContentBackground(.hidden)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 8)
+            if text.wrappedValue.isEmpty {
+                Text(placeholder)
+                    .font(.system(size: 13))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(height: height)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.black.opacity(0.25)))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Theme.hairline))
+    }
+
     private func submit() {
-        guard let target else { return }
+        guard let target, let plan else { return }
         rememberedTarget = target.id
-        model.handoff(conversation, to: target, note: note)
+        model.handoff(conversation, to: target, plan: plan, prompt: prompt, note: note)
         dismiss()
     }
 }
