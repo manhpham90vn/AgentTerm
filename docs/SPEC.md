@@ -221,16 +221,33 @@ that holds them is a separate program.
 ### What agents may ask macOS for
 
 macOS holds a terminal responsible for everything run inside it. An agent
-that drives another app (a browser, for one), takes a screenshot or reads a
-protected folder is asking as AgentTerm. The app declares what programs in
-its sessions may ask for: controlling other apps, the camera and microphone,
-contacts, calendars, reminders, photos, location, the local network, and the
-Desktop, Documents, Downloads, removable and network volumes. macOS then asks
-the user the first time each is used; without the declaration it would refuse
-without asking. Two are not asked for and are switched on by hand in System
-Settings > Privacy & Security, for AgentTerm: **Accessibility**, to let an
-agent click and type in other apps, and **Screen & System Audio Recording**,
-to let it take screenshots.
+that drives another app, takes a screenshot or reads a protected folder is
+asking as AgentTerm, so AgentTerm has to be able to ask.
+
+- **Asked by macOS when first used.** The app declares, with a sentence
+  macOS shows the user, everything a program in a session may ask for:
+  controlling other apps, camera, microphone, speech recognition, the Mac's
+  audio, keyboard monitoring, Bluetooth, the local network, contacts,
+  calendars, reminders, photos, the media library, location, and the Desktop,
+  Documents, Downloads, removable, network and cloud storage folders. Without
+  the declaration macOS refuses without asking. The released app carries the
+  matching hardened runtime entitlements.
+- **Never asked.** Settings (⌘,) > **Permissions** lists the ones agents
+  rely on, says what each is for and whether it is allowed, and has a button
+  that asks macOS for it or opens the right pane of System Settings:
+
+| Permission | Used for |
+|---|---|
+| Accessibility | Clicking, typing and reading the screen in other apps: computer use in Claude Code and Codex, Antigravity's browser agent |
+| Screen & System Audio Recording | Screenshots, which is how an agent sees an app or a page |
+| Automation | Scripting another app, Chrome for one. Asked once per app |
+| Full Disk Access | Folders macOS protects, such as Mail or other apps' data. Rarely needed |
+| Microphone | Voice dictation in Claude Code and Antigravity |
+| Camera | Only for a program that uses it |
+
+Changes to Accessibility and Screen Recording apply to sessions started
+after the app is reopened. A development build is a different app to macOS
+and is asked separately.
 
 ### A host from another copy of the app
 

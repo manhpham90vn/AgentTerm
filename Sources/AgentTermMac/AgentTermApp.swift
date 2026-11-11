@@ -60,7 +60,10 @@ struct AgentTermApp: App {
         }
 
         Settings {
-            SettingsView()
+            TabView {
+                SettingsView().tabItem { Label("General", systemImage: "gearshape") }
+                PermissionsView().tabItem { Label("Permissions", systemImage: "lock.shield") }
+            }
         }
     }
 }

@@ -80,6 +80,14 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>NSDownloadsFolderUsageDescription</key><string>A program running in ${NAME} wants to access files in your Downloads folder.</string>
     <key>NSRemovableVolumesUsageDescription</key><string>A program running in ${NAME} wants to access files on a removable volume.</string>
     <key>NSNetworkVolumesUsageDescription</key><string>A program running in ${NAME} wants to access files on a network volume.</string>
+    <key>NSCalendarsFullAccessUsageDescription</key><string>A program running in ${NAME} wants to access your calendars.</string>
+    <key>NSRemindersFullAccessUsageDescription</key><string>A program running in ${NAME} wants to access your reminders.</string>
+    <key>NSPhotoLibraryAddUsageDescription</key><string>A program running in ${NAME} wants to add to your photos.</string>
+    <key>NSAppleMusicUsageDescription</key><string>A program running in ${NAME} wants to access your media library.</string>
+    <key>NSLocationAlwaysAndWhenInUseUsageDescription</key><string>A program running in ${NAME} wants to use your location.</string>
+    <key>NSFileProviderDomainUsageDescription</key><string>A program running in ${NAME} wants to access files kept by a cloud storage app.</string>
+    <key>NSAudioCaptureUsageDescription</key><string>A program running in ${NAME} wants to record this Mac's audio.</string>
+    <key>NSInputMonitoringUsageDescription</key><string>A program running in ${NAME} wants to watch the keyboard.</string>
     <key>NSSystemAdministrationUsageDescription</key><string>A program running in ${NAME} wants to administer this Mac.</string>
     <key>NSPrincipalClass</key><string>NSApplication</string>
 </dict>
