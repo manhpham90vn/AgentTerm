@@ -169,6 +169,34 @@ final class EndToEndTests: XCTestCase {
         mac.connection.send(.kill(session: id))
     }
 
+    func testAnEmulatorAnsweringDoesNotTakeTheSessionAway() {
+        // `cat -v` shows what reaches the program, with ESC as "^[".
+        let phone = connect("phone")
+        let phoneSize = TermSize(cols: 48, rows: 30)
+        phone.connection.send(.create(CreateRequest(command: "stty -echo; exec cat -v", size: phoneSize)))
+        waitUntil("attached") { phone.attached != nil }
+        let id = phone.attached!.id
+        let mac = connect("mac")
+        mac.connection.send(.attach(session: id, size: TermSize(cols: 120, rows: 40)))
+        waitUntil("mac watches") { mac.lastResize?.driver == false && mac.lastResize?.size == phoneSize }
+
+        // The Mac's emulator answers a cursor position query. It is not the
+        // client in use, so its answer is dropped and the size stays.
+        mac.connection.sendInput(Data("\u{1b}[40;120R".utf8), to: id)
+        // The phone's emulator answers too, and its answer goes through.
+        phone.connection.sendInput(Data("\u{1b}[30;48R".utf8), to: id)
+        phone.type("\n", in: id)
+        waitUntil("the phone's answer arrived") { phone.text(id).contains("^[[30;48R") }
+        XCTAssertFalse(phone.text(id).contains("40;120R"), "the watching emulator's answer must not reach the program")
+        XCTAssertEqual(mac.lastResize?.driver, false)
+        XCTAssertEqual(phone.lastResize?.size, phoneSize)
+
+        // A real key on the Mac still takes over.
+        mac.type("x\n", in: id)
+        waitUntil("mac drives") { mac.lastResize?.driver == true }
+        mac.connection.send(.kill(session: id))
+    }
+
     func testReattachReplaysRecentOutput() {
         let first = connect()
         first.connection.send(.create(CreateRequest(command: "echo marker-$((6*7)); exec cat")))

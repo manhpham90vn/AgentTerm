@@ -38,6 +38,12 @@ public enum HostEnvironment {
     /// Environment for programs running inside a session.
     public static func sessionEnvironment() -> [String: String] {
         var env = ProcessInfo.processInfo.environment
+        // When the host was itself started from inside an agent's terminal,
+        // that agent's variables would make a new agent think it is nested.
+        // Only the markers are removed, not settings the user may have made.
+        for key in ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"] {
+            env[key] = nil
+        }
         env["TERM"] = "xterm-256color"
         env["COLORTERM"] = "truecolor"
         env["TERM_PROGRAM"] = "Agentty"

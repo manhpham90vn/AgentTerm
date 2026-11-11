@@ -99,11 +99,32 @@ it opens, and detaches when leaving it, so the Mac gets its size back as soon
 as the phone stops looking. The Mac takes control only when the user types or
 asks for it.
 
-While a session has a foreign size, the Mac keeps its terminal view at the
-pane's size, so the size that fits the window is still known, and only moves
-the view's origin to bring the smaller grid to the middle. A frame and a
-dimmed surround are drawn around it. The grid's exact size comes from
-SwiftTerm's `getOptimalFrameSize()`.
+What a client's emulator does with a foreign size depends on whether that
+size fits inside its own grid:
+
+- **It fits** (a phone drives, a Mac watches). The emulator keeps its own
+  grid and shows the output as it comes. Programs that draw relative to the
+  cursor, which is how Claude Code and shells work, come out right, just
+  narrower. Shrinking the grid instead would re-wrap what is on screen and
+  squeeze everything into a corner. Programs that address the whole screen
+  absolutely draw in the top-left part.
+- **It does not fit** (a Mac drives, a phone watches). The emulator takes the
+  foreign grid, and the view shows as much of it as it can. Lines longer than
+  the view could not be shown otherwise.
+
+### Input that is not typing
+
+Every attached emulator answers the program's queries (cursor position,
+device attributes, colors), and reports focus changes and pointer movement.
+These arrive the same way keystrokes do. `TerminalReply` recognizes them, and
+the host:
+
+- does not count them as activity, so they never make a client the driver.
+  Before this, Claude Code's start-up queries were answered by the Mac's
+  emulator, the host took that for typing on the Mac, and a session opened on
+  a phone jumped to the Mac's size;
+- passes on only the driver's, so the program gets one answer, from the
+  emulator whose grid matches the PTY.
 
 ## Protocol
 

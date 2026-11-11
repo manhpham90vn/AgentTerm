@@ -38,12 +38,6 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         view.terminalDelegate = self
     }
 
-    /// The exact size in points of the grid the emulator currently draws,
-    /// which is smaller than the view while another device's size is shown.
-    public var gridPixelSize: CGSize {
-        view.getOptimalFrameSize().size
-    }
-
     public func feed(_ data: Data) {
         view.feed(byteArray: ArraySlice([UInt8](data)))
     }
@@ -69,11 +63,34 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         onClaim?(naturalSize)
     }
 
-    /// The host changed the PTY size. When another device drives, show its
-    /// grid as is rather than our own, so the content lines up.
+    /// The host changed the PTY size.
+    ///
+    /// While another device drives, its grid is usually smaller than this
+    /// view's (a phone next to a Mac window). Then this emulator keeps its own
+    /// grid and simply shows the output, which uses part of the width, the way
+    /// the output of any program with short lines does. Shrinking the grid to
+    /// match would squeeze everything into a corner and re-wrap what is
+    /// already on screen, which wrecks the drawing of full screen programs.
+    ///
+    /// Only a grid that does not fit (a Mac window next to a phone) is taken
+    /// over as is: lines longer than this view could not be shown otherwise.
     public func hostResized(to size: TermSize, driver: Bool) {
-        foreignSize = driver ? nil : (size == naturalSize ? nil : size)
-        setGrid(driver ? naturalSize : size)
+        foreignSize = (driver || size == naturalSize) ? nil : size
+        applyForeignSize()
+    }
+
+    /// True while the emulator shows another device's grid instead of the
+    /// one that fits this view.
+    public private(set) var showsForeignGrid = false
+
+    private func applyForeignSize() {
+        if let foreignSize {
+            showsForeignGrid = foreignSize.cols > naturalSize.cols || foreignSize.rows > naturalSize.rows
+            setGrid(showsForeignGrid ? foreignSize : naturalSize)
+        } else {
+            showsForeignGrid = false
+            setGrid(naturalSize)
+        }
     }
 
     private func setGrid(_ size: TermSize) {
@@ -117,13 +134,10 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
             naturalSize = TermSize(cols: newCols, rows: newRows)
             grid = naturalSize
             hasLaidOut = true
-            if let foreignSize {
-                // Another device is driving. A layout change here must not
-                // steal control, so put its grid back once layout is done.
-                DispatchQueue.main.async { [weak self] in
-                    guard let self, self.foreignSize == foreignSize else { return }
-                    self.setGrid(foreignSize)
-                }
+            if foreignSize != nil {
+                // Another device is driving. Whether its grid fits may have
+                // changed with this view's size; settle that once layout is done.
+                DispatchQueue.main.async { [weak self] in self?.applyForeignSize() }
             }
             reportNaturalSizeSoon()
         }

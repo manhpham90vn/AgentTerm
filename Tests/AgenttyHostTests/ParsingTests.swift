@@ -146,4 +146,42 @@ final class ParsingTests: XCTestCase {
         XCTAssertEqual(status(true, "Running", "100.101.102.103", ""), .ready(host: "100.101.102.103"))
         XCTAssertEqual(status(false, nil, "100.101.102.103"), .ready(host: "100.101.102.103"), "an address proves it works even if the app was not found")
     }
+
+    func testEmulatorAnswersAreToldApartFromTyping() {
+        func data(_ text: String) -> Data { Data(text.replacingOccurrences(of: "ESC", with: "\u{1b}").utf8) }
+        let answers = [
+            "ESC[24;80R",            // cursor position
+            "ESC[?1;2c",             // primary device attributes
+            "ESC[>0;276;0c",         // secondary device attributes
+            "ESC[0n",                // status ok
+            "ESC[?2026;2$y",         // mode report
+            "ESC[?1u",               // keyboard protocol flags
+            "ESC[8;50;112t",         // window size in cells
+            "ESC[I", "ESC[O",        // focus in and out
+            "ESC[<35;10;5M",         // the pointer moving with no button held
+            "ESC]11;rgb:1313/1414/1919ESC\\",   // background color, ST terminated
+            "ESC]10;rgb:dcdc/dede/e6e6\u{07}",   // foreground color, BEL terminated
+            "ESCP>|SwiftTerm 1.0ESC\\",          // terminal version
+            "ESC[?1;2cESC[24;80RESC]11;rgb:0/0/0\u{07}", // several at once
+        ]
+        for answer in answers {
+            XCTAssertTrue(TerminalReply.isReply(data(answer)), answer)
+        }
+        let typing = [
+            "a", "\r", "ESC", "ESC[A", "ESC[1;5C", "ESC[3~", "ESC[Z", "ESCOR", "ESC[R",
+            "ESC[<0;10;5M",          // mouse press
+            "ESC[<0;10;5m",          // mouse release
+            "ESC[<32;10;5M",         // dragging with the left button held
+            "ESC[<64;10;5M",         // scroll wheel
+            "ESC[97u",               // a key in the kitty protocol
+            "ESC[200~pasted textESC[201~",
+            "xin chào",
+            "ESC[24;80Rx",           // an answer followed by a real key
+            "ESC]11;rgb:0/0/0",      // unterminated
+            "",
+        ]
+        for input in typing {
+            XCTAssertFalse(TerminalReply.isReply(data(input)), input)
+        }
+    }
 }

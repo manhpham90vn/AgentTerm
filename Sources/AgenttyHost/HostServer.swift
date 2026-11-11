@@ -428,6 +428,13 @@ public final class HostServer {
         guard client.authenticated, frame.kind == .input,
               client.attached.contains(frame.session), let session = sessions[frame.session]
         else { return }
+        if TerminalReply.isReply(frame.payload) {
+            // An emulator answering the program's question, not a person
+            // typing. Only the answer of the client in use is passed on, and
+            // it does not move the session to that client.
+            if session.arbiter.driver == client.id { session.process.write(frame.payload) }
+            return
+        }
         // Typing takes control of the session's size.
         if session.arbiter.activity(client.id) { applySize(of: session) }
         session.process.write(frame.payload)

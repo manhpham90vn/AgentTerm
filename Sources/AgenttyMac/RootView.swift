@@ -140,13 +140,10 @@ struct CenterView: View {
                         if let size = model.foreignSizes[controller.session] {
                             ForeignSizeBanner(size: size)
                         }
-                        let foreign = model.foreignSizes[controller.session]
-                        TerminalPane(controller: controller, foreignSize: foreign)
+                        TerminalPane(controller: controller)
                             .id(controller.session)
-                            // The framed preview of another device's screen
-                            // is centered, so it gets no one-sided padding.
-                            .padding(.leading, foreign == nil ? 10 : 0)
-                            .padding(.top, foreign == nil ? 6 : 0)
+                            .padding(.leading, 10)
+                            .padding(.top, 6)
                     }
                 } else {
                     WelcomeView()
@@ -164,7 +161,7 @@ struct ForeignSizeBanner: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "iphone").foregroundStyle(.secondary)
-            Text("Another device is using this session, so it is shown at that device's size (\(size.cols) × \(size.rows)).")
+            Text("In use on another device at \(size.cols) × \(size.rows), so lines wrap at that width. Type here to use this window's size.")
                 .font(.system(size: 12))
                 .lineLimit(1)
                 .truncationMode(.tail)
