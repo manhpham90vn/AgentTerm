@@ -293,7 +293,7 @@ the context window. The file is removed when the session ends.
 
 What an account has left is a second thing, `AccountUsage`, kept per agent
 and sent to clients as `accountUsage` when it changes. `AccountUsageFetcher`
-asks the agent's service, on the work queue, every two minutes while that
+asks the agent's service, on the work queue, every five minutes while that
 agent has a session:
 
 | Agent | Sign-in read from | Asked |

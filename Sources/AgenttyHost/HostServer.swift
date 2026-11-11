@@ -120,7 +120,7 @@ public final class HostServer {
     private var accountAsked: [String: Date] = [:]
     private var accountAsking: Set<String> = []
     /// Services are asked this often while an agent has a session.
-    private static let accountInterval: TimeInterval = 120
+    private static let accountInterval: TimeInterval = 300
     private var clients: [ClientID: Client] = [:]
     private var sessions: [SessionID: Session] = [:]
     private var nextClientID: ClientID = 1
@@ -656,13 +656,38 @@ public final class HostServer {
             for (id, file) in reports {
                 if let data = try? Data(contentsOf: file), let reported = StatusLineRelay.usage(from: data) { usage[id] = reported }
             }
+            // Copilot CLI keeps a file of a session before there is a
+            // conversation to match it by.
+            for session in running where session.agent == "copilot" && usage[session.id] == nil {
+                if let file = AgentUsage.copilotSessionFile(cwd: session.cwd, startedAfter: session.createdAt, home: home) {
+                    usage[session.id] = AgentUsage.read(agent: "copilot", file: file)
+                }
+            }
+            // Every agent's session names a model: the one its settings
+            // name, until the session itself records which it uses.
+            var configured: [String: String?] = [:]
+            for session in running where usage[session.id]?.model == nil {
+                let model = configured[session.agent] ?? AgentUsage.configuredModel(agent: session.agent, home: home)
+                configured[session.agent] = .some(model)
+                guard let model else { continue }
+                var known = usage[session.id] ?? SessionUsage()
+                known.model = model
+                usage[session.id] = known
+            }
             self?.queue.async {
                 guard let self else { return }
                 self.summarizing = false
                 var changed = false
                 for (id, used) in usage where matches[id] == nil {
-                    // Usage can be known before the conversation is.
-                    guard let session = self.sessions[id], session.info.usage != used else { continue }
+                    // Usage can be known before the conversation is. What
+                    // was read then is not lost to a later read with less.
+                    guard let session = self.sessions[id] else { continue }
+                    var used = used
+                    if let known = session.info.usage {
+                        used.contextTokens = used.contextTokens ?? known.contextTokens
+                        used.contextWindow = used.contextWindow ?? known.contextWindow
+                    }
+                    guard session.info.usage != used else { continue }
                     session.info.usage = used
                     changed = true
                 }

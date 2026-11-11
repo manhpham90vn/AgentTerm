@@ -143,3 +143,27 @@ final class StatusLineRelayTests: XCTestCase {
         XCTAssertEqual(String(decoding: inner?.output ?? Data(), as: UTF8.self), "/Apps/My App's/agenttyd\nstatusline\n/tmp/a b/session-1.json\n")
     }
 }
+
+final class ConfiguredModelTests: XCTestCase {
+    func testReadsTheModelEachAgentsSettingsName() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("agentty-models-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".codex"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".gemini/antigravity-cli"), withIntermediateDirectories: true)
+        try "# comment\nmodel_reasoning_effort = \"low\"\nmodel = \"gpt-x\"  \n\n[profiles.other]\nmodel = \"not-this-one\"\n"
+            .write(to: home.appendingPathComponent(".codex/config.toml"), atomically: true, encoding: .utf8)
+        try #"{"model":"Gemini 4 Argon (Medium)","permissions":{}}"#
+            .write(to: home.appendingPathComponent(".gemini/antigravity-cli/settings.json"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(AgentUsage.configuredModel(agent: "codex", home: home.path, environment: [:]), "gpt-x")
+        XCTAssertEqual(AgentUsage.configuredModel(agent: "agy", home: home.path, environment: [:]), "Gemini 4 Argon (Medium)")
+        XCTAssertNil(AgentUsage.configuredModel(agent: "claude", home: home.path, environment: [:]), "Claude Code reports its own")
+        XCTAssertNil(AgentUsage.configuredModel(agent: "codex", home: "/nonexistent", environment: [:]))
+    }
+
+    func testCodexAndCopilotSayWhatTheyKnowBeforeTheFirstReply() {
+        let codex = AgentUsage.parse(agent: "codex", data: Data(#"{"type":"session_meta","payload":{"id":"s","cwd":"/x","context_window":475000}}"#.utf8))
+        XCTAssertEqual(codex, SessionUsage(contextTokens: 0, contextWindow: 475_000))
+        let copilot = AgentUsage.parse(agent: "copilot", data: Data(#"{"type":"session.model_change","data":{"newModel":"gpt-5.6-terra","cause":"initial_resolution"}}"#.utf8))
+        XCTAssertEqual(copilot, SessionUsage(model: "gpt-5.6-terra"))
+    }
+}

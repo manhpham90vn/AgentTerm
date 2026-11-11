@@ -83,12 +83,16 @@ public struct UsageBar: View {
 
     private var cells: [Cell] {
         var cells: [Cell] = []
+        // Every agent's band has the same cells in the same order. A figure
+        // that is not known yet shows as a dash, not as a missing cell.
         if let usage, let tokens = usage.contextTokens {
             if let fraction = usage.contextFraction {
                 cells.append(Cell(id: "context", label: "Context", value: "\(Int((fraction * 100).rounded()))%", fill: fraction, used: fraction * 100, note: usage.contextWindow.map { "of \(SessionUsage.short($0))" }))
             } else {
                 cells.append(Cell(id: "context", label: "Context", value: SessionUsage.short(tokens), fill: 0, used: 0, note: "tokens"))
             }
+        } else {
+            cells.append(Cell(id: "context", label: "Context", value: "–", fill: 0, used: 0, note: usage?.contextWindow.map { "of \(SessionUsage.short($0))" }))
         }
         if let account, let limits = account.groups.first?.limits, !limits.isEmpty {
             // The account's own limits, as its service reports them.

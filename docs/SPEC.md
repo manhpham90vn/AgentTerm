@@ -74,8 +74,15 @@ Clicking the band opens everything the agent's own usage screen shows.
 | Antigravity | Each group of models (Gemini, Claude and GPT, and any separate quota such as Gemini 4 Argon) with its weekly and five-hour limit, as "% left" with reset times. The plan. Context tokens |
 | Copilot CLI | Premium requests left of the month's allowance, with the reset date. The plan. Context with its share of the window |
 
+Every agent's band has the same cells in the same order: the model, the
+context, then the limits, the short one before the week. A figure that is
+not known yet shows as a dash. Before a session's first reply the model is
+the one the agent's settings name (Codex, Antigravity) or the one it
+reports (Claude Code); Copilot CLI names its model only after its first
+reply.
+
 A limit turns amber at 70% used and red at 90%. The session's figures update
-every few seconds, the account's every two minutes while the agent has a
+every few seconds, the account's every five minutes while the agent has a
 session, and on request.
 
 Where the figures come from:

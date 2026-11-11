@@ -220,9 +220,9 @@ final class AccountUsageTests: XCTestCase {
         ))
         XCTAssertEqual(usage?.plan, "Google AI Pro")
         XCTAssertEqual(usage?.groups.map(\.title), ["Gemini Models", "Claude and GPT models"])
-        XCTAssertEqual(usage?.groups.first?.limits.map(\.title), ["Weekly Limit", "Five Hour Limit"])
-        XCTAssertEqual(usage?.groups.first?.limits.map(\.shortTitle), ["Week", "5h"])
-        XCTAssertEqual(usage.map { $0.limits.map($0.percentText) }, ["53% left", "100% left", "100% left"], "a bucket that is switched off is left out")
+        XCTAssertEqual(usage?.groups.first?.limits.map(\.title), ["Five Hour Limit", "Weekly Limit"], "the short limit comes before the week")
+        XCTAssertEqual(usage?.groups.first?.limits.map(\.shortTitle), ["5h", "Week"])
+        XCTAssertEqual(usage.map { $0.limits.map($0.percentText) }, ["100% left", "53% left", "100% left"], "a bucket that is switched off is left out")
         XCTAssertEqual(bodies["https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary"]?["project"] as? String, "proj-1")
     }
 }

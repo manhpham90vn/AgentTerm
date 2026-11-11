@@ -379,7 +379,12 @@ public enum AccountUsageFetcher {
                 let id = bucket["bucketId"] as? String ?? bucket["id"] as? String ?? "\(name ?? "")-\(window)"
                 return AccountLimit(id: id, title: title, shortTitle: short, usedPercent: max(0, min(100, (1 - left) * 100)), resetsAt: date(bucket["resetTime"]))
             }
-            if !limits.isEmpty { groups.append(AccountUsageGroup(title: name, note: group["description"] as? String, limits: limits)) }
+            // The short limit first, then the week, as every agent lists them.
+            let ordered = limits.enumerated().sorted { a, b in
+                let (first, second) = (a.element.shortTitle == "Week" ? 1 : 0, b.element.shortTitle == "Week" ? 1 : 0)
+                return first != second ? first < second : a.offset < b.offset
+            }.map(\.element)
+            if !ordered.isEmpty { groups.append(AccountUsageGroup(title: name, note: group["description"] as? String, limits: ordered)) }
         }
         return AccountUsage(agent: "agy", showsRemaining: true, groups: groups, fetchedAt: now, problem: groups.isEmpty ? "Google reported no quota for this account." : nil)
     }
