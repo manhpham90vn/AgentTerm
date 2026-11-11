@@ -165,10 +165,20 @@ corner, the button that hides the side panel.
 - A compose field for writing a prompt with the normal iOS keyboard,
   autocorrect and input methods, sent to the terminal in one go.
 - Quick launch for the installed agents, in any folder known to the Mac.
+- A folder picker browses the Mac's folders, starting at home, to start an
+  agent or a shell in any of them. The folder can be added to the list the
+  Mac and the iPhone share.
+- Each folder opens what the Mac's side panel shows. **Git**: the changed
+  files with added and removed line counts, and the diff of a file, which
+  scrolls sideways. **History**: the conversations each agent had in the
+  folder, with a switch to every conversation on the Mac.
+- A conversation can be resumed in its agent, or handed off to another
+  installed agent with optional instructions. Both open the new session's
+  terminal on the iPhone.
 - Text size can be changed, which changes how many columns fit.
 - When the connection drops, the app reconnects on its own and returns to the
   session that was open.
-- A read-only view of a folder's changes (not built yet).
+
 
 ### Notifications (later)
 
@@ -200,6 +210,6 @@ needs a push provider and is not part of the first release.
 | Milestone | Scope | Status |
 |---|---|---|
 | M1 Mac core | Host daemon, PTY sessions, protocol, macOS three-pane app, agent detection and quick launch, changes pane, pairing QR code | Done, except the Vietnamese input matrix, which is checked by hand and not yet run |
-| M2 iPhone | iOS app: scan to pair, session list, terminal sized to the phone, key bar, compose field | Works in the iOS Simulator. Not yet run on a real iPhone, so QR scanning with the camera, Tailscale from the phone and typing with the Vietnamese keyboard are unverified |
-| M3 Polish | Host as a login item, screen snapshot on attach, changes pane on iPhone, app icon, signed and notarized Mac build | Not started |
+| M2 iPhone | iOS app: scan to pair, several Macs, session list, terminal sized to the phone, key bar, compose field, folder picker, changes, history, resume and handoff | Works in the iOS Simulator. Not yet run on a real iPhone, so QR scanning with the camera, Tailscale from the phone and typing with the Vietnamese keyboard are unverified |
+| M3 Polish | Host as a login item, screen snapshot on attach, app icon, signed and notarized Mac build | Not started |
 | M4 Awareness | Agent state (working, waiting, done) and notifications | Not started |

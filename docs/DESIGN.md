@@ -160,9 +160,15 @@ Client to host:
 | `takeControl(session, size)` | The user is using the session here: become the driver at this size. |
 | `kill(session)` | Hang up the session (SIGHUP, then SIGKILL after 3 s). |
 | `addFolder(path)` / `removeFolder(path)` | Change the shared folder list. |
+| `diff(path)` / `diffFile(path, file)` | A folder's uncommitted changes without the diffs, then one file's diff. |
+| `history(path)` | Conversations agents had in a folder, or everywhere when `path` is nil. |
+| `resume(agent, sessionID, cwd, size)` | Reopen a conversation in its agent, in a new session. |
+| `handoff(agent, sessionID, cwd, target, note, size)` | Hand a conversation to another agent, in a new session. |
+| `listDirectory(path)` | The folders inside a folder, or inside home. |
 
 Host to client: `welcome`, `sessions`, `agents`, `folders`, `attached`,
-`resized`, `exited`, `error`. The session list and the folder list are pushed
+`resized`, `exited`, `error`, `diff`, `diffFile`, `history`, `directory`,
+and for pairing `paired`, `pairingCode`, `devices`. The session list and the folder list are pushed
 to every client when they change.
 
 The folder list is host state, saved in `folders.json`, so the Mac and the
@@ -198,8 +204,12 @@ no hint that a line continues.
 `GitDiff` shells out to `git`: `diff HEAD` for tracked files and
 `ls-files --others` plus `diff --no-index` for untracked ones, then splits the
 output per file. The Mac app calls it directly every few seconds while it is
-in front. It is not in the protocol yet; the iPhone needs a `diff` message
-(M3).
+in front. The iPhone asks the host: `diff` returns the list of files without
+their diffs, which can be megabytes, and `diffFile` returns one file's diff.
+The host keeps the last result per folder for 20 seconds so opening a file
+right after the list does not run git again. Git and file reading for
+clients run on a separate concurrent queue, off the queue that moves terminal
+bytes.
 
 ## Conversation history
 
@@ -222,8 +232,11 @@ the first 256 KB and the last 64 KB are read. Session ids are put on a command
 line that a shell runs, so ids with anything but letters, digits, `-`, `_` and
 `.` are dropped.
 
-Like the changes pane, the Mac app calls this directly. It is not in the
-protocol yet.
+The Mac app calls this directly, since it runs where the files are. The
+iPhone asks the host with `history`, `resume` and `handoff`. For `resume` the
+host builds the command itself from the agent and the id, after checking
+both; for `handoff` it looks the conversation up again on its own disk, so a
+client only ever names a conversation and never supplies a path or command.
 
 ## Handoff
 

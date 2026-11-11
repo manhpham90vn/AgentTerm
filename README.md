@@ -23,9 +23,14 @@ to the same sessions over [Tailscale](https://tailscale.com).
 - A session can be watched from several clients. The client being used decides
   the terminal size; the others follow.
 - iPhone app: pair by scanning the Mac's QR code, see the Mac's folders and
-  sessions, start an agent, and use a terminal sized to the phone, with a key
-  bar (Esc, Tab, Shift+Tab, Ctrl-C, arrows) and a compose field for writing
-  prompts with the normal iOS keyboard.
+  sessions, start an agent in any folder on the Mac, and use a terminal sized
+  to the phone, with a key bar (Esc, Tab, Shift+Tab, Ctrl-C, arrows) and a
+  compose field for writing prompts with the normal iOS keyboard. It also
+  shows a folder's git changes and conversation history, and can resume a
+  conversation or hand it off to another agent.
+- Handoff: pass a conversation's work to another agent, for when one runs
+  out of quota. The other agent gets the conversation so far and the state of
+  the working tree.
 
 ## Requirements
 
