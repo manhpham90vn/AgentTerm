@@ -168,6 +168,36 @@ line that a shell runs, so ids with anything but letters, digits, `-`, `_` and
 Like the changes pane, the Mac app calls this directly. It is not in the
 protocol yet.
 
+## Handoff
+
+`Handoff.prepare` turns a `Conversation` into a handoff file and a command:
+
+1. `AgentHistory.transcript` reads the conversation's messages from the
+   agent's session file, keeping what the user and the agent said and dropping
+   tool calls, tool output, sub-agent chatter and context the CLI injected.
+   Antigravity keeps conversations in its own database, so its transcript is
+   empty and the handoff says so.
+2. The file gets a short brief, the working tree (branch, `git status --short`,
+   `git diff HEAD --stat`) and the transcript. Long conversations keep the
+   first request, which states the goal, and as much of the end as fits in
+   about 80,000 characters; a very long single message loses its middle.
+3. The file is written to `<folder>/.agentty/handoffs/<time>-<from>-to-<to>.md`.
+   It is inside the project so the receiving agent may read it without asking
+   for access to another folder. `.agentty/` is added to `.git/info/exclude`
+   unless it is already ignored.
+4. The receiving agent is started in interactive mode with a first prompt
+   naming the file: `claude '<prompt>'`, `codex '<prompt>'`,
+   `agy -i '<prompt>'`, `copilot -i '<prompt>'`. The prompt is single-quoted
+   for the shell.
+
+Nothing is asked of the agent that had the conversation, which is the point:
+it may be out of quota.
+
+A running session does not know its agent's conversation id. Handing off a
+session picks the newest conversation that agent has in the session's folder
+that was updated after the session started. Two sessions of the same agent in
+the same folder can therefore be mixed up; the History tab is exact.
+
 ## Pairing and security
 
 - The token is 32 random bytes, created on first run and stored with mode 0600

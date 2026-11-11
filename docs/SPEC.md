@@ -66,6 +66,25 @@ itself.
   button. Detection uses the user's login shell so it matches what a terminal
   would find, and can be re-run without restarting.
 
+### Handoff
+
+Handing off passes the work of one agent's conversation on to another agent.
+The typical case: an agent runs out of quota in the middle of a task and
+another one should finish it.
+
+- Any conversation can be handed off: a session that is running, or a past one
+  in the History tab. The agent that had the conversation does not need to be
+  able to answer any more.
+- The user picks the receiving agent from the agents that are installed.
+- Agentty writes a handoff file into the project with the conversation so far
+  (what the user and the agent said, without tool output) and the state of the
+  working tree, then starts the receiving agent in a new session with a prompt
+  to read that file and continue.
+- Handoff files live in `.agentty/handoffs/` and are kept out of git through
+  the repository's local exclude file. The project's `.gitignore` is not
+  changed.
+- The original session and conversation are left as they are.
+
 ### macOS window
 
 Three panes, like a code editor:
@@ -84,7 +103,7 @@ Three panes, like a code editor:
   - **History.** The conversations each agent had in the selected folder and
     its subfolders, one section per agent, newest first, with a title and how
     long ago it was. A conversation can be resumed, which opens it in its
-    agent in a new session.
+    agent in a new session, or handed off to another agent.
 
 ### Pairing and remote access
 

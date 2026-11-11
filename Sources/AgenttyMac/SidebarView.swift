@@ -141,6 +141,20 @@ struct SessionRow: View {
                     .foregroundStyle(.secondary)
                     .help("Sized for another device")
             }
+            if hovering, let agent = model.agentID(of: session), !model.handoffTargets(from: agent).isEmpty {
+                Menu {
+                    ForEach(model.handoffTargets(from: agent)) { target in
+                        Button("Hand Off to \(target.name)") { model.handoff(session: session, to: target) }
+                    }
+                } label: {
+                    Image(systemName: "arrowshape.turn.up.right.fill").font(.system(size: 9.5))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .foregroundStyle(.secondary)
+                .help("Give this session's work to another agent")
+            }
             if hovering {
                 Button { model.close(session.id) } label: {
                     Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
@@ -157,5 +171,19 @@ struct SessionRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { model.select(session: session) }
+        .contextMenu {
+            if let agent = model.agentID(of: session) {
+                let targets = model.handoffTargets(from: agent)
+                if !targets.isEmpty {
+                    Menu("Hand Off To") {
+                        ForEach(targets) { target in
+                            Button(target.name) { model.handoff(session: session, to: target) }
+                        }
+                    }
+                    Divider()
+                }
+            }
+            Button("End Session", role: .destructive) { model.close(session.id) }
+        }
     }
 }

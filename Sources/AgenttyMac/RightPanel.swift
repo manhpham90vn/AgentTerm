@@ -1,4 +1,5 @@
 import AgenttyHost
+import AgenttyProtocol
 import Combine
 import SwiftUI
 
@@ -176,6 +177,15 @@ private struct ConversationRow: View {
         return formatter
     }()
 
+    private var targets: [AgentInfo] { model.handoffTargets(from: conversation.agent) }
+
+    @ViewBuilder
+    private var handoffItems: some View {
+        ForEach(targets) { target in
+            Button(target.name) { model.handoff(conversation, to: target) }
+        }
+    }
+
     private var when: String {
         // "in 0 sec" reads oddly for something that just happened.
         conversation.updatedAt.timeIntervalSinceNow > -60 ? "now" : Self.relative.localizedString(for: conversation.updatedAt, relativeTo: Date())
@@ -194,6 +204,19 @@ private struct ConversationRow: View {
             }
             Spacer(minLength: 4)
             if hovering {
+                if !targets.isEmpty {
+                    Menu {
+                        handoffItems
+                    } label: {
+                        Label("Hand Off", systemImage: "arrowshape.turn.up.right.fill")
+                            .font(.system(size: 10.5, weight: .semibold))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .foregroundStyle(.secondary)
+                    .help("Give this work to another agent")
+                }
                 Button { model.resume(conversation) } label: {
                     Label("Resume", systemImage: "play.fill")
                         .font(.system(size: 10.5, weight: .semibold))
@@ -215,6 +238,9 @@ private struct ConversationRow: View {
         .onTapGesture(count: 2) { model.resume(conversation) }
         .contextMenu {
             Button("Resume") { model.resume(conversation) }
+            if !targets.isEmpty {
+                Menu("Hand Off To") { handoffItems }
+            }
             Button("Copy Resume Command") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(conversation.resumeCommand, forType: .string)

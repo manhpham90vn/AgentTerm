@@ -35,6 +35,8 @@ final class AppModel: ObservableObject {
     @Published var showDiff = true
     @Published var showPairing = false
     @Published private(set) var lastError: String?
+    /// Shown in an alert, for problems that are not tied to the launch screen.
+    @Published var notice: String?
 
     private var connection: AgenttyConnection?
     private var controllers: [SessionID: TerminalController] = [:]
@@ -258,6 +260,56 @@ final class AppModel: ObservableObject {
         history = nil
         refreshDiff()
         refreshHistory()
+    }
+
+    // MARK: Handoff
+
+    /// Agents a conversation of `agent` can be handed to.
+    func handoffTargets(from agent: String) -> [AgentInfo] {
+        installedAgents.filter { $0.id != agent }
+    }
+
+    func agentID(of session: SessionInfo) -> String? {
+        agents.first { $0.name == session.title }?.id
+    }
+
+    /// Passes a conversation on to another agent: writes the handoff file,
+    /// then starts `target` in a new session with a prompt to read it.
+    func handoff(_ conversation: Conversation, to target: AgentInfo) {
+        guard status == .connected else { return }
+        let size = currentController?.naturalSize ?? TermSize(cols: 100, rows: 30)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = Result { try Handoff.prepare(conversation, to: target.id) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                switch result {
+                case .success(let prepared):
+                    self.selectNextAttached = true
+                    self.connection?.send(.create(CreateRequest(command: prepared.command, cwd: conversation.cwd, title: target.name, size: size)))
+                case .failure(let error):
+                    self.notice = "\(error)"
+                }
+            }
+        }
+    }
+
+    /// Hands off what a running session is working on. The session's
+    /// conversation is the newest one its agent has in that folder.
+    func handoff(session: SessionInfo, to target: AgentInfo) {
+        guard let agent = agentID(of: session) else { return }
+        let name = session.title
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let newest = AgentHistory.conversations(in: session.cwd)
+                .first { $0.agent == agent && $0.cwd == session.cwd && $0.updatedAt >= session.createdAt.addingTimeInterval(-5) }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                if let newest {
+                    self.handoff(newest, to: target)
+                } else {
+                    self.notice = "\(name) has not saved a conversation for this session yet, so there is nothing to hand off."
+                }
+            }
+        }
     }
 
     // MARK: History

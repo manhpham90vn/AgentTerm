@@ -11,6 +11,9 @@ public struct Conversation: Identifiable, Equatable, Sendable {
     public var updatedAt: Date
     /// Directory the conversation ran in.
     public var cwd: String
+    /// File holding the conversation's messages, when the agent keeps one
+    /// that can be read.
+    public var source: String?
 
     public var id: String { agent + ":" + sessionID }
 
@@ -90,7 +93,7 @@ public enum AgentHistory {
                         ?? lines(of: data, containing: "\"user\"").lazy.compactMap(claudePrompt).first
                 }
                 guard let title else { return nil }
-                return Conversation(agent: "claude", sessionID: session, title: clean(title), updatedAt: file.modified, cwd: cwd)
+                return Conversation(agent: "claude", sessionID: session, title: clean(title), updatedAt: file.modified, cwd: cwd, source: file.url.path)
             }
         }
     }
@@ -101,7 +104,7 @@ public enum AgentHistory {
         })
     }
 
-    private static func claudePrompt(_ line: [String: Any]) -> String? {
+    static func claudePrompt(_ line: [String: Any]) -> String? {
         guard line["type"] as? String == "user", line["isMeta"] as? Bool != true, line["isSidechain"] as? Bool != true,
               let message = line["message"] as? [String: Any]
         else { return nil }
@@ -149,7 +152,7 @@ public enum AgentHistory {
                 return payload["message"] as? String
             }.first
             guard let title else { return nil }
-            return Conversation(agent: "codex", sessionID: id, title: clean(title), updatedAt: file.modified, cwd: cwd)
+            return Conversation(agent: "codex", sessionID: id, title: clean(title), updatedAt: file.modified, cwd: cwd, source: file.url.path)
         }
     }
 
@@ -203,7 +206,7 @@ public enum AgentHistory {
             }
             let modified = (try? workspace.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
             guard let title, let date = fields["updated_at"].flatMap(parseDate) ?? modified else { return nil }
-            return Conversation(agent: "copilot", sessionID: id, title: clean(title), updatedAt: date, cwd: cwd)
+            return Conversation(agent: "copilot", sessionID: id, title: clean(title), updatedAt: date, cwd: cwd, source: folder.appendingPathComponent("events.jsonl").path)
         }
     }
 
@@ -226,7 +229,7 @@ public enum AgentHistory {
     }
 
     /// Session files grow to many megabytes, so only an end of them is read.
-    private static func read(_ url: URL, head: Int? = nil, tail: Int? = nil) -> Data {
+    static func read(_ url: URL, head: Int? = nil, tail: Int? = nil) -> Data {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return Data() }
         defer { try? handle.close() }
         if let tail, let size = try? handle.seekToEnd(), size > UInt64(tail) {
