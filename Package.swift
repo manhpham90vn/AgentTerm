@@ -2,16 +2,16 @@
 import PackageDescription
 
 let package = Package(
-    name: "Agentty",
+    name: "AgentTerm",
     platforms: [.macOS(.v14), .iOS(.v17)],
     products: [
-        .library(name: "AgenttyProtocol", targets: ["AgenttyProtocol"]),
-        .library(name: "AgenttyClient", targets: ["AgenttyClient"]),
-        .library(name: "AgenttyTerminal", targets: ["AgenttyTerminal"]),
-        .library(name: "AgenttyEditor", targets: ["AgenttyEditor"]),
-        .library(name: "AgenttyHost", targets: ["AgenttyHost"]),
-        .executable(name: "agenttyd", targets: ["agenttyd"]),
-        .executable(name: "AgenttyMac", targets: ["AgenttyMac"]),
+        .library(name: "AgentTermProtocol", targets: ["AgentTermProtocol"]),
+        .library(name: "AgentTermClient", targets: ["AgentTermClient"]),
+        .library(name: "AgentTermTerminal", targets: ["AgentTermTerminal"]),
+        .library(name: "AgentTermEditor", targets: ["AgentTermEditor"]),
+        .library(name: "AgentTermHost", targets: ["AgentTermHost"]),
+        .executable(name: "agenttermd", targets: ["agenttermd"]),
+        .executable(name: "AgentTermMac", targets: ["AgentTermMac"]),
     ],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
@@ -22,18 +22,18 @@ let package = Package(
     ],
     targets: [
         // Wire protocol shared by the host daemon and every client (macOS, iOS).
-        .target(name: "AgenttyProtocol"),
+        .target(name: "AgentTermProtocol"),
         // WebSocket client used by the macOS app and, later, the iOS app.
-        .target(name: "AgenttyClient", dependencies: ["AgenttyProtocol"]),
+        .target(name: "AgentTermClient", dependencies: ["AgentTermProtocol"]),
         // Terminal emulator view bound to a session, shared by the macOS and iOS apps.
         .target(
-            name: "AgenttyTerminal",
-            dependencies: ["AgenttyProtocol", .product(name: "SwiftTerm", package: "SwiftTerm")]
+            name: "AgentTermTerminal",
+            dependencies: ["AgentTermProtocol", .product(name: "SwiftTerm", package: "SwiftTerm")]
         ),
         // Code editor with syntax coloring, Markdown preview and Mermaid
         // diagrams, shared by the macOS and iOS apps.
         .target(
-            name: "AgenttyEditor",
+            name: "AgentTermEditor",
             dependencies: [
                 .product(name: "Highlightr", package: "Highlightr"),
                 .product(name: "MarkdownUI", package: "swift-markdown-ui"),
@@ -43,20 +43,20 @@ let package = Package(
             resources: [.copy("Resources/mermaid.min.js")]
         ),
         // Starts a program on a pseudo terminal. C, because it needs fork().
-        .target(name: "CAgenttyPTY"),
+        .target(name: "CAgentTermPTY"),
         // macOS only: PTY ownership, session management, WebSocket server.
-        .target(name: "AgenttyHost", dependencies: ["AgenttyProtocol", "CAgenttyPTY"]),
-        .executableTarget(name: "agenttyd", dependencies: ["AgenttyHost", "AgenttyClient"]),
+        .target(name: "AgentTermHost", dependencies: ["AgentTermProtocol", "CAgentTermPTY"]),
+        .executableTarget(name: "agenttermd", dependencies: ["AgentTermHost", "AgentTermClient"]),
         .executableTarget(
-            name: "AgenttyMac",
+            name: "AgentTermMac",
             dependencies: [
-                "AgenttyClient",
-                "AgenttyEditor",
-                "AgenttyHost",
-                "AgenttyTerminal",
+                "AgentTermClient",
+                "AgentTermEditor",
+                "AgentTermHost",
+                "AgentTermTerminal",
             ]
         ),
-        .testTarget(name: "AgenttyProtocolTests", dependencies: ["AgenttyProtocol"]),
-        .testTarget(name: "AgenttyHostTests", dependencies: ["AgenttyHost", "AgenttyClient"]),
+        .testTarget(name: "AgentTermProtocolTests", dependencies: ["AgentTermProtocol"]),
+        .testTarget(name: "AgentTermHostTests", dependencies: ["AgentTermHost", "AgentTermClient"]),
     ]
 )

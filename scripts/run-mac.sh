@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds Agentty and opens it on this Mac.
+# Builds AgentTerm and opens it on this Mac.
 #
 #   ./scripts/run-mac.sh                  # debug build, restart the host daemon
 #   ./scripts/run-mac.sh --release        # optimized build
@@ -24,11 +24,11 @@ done
 CONFIG="$CONFIG" ./scripts/bundle-mac.sh
 
 # Quit a running copy so the new build is the one that opens.
-pkill -x Agentty 2>/dev/null || true
+pkill -x AgentTerm 2>/dev/null || true
 if [ "$KEEP_SESSIONS" -eq 0 ]; then
-    pkill -x agenttyd 2>/dev/null || true
+    pkill -x agenttermd 2>/dev/null || true
 fi
 sleep 0.5
 
-open dist/Agentty.app
-echo "Agentty is running. Daemon log: ~/Library/Application Support/Agentty/agenttyd.log"
+open dist/AgentTerm.app
+echo "AgentTerm is running. Daemon log: ~/Library/Application Support/AgentTerm/agenttermd.log"

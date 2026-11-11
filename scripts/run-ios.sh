@@ -10,7 +10,7 @@
 # simulator, or "iPhone 17".
 #
 # Needs xcodegen (brew install xcodegen). To run on a real iPhone, open
-# iOS/Agentty.xcodeproj in Xcode and pick your team under Signing.
+# iOS/AgentTerm.xcodeproj in Xcode and pick your team under Signing.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -28,7 +28,7 @@ xcrun simctl bootstatus "$DEVICE" -b >/dev/null
 open "$(xcode-select -p)/Applications/Simulator.app" 2>/dev/null || true
 
 LOG="$(mktemp)"
-if ! xcodebuild -project iOS/Agentty.xcodeproj -scheme Agentty \
+if ! xcodebuild -project iOS/AgentTerm.xcodeproj -scheme AgentTerm \
     -destination "platform=iOS Simulator,id=$DEVICE" \
     -derivedDataPath .build/ios -skipPackagePluginValidation \
     CODE_SIGNING_ALLOWED=NO build > "$LOG" 2>&1; then
@@ -38,7 +38,7 @@ if ! xcodebuild -project iOS/Agentty.xcodeproj -scheme Agentty \
 fi
 rm -f "$LOG"
 
-xcrun simctl install "$DEVICE" .build/ios/Build/Products/Debug-iphonesimulator/Agentty.app
-xcrun simctl launch "$DEVICE" click.manhdev.agentty.ios >/dev/null
-echo "Agentty is running on $SIM_NAME."
-echo "The simulator has no camera. With Agentty open on this Mac, pair it with: ./scripts/pair-ios.sh \"$SIM_NAME\""
+xcrun simctl install "$DEVICE" .build/ios/Build/Products/Debug-iphonesimulator/AgentTerm.app
+xcrun simctl launch "$DEVICE" com.manhpham.agentterm >/dev/null
+echo "AgentTerm is running on $SIM_NAME."
+echo "The simulator has no camera. With AgentTerm open on this Mac, pair it with: ./scripts/pair-ios.sh \"$SIM_NAME\""

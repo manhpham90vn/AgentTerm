@@ -1,0 +1,150 @@
+import AgentTermClient
+import AgentTermHost
+import AgentTermProtocol
+import Foundation
+
+// agenttermd: the AgentTerm host daemon. It owns the terminal sessions so they
+// keep running when the app window is closed.
+
+setvbuf(stdout, nil, _IOLBF, 0)
+signal(SIGPIPE, SIG_IGN)
+
+var port = agenttermDefaultPort
+var listenOnTailscale = true
+var askServices = true
+var home = NSHomeDirectory()
+var arguments = CommandLine.arguments.dropFirst()
+
+// `agenttermd statusline <file>` is what Claude Code sessions started by
+// AgentTerm run as their status line. See StatusLineRelay.
+if arguments.first == "statusline" {
+    arguments.removeFirst()
+    guard let file = arguments.popFirst() else { fail("statusline needs a file", status: 2) }
+    let output = StatusLineRelay.run(input: FileHandle.standardInput.readDataToEndOfFile(), file: file)
+    FileHandle.standardOutput.write(output)
+    exit(0)
+}
+
+// `agenttermd pairing-link` asks the running daemon for a pairing code and
+// prints the link an iPhone can pair with. Meant for the iOS Simulator, which
+// has no camera, and for tests.
+if arguments.first == "pairing-link" {
+    arguments.removeFirst()
+    var host: String?
+    var name: String?
+    while let argument = arguments.popFirst() {
+        switch argument {
+        case "--name":
+            guard let value = arguments.popFirst() else { fail("--name needs a name", status: 2) }
+            name = value
+        case "--port":
+            guard let value = arguments.popFirst().flatMap(UInt16.init) else { fail("--port needs a number", status: 2) }
+            port = value
+        case "--host":
+            guard let value = arguments.popFirst() else { fail("--host needs a name or address", status: 2) }
+            host = value
+        default:
+            fail("unknown option \(argument)", status: 2)
+        }
+    }
+    printPairingLink(port: port, host: host, name: name)
+}
+
+while let argument = arguments.popFirst() {
+    switch argument {
+    case "--port":
+        guard let value = arguments.popFirst().flatMap(UInt16.init) else {
+            FileHandle.standardError.write(Data("agenttermd: --port needs a number\n".utf8))
+            exit(2)
+        }
+        port = value
+    case "--local-only":
+        listenOnTailscale = false
+    case "--no-account-usage":
+        askServices = false
+    case "--home":
+        guard let value = arguments.popFirst() else { fail("--home needs a folder", status: 2) }
+        home = value
+    case "--help", "-h":
+        print("""
+        Usage: agenttermd [--port N] [--local-only]
+               agenttermd pairing-link [--port N] [--host NAME] [--name LABEL]
+
+          --port N       TCP port to listen on, or of the daemon to ask (default \(agenttermDefaultPort))
+          --local-only   Listen on 127.0.0.1 only, not on the Tailscale address
+          --no-account-usage
+                         Do not ask the agents' services what their accounts
+                         have left. Their sign-ins are then never read.
+          --home DIR     Read agent history from DIR instead of the home folder,
+                         and start the folder picker there (for tests)
+
+        pairing-link prints a link that pairs one device with the running
+        daemon. It works once and for five minutes. --host sets the name the
+        device should connect to (default: this Mac's Tailscale name, or
+        127.0.0.1 when Tailscale is not connected). --name sets what the device
+        calls this Mac (default: the Mac's name).
+        """)
+        exit(0)
+    default:
+        FileHandle.standardError.write(Data("agenttermd: unknown option \(argument)\n".utf8))
+        exit(2)
+    }
+}
+
+let server: HostServer
+do {
+    let token = try HostEnvironment.loadOrCreateToken()
+    server = HostServer(configuration: .init(port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home, statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil))
+    let bound = try server.start()
+    print("agenttermd listening on 127.0.0.1:\(bound)")
+} catch {
+    FileHandle.standardError.write(Data("agenttermd: \(error)\n".utf8))
+    exit(1)
+}
+
+// Hang up every session on shutdown, like closing a terminal window does.
+var signalSources: [DispatchSourceSignal] = []
+for number in [SIGTERM, SIGINT] {
+    signal(number, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+    source.setEventHandler {
+        server.stop()
+        exit(0)
+    }
+    source.resume()
+    signalSources.append(source)
+}
+
+dispatchMain()
+
+func fail(_ message: String, status: Int32 = 1) -> Never {
+    FileHandle.standardError.write(Data("agenttermd: \(message)\n".utf8))
+    exit(status)
+}
+
+func printPairingLink(port: UInt16, host: String?, name: String?) -> Never {
+    guard let token = try? HostEnvironment.loadOrCreateToken() else { fail("could not read this Mac's token") }
+    var target = host
+    if target == nil, case .ready(let name) = Tailscale.status() { target = name }
+    let connection = AgentTermConnection(host: "127.0.0.1", port: port, token: token, clientName: "agenttermd")
+    connection.onMessage = { message in
+        switch message {
+        case .welcome:
+            connection.send(.createPairingCode)
+        case .pairingCode(let code, _):
+            let info = PairingInfo(host: target ?? "127.0.0.1", port: port, code: code, name: name ?? Host.current().localizedName ?? "Mac")
+            print(info.url.absoluteString)
+            exit(0)
+        case .error(let text):
+            fail(text)
+        default:
+            break
+        }
+    }
+    connection.onState = { state in
+        if case .closed(let reason) = state { fail("no daemon answered on port \(port)" + (reason.map { ": \($0)" } ?? "")) }
+    }
+    connection.connect()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 6) { fail("timed out waiting for the daemon on port \(port)") }
+    dispatchMain()
+}

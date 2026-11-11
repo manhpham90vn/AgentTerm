@@ -1,13 +1,13 @@
-# Agentty product spec
+# AgentTerm product spec
 
 ## Summary
 
-Agentty is a native terminal for running coding agents on a Mac and steering
+AgentTerm is a native terminal for running coding agents on a Mac and steering
 them from an iPhone. The Mac runs the agents in real pseudo terminals. The
 iPhone is a remote control for those same terminals: it shows them, resizes
 them to fit its screen and sends input.
 
-Agentty is open source under the MIT license.
+AgentTerm is open source under the MIT license.
 
 ## Who it is for
 
@@ -17,7 +17,7 @@ without sitting at the Mac.
 
 ## What should make it better than the alternatives
 
-These three are the reasons to pick Agentty, and they take priority when
+These three are the reasons to pick AgentTerm, and they take priority when
 trading off scope:
 
 1. **A beautiful, easy interface.** Nothing to configure before the first
@@ -89,15 +89,15 @@ Where the figures come from:
 
 - **The account's limits** come from the agent's own service: Anthropic,
   ChatGPT, Google, GitHub. The request needs the agent's sign-in, which
-  Agentty reads where the agent keeps it on this Mac (the login keychain for
+  AgentTerm reads where the agent keeps it on this Mac (the login keychain for
   Claude Code and Antigravity, `~/.codex/auth.json` for Codex, `gh` for
   Copilot). It is used for that request, sent only to the service that
   issued it, never renewed, saved, logged or sent to an iPhone. When a
   sign-in has run out, the line says so and the agent renews it itself with
-  its next message. `agenttyd --no-account-usage` turns all of this off.
+  its next message. `agenttermd --no-account-usage` turns all of this off.
 - **The context** comes from what the agent records on this Mac. Claude
   Code also reports it, with its limits, to its status line: sessions
-  Agentty starts get a status line command of Agentty's own for that, which
+  AgentTerm starts get a status line command of AgentTerm's own for that, which
   then runs the status line the user had set up, so theirs still shows. For
   someone without one, Claude Code hides some of its keyboard hints once any
   status line is set, which is Claude Code's doing.
@@ -133,7 +133,7 @@ rather than guessed.
 
 - Buttons start Claude Code (`claude`), Codex (`codex`), Antigravity (`agy`),
   Copilot CLI (`copilot`) or a plain shell in the selected folder.
-- Agentty detects which CLIs are installed. A CLI that is not installed has no
+- AgentTerm detects which CLIs are installed. A CLI that is not installed has no
   button. Detection uses the user's login shell so it matches what a terminal
   would find, and can be re-run without restarting.
 
@@ -152,11 +152,11 @@ another one should finish it.
   instructions: what to focus on, what to leave alone, anything that is not
   in the conversation. The instructions are optional and are added after the
   prompt.
-- Agentty writes a handoff file into the project with the conversation so far
+- AgentTerm writes a handoff file into the project with the conversation so far
   (what the user and the agent said, without tool output) and the state of the
   working tree, then starts the receiving agent in a new session with a prompt
   to read that file and continue.
-- Handoff files live in `.agentty/handoffs/` and are kept out of git through
+- Handoff files live in `.agentterm/handoffs/` and are kept out of git through
   the repository's local exclude file. The project's `.gitignore` is not
   changed.
 - The original session and conversation are left as they are.
@@ -207,13 +207,13 @@ panel.
 
 ### Menu bar (Mac)
 
-Agentty keeps an icon in the menu bar, and closing its window does not quit
+AgentTerm keeps an icon in the menu bar, and closing its window does not quit
 it: the window and the Dock icon go, the menu bar icon stays. Its menu opens
 the window again, lists the running sessions (picking one opens it), starts
 an agent or a shell, opens pairing and Settings, and quits. Quit is there
 and ⌘Q.
 
-The setting "Keep Agentty in the menu bar when its window is closed", in
+The setting "Keep AgentTerm in the menu bar when its window is closed", in
 Settings (⌘,), is on by default. With it off there is no icon, and closing
 the window quits the app. Sessions keep running either way, since the host
 that holds them is a separate program.
@@ -291,7 +291,7 @@ edits here is not merged; saving overwrites it.
 - Pairing gives the iPhone a token of its own, kept in its Keychain. The Mac
   lists the paired devices, with when each last connected, and can remove
   one. A removed device is disconnected at once and has to pair again.
-- All remote traffic goes through Tailscale. Agentty does not run a relay
+- All remote traffic goes through Tailscale. AgentTerm does not run a relay
   server and does not open a port on the local network.
 - The pairing screen checks Tailscale on the Mac first. The code is shown only
   when Tailscale is installed, signed in and connected. Otherwise the screen
@@ -353,7 +353,7 @@ needs a push provider and is not part of the first release.
 
 ## Out of scope
 
-- Running agents on the iPhone or on a server Agentty hosts.
+- Running agents on the iPhone or on a server AgentTerm hosts.
 - Remote access without Tailscale.
 - A code editor. The changes pane is read-only.
 - Windows and Linux hosts.

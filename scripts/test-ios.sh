@@ -5,7 +5,7 @@
 #   ./scripts/test-ios.sh "iPhone 17 Pro"   # a simulator by name, or by UDID
 #   ./scripts/test-ios.sh --list            # show the simulators and stop
 #   SHOTS=/some/folder ./scripts/test-ios.sh    # also save screenshots there
-#   AGENTTY_LAUNCH="Start Claude Code" ./scripts/test-ios.sh
+#   AGENTTERM_LAUNCH="Start Claude Code" ./scripts/test-ios.sh
 #
 # The hosts use their own state folders and ports, so your real pairing,
 # folders and sessions are not touched. The keychain of the simulator the test
@@ -36,8 +36,8 @@ STATE="$(mktemp -d)"
 SECOND_STATE="$(mktemp -d)"
 LOG="$(mktemp)"
 
-swift build --product agenttyd
-AGENTTYD="$(swift build --show-bin-path)/agenttyd"
+swift build --product agenttermd
+AGENTTERMD="$(swift build --show-bin-path)/agenttermd"
 # Something for the first host to show: a project with uncommitted changes,
 # a conversation an agent had in it, and folders to browse.
 PROJECT="$STATE/project"
@@ -58,9 +58,9 @@ printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"write test
 printf '["%s"]' "$PROJECT" > "$STATE/folders.json"
 
 # Two hosts with their own state, standing in for two Macs.
-AGENTTY_STATE_DIR="$STATE" "$AGENTTYD" --port "$PORT" --local-only --home "$FAKE_HOME" > "$STATE/daemon.log" 2>&1 &
+AGENTTERM_STATE_DIR="$STATE" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
-AGENTTY_STATE_DIR="$SECOND_STATE" "$AGENTTYD" --port "$SECOND_PORT" --local-only > "$SECOND_STATE/daemon.log" 2>&1 &
+AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" --port "$SECOND_PORT" --local-only > "$SECOND_STATE/daemon.log" 2>&1 &
 SECOND_DAEMON=$!
 trap 'kill "$DAEMON" "$SECOND_DAEMON" 2>/dev/null || true; rm -rf "$STATE" "$SECOND_STATE"' EXIT
 for _ in $(seq 1 50); do [ -s "$STATE/token" ] && [ -s "$SECOND_STATE/token" ] && break; sleep 0.1; done
@@ -71,7 +71,7 @@ xcrun simctl bootstatus "$DEVICE" -b >/dev/null
 xcrun simctl keychain "$DEVICE" reset
 
 # TEST_RUNNER_ variables are handed to the test process without the prefix.
-XCODEBUILD=(xcodebuild -project iOS/Agentty.xcodeproj -scheme Agentty
+XCODEBUILD=(xcodebuild -project iOS/AgentTerm.xcodeproj -scheme AgentTerm
     -destination "platform=iOS Simulator,id=$DEVICE"
     -derivedDataPath .build/ios -skipPackagePluginValidation)
 
@@ -83,11 +83,11 @@ if ! "${XCODEBUILD[@]}" build-for-testing > "$LOG" 2>&1; then
     exit 1
 fi
 
-export TEST_RUNNER_AGENTTY_PAIR_URL="$(AGENTTY_STATE_DIR="$STATE" "$AGENTTYD" pairing-link --port "$PORT" --host 127.0.0.1 --name "First Mac")"
-export TEST_RUNNER_AGENTTY_SECOND_PAIR_URL="$(AGENTTY_STATE_DIR="$SECOND_STATE" "$AGENTTYD" pairing-link --port "$SECOND_PORT" --host 127.0.0.1 --name "Second Mac")"
-export TEST_RUNNER_AGENTTY_LAUNCH="${AGENTTY_LAUNCH:-Start Shell}"
-export TEST_RUNNER_AGENTTY_TEST_PROJECT=1
-if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export TEST_RUNNER_AGENTTY_SHOT_DIR="$SHOTS"; fi
+export TEST_RUNNER_AGENTTERM_PAIR_URL="$(AGENTTERM_STATE_DIR="$STATE" "$AGENTTERMD" pairing-link --port "$PORT" --host 127.0.0.1 --name "First Mac")"
+export TEST_RUNNER_AGENTTERM_SECOND_PAIR_URL="$(AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" pairing-link --port "$SECOND_PORT" --host 127.0.0.1 --name "Second Mac")"
+export TEST_RUNNER_AGENTTERM_LAUNCH="${AGENTTERM_LAUNCH:-Start Shell}"
+export TEST_RUNNER_AGENTTERM_TEST_PROJECT=1
+if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export TEST_RUNNER_AGENTTERM_SHOT_DIR="$SHOTS"; fi
 
 if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     grep -E "Test Case .* (passed|failed)|Executed [0-9]+ test" "$LOG" | tail -3

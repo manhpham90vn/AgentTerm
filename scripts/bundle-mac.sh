@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds Agentty.app into dist/. The app is ad-hoc signed, which is enough to
+# Builds AgentTerm.app into dist/. The app is ad-hoc signed, which is enough to
 # run it on the Mac that built it.
 #
 #   CONFIG=debug ./scripts/bundle-mac.sh    # default: release
@@ -9,16 +9,16 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 VERSION="${VERSION:-0.1.0}"
 CONFIG="${CONFIG:-release}"
-APP="dist/Agentty.app"
+APP="dist/AgentTerm.app"
 
-swift build -c "$CONFIG" --product AgenttyMac
-swift build -c "$CONFIG" --product agenttyd
+swift build -c "$CONFIG" --product AgentTermMac
+swift build -c "$CONFIG" --product agenttermd
 BIN="$(swift build -c "$CONFIG" --show-bin-path)"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
-cp "$BIN/AgenttyMac" "$APP/Contents/MacOS/Agentty"
-cp "$BIN/agenttyd" "$APP/Contents/MacOS/agenttyd"
+cp "$BIN/AgentTermMac" "$APP/Contents/MacOS/AgentTerm"
+cp "$BIN/agenttermd" "$APP/Contents/MacOS/agenttermd"
 
 # Packages ship files of their own (the syntax highlighter's grammars and
 # themes, for one) as resource bundles next to the binaries. Without them in
@@ -33,10 +33,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key><string>Agentty</string>
-    <key>CFBundleDisplayName</key><string>Agentty</string>
-    <key>CFBundleIdentifier</key><string>click.manhdev.agentty</string>
-    <key>CFBundleExecutable</key><string>Agentty</string>
+    <key>CFBundleName</key><string>AgentTerm</string>
+    <key>CFBundleDisplayName</key><string>AgentTerm</string>
+    <key>CFBundleIdentifier</key><string>com.manhpham.agentterm</string>
+    <key>CFBundleExecutable</key><string>AgentTerm</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>${VERSION}</string>
     <key>CFBundleVersion</key><string>${VERSION}</string>
@@ -48,6 +48,6 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --sign - "$APP/Contents/MacOS/agenttyd"
+codesign --force --sign - "$APP/Contents/MacOS/agenttermd"
 codesign --force --sign - "$APP"
 echo "Built $APP"
