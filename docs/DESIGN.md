@@ -173,7 +173,8 @@ Client to host:
 | `takeControl(session, size)` | The user is using the session here: become the driver at this size. |
 | `kill(session)` | Hang up the session (SIGHUP, then SIGKILL after 3 s). |
 | `addFolder(path)` / `removeFolder(path)` | Change the shared folder list. |
-| `diff(path)` / `diffFile(path, file)` | A folder's uncommitted changes without the diffs, then one file's diff. |
+| `diff(path)` / `diffFile(path, file, staged)` | A folder's uncommitted changes without the diffs, then one file's diff: its staged part, or what is only in the working tree. |
+| `gitStage(path, files)` / `gitUnstage(path, files)` / `gitCommit(path, message)` | Change what the next commit contains (no files means all), and commit it. Answered with `diff`, after an `error` carrying git's words if it failed. |
 | `history(path)` | Conversations agents had in a folder, or everywhere when `path` is nil. |
 | `resume(agent, sessionID, cwd, size)` | Reopen a conversation in its agent, in a new session. |
 | `handoffPlan(agent)` | What the receiving agent would be told, to show it before handing off. |
@@ -215,9 +216,13 @@ The diff of a file scrolls sideways as far as its longest line, with scroll
 bars that stay visible: macOS hides them until you scroll, which would give
 no hint that a line continues.
 
-`GitDiff` shells out to `git`: `diff HEAD` for tracked files and
-`ls-files --others` plus `diff --no-index` for untracked ones, then splits the
-output per file. The Mac app calls it directly every few seconds while it is
+`GitDiff` shells out to `git`: `diff --cached` for what is staged, `diff` for
+what is not, and `ls-files --others` plus `diff --no-index` for untracked
+files, then splits the output per file. Renames are not detected
+(`--no-renames`), so every entry is one path that can be staged on its own.
+`GitActions` runs `git add`, `git restore --staged` (`git rm --cached`
+before the first commit) and `git commit`, with `--literal-pathspecs` so a
+file name is never read as a pattern. The Mac app calls it directly every few seconds while it is
 in front. The iPhone asks the host: `diff` returns the list of files without
 their diffs, which can be megabytes, and `diffFile` returns one file's diff.
 The host keeps the last result per folder for 20 seconds so opening a file

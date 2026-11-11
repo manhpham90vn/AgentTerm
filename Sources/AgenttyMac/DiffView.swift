@@ -12,7 +12,7 @@ struct DiffView: View {
 
     private var selectedFile: FileDiff? {
         guard let files = model.diff?.files else { return nil }
-        return files.first { $0.path == model.selectedDiffFile } ?? files.first
+        return files.first { $0.id == model.selectedDiffFile } ?? files.first
     }
 
     var body: some View {
@@ -70,8 +70,12 @@ struct DiffView: View {
                 placeholder("No uncommitted changes.")
             } else {
                 VSplitView {
-                    fileList(diff.files)
-                        .frame(minHeight: 70, idealHeight: 170, maxHeight: 320)
+                    VStack(spacing: 0) {
+                        CommitBox(stagedCount: diff.staged.count)
+                        Theme.hairline.frame(height: 1)
+                        fileList(diff)
+                    }
+                    .frame(minHeight: 150, idealHeight: 260, maxHeight: 460)
                     if let file = selectedFile {
                         PatchView(file: file)
                             .frame(minHeight: 120, maxHeight: .infinity)
@@ -92,31 +96,121 @@ struct DiffView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func fileList(_ files: [FileDiff]) -> some View {
+    private func fileList(_ diff: DiffSnapshot) -> some View {
         ScrollView {
             LazyVStack(spacing: 1) {
-                if isTree {
-                    ForEach(DiffTree.rows(for: files, collapsed: collapsedFolders)) { row in
-                        switch row.kind {
-                        case .folder(let expanded):
-                            DiffFolderRow(row: row, expanded: expanded)
-                                .onTapGesture {
-                                    if expanded { collapsedFolders.insert(row.id) } else { collapsedFolders.remove(row.id) }
-                                }
-                        case .file(let file):
-                            FileRow(file: file, selected: file.path == selectedFile?.path, showsDirectory: false, depth: row.depth)
-                                .onTapGesture { model.selectedDiffFile = file.path }
-                        }
-                    }
-                } else {
-                    ForEach(files) { file in
-                        FileRow(file: file, selected: file.path == selectedFile?.path)
-                            .onTapGesture { model.selectedDiffFile = file.path }
-                    }
+                let staged = diff.staged
+                let unstaged = diff.unstaged
+                if !staged.isEmpty {
+                    ChangesHeader(title: "Staged", count: staged.count, symbol: "minus", help: "Unstage all") { model.unstage([]) }
+                    rows(staged)
+                }
+                if !unstaged.isEmpty {
+                    ChangesHeader(title: "Changes", count: unstaged.count, symbol: "plus", help: "Stage all") { model.stage([]) }
+                        .padding(.top, staged.isEmpty ? 0 : 6)
+                    rows(unstaged)
                 }
             }
             .padding(6)
         }
+    }
+
+    /// The files of one of the two lists, flat or grouped by folder.
+    @ViewBuilder
+    private func rows(_ files: [FileDiff]) -> some View {
+        if isTree {
+            ForEach(DiffTree.rows(for: files, collapsed: collapsedFolders)) { row in
+                switch row.kind {
+                case .folder(let expanded):
+                    DiffFolderRow(row: row, expanded: expanded)
+                        .onTapGesture {
+                            if expanded { collapsedFolders.insert(row.id) } else { collapsedFolders.remove(row.id) }
+                        }
+                case .file(let file):
+                    FileRow(file: file, selected: file.id == selectedFile?.id, showsDirectory: false, depth: row.depth)
+                        .onTapGesture { model.selectedDiffFile = file.id }
+                }
+            }
+        } else {
+            ForEach(files) { file in
+                FileRow(file: file, selected: file.id == selectedFile?.id)
+                    .onTapGesture { model.selectedDiffFile = file.id }
+            }
+        }
+    }
+}
+
+/// Where the commit message is written and the commit is made.
+private struct CommitBox: View {
+    @EnvironmentObject private var model: AppModel
+    let stagedCount: Int
+
+    private var message: Binding<String> {
+        Binding(
+            get: { model.selectedFolder.flatMap { model.commitMessages[$0] } ?? "" },
+            set: { if let folder = model.selectedFolder { model.commitMessages[folder] = $0 } }
+        )
+    }
+
+    private var canCommit: Bool {
+        stagedCount > 0 && !model.isCommitting && !message.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            TextField("Commit message", text: message, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .lineLimit(1...5)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.raised))
+                .accessibilityLabel("Commit message")
+            Button { model.commit() } label: {
+                HStack(spacing: 6) {
+                    if model.isCommitting { ProgressView().controlSize(.mini) }
+                    Text(stagedCount > 0 ? "Commit \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Commit")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .controlSize(.small)
+            .buttonStyle(.borderedProminent)
+            .disabled(!canCommit)
+            .help(stagedCount == 0 ? "Stage the changes to commit first" : "Commit what is staged")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+    }
+}
+
+/// Title of one of the two lists, with a button that moves every file to the other.
+private struct ChangesHeader: View {
+    let title: String
+    let count: Int
+    let symbol: String
+    let help: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title.uppercased())
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text("\(count)")
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(.tertiary)
+            Spacer()
+            Button(action: action) {
+                Image(systemName: symbol).font(.system(size: 10, weight: .bold)).frame(width: 18, height: 16)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help(help)
+            .accessibilityLabel(help)
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 6)
+        .padding(.vertical, 3)
     }
 }
 
@@ -173,6 +267,7 @@ struct DiffCount: View {
 }
 
 private struct FileRow: View {
+    @EnvironmentObject private var model: AppModel
     let file: FileDiff
     let selected: Bool
     /// The flat list shows where each file lives; the tree already does.
@@ -185,12 +280,13 @@ private struct FileRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(file.isUntracked ? "U" : "M")
+            Text(file.marker)
                 .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(file.isUntracked ? Theme.added : Color.orange)
+                .foregroundStyle(markerColor)
                 .frame(width: 12)
             Text(name)
                 .font(.system(size: 12))
+                .strikethrough(file.status == .deleted)
                 .lineLimit(1)
             if showsDirectory {
                 Text(directory)
@@ -201,9 +297,20 @@ private struct FileRow: View {
             }
             Spacer(minLength: 4)
             DiffCount(added: file.added, deleted: file.deleted)
+            Button(action: move) {
+                Image(systemName: file.isStaged ? "minus" : "plus")
+                    .font(.system(size: 10, weight: .bold))
+                    .frame(width: 18, height: 16)
+                    .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(Color.white.opacity(hovering ? 0.10 : 0)))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .opacity(hovering || selected ? 1 : 0.35)
+            .help(file.isStaged ? "Unstage" : "Stage")
+            .accessibilityLabel((file.isStaged ? "Unstage " : "Stage ") + name)
         }
         .padding(.leading, 8 + CGFloat(depth) * treeIndent)
-        .padding(.trailing, 8)
+        .padding(.trailing, 6)
         .padding(.vertical, 5)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -212,6 +319,21 @@ private struct FileRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .help(file.path)
+        .contextMenu {
+            Button(file.isStaged ? "Unstage" : "Stage", action: move)
+        }
+    }
+
+    private func move() {
+        if file.isStaged { model.unstage([file]) } else { model.stage([file]) }
+    }
+
+    private var markerColor: Color {
+        if file.isUntracked || file.status == .added { return Theme.added }
+        switch file.status {
+        case .deleted: return Theme.removed
+        default: return .orange
+        }
     }
 }
 
@@ -263,7 +385,7 @@ private struct PatchView: View {
             }
         }
         .background(Theme.canvas)
-        .id(file.path)
+        .id(file.id)
     }
 
     private func foreground(_ line: Substring) -> Color {

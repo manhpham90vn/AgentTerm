@@ -15,7 +15,7 @@ enum Route: Hashable {
     /// A folder's changes and history.
     case folder(String)
     /// The diff of one changed file.
-    case file(folder: String, file: String)
+    case file(folder: String, file: String, staged: Bool)
     /// Every conversation on the Mac.
     case allHistory
 }
@@ -56,6 +56,10 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var diffs: [String: DiffSnapshot] = [:]
     /// The diff of a file, by `patchKey`. A missing file is stored as nil.
     @Published private(set) var patches: [String: FileDiff?] = [:]
+    /// The commit message being written, by folder.
+    @Published var commitDrafts: [String: String] = [:]
+    /// The folder a commit was asked for and not answered yet.
+    @Published private(set) var committing: String?
     /// Conversations by folder. The empty key is "everywhere on the Mac".
     @Published private(set) var histories: [String: [Conversation]] = [:]
     /// The conversation of a running session that is being handed off.
@@ -114,7 +118,7 @@ final class PhoneModel: ObservableObject {
         return nil
     }
 
-    static func patchKey(folder: String, file: String) -> String { folder + "\n" + file }
+    static func patchKey(folder: String, file: String, staged: Bool) -> String { folder + "\n" + (staged ? "staged:" : "") + file }
 
     /// Agents a conversation of `agent` can be handed to.
     func handoffTargets(from agent: String) -> [AgentInfo] {
@@ -182,6 +186,8 @@ final class PhoneModel: ObservableObject {
         agentsLoaded = false
         diffs = [:]
         patches = [:]
+        commitDrafts = [:]
+        committing = nil
         histories = [:]
         listing = nil
         handoffPlan = nil
@@ -346,16 +352,23 @@ final class PhoneModel: ObservableObject {
             } else {
                 // A request that was going to open a session failed.
                 openCreatedSession = false
+                // So did a commit, if one was waiting. Its message is kept.
+                committing = nil
                 self.message = text
             }
         case .diff(let folder, let snapshot):
             diffs[folder] = snapshot
+            if committing == folder {
+                // The answer to a commit that git accepted: an error would have come first.
+                committing = nil
+                commitDrafts[folder] = nil
+            }
         case .diffFile(let folder, let file):
             // The host answers per folder; the file asked for is the one waiting.
             if let file {
-                patches[Self.patchKey(folder: folder, file: file.path)] = file
+                patches[Self.patchKey(folder: folder, file: file.path, staged: file.isStaged)] = file
             } else if let waiting = pendingPatch, waiting.folder == folder {
-                patches[Self.patchKey(folder: folder, file: waiting.file)] = .some(nil)
+                patches[Self.patchKey(folder: folder, file: waiting.file, staged: waiting.staged)] = .some(nil)
             }
             pendingPatch = nil
         case .history(let folder, let conversations):
@@ -436,7 +449,7 @@ final class PhoneModel: ObservableObject {
 
     // MARK: Changes, history, folders
 
-    private var pendingPatch: (folder: String, file: String)?
+    private var pendingPatch: (folder: String, file: String, staged: Bool)?
     /// A running session whose conversation is being looked up to hand off.
     private var pendingSessionHandoff: SessionInfo?
 
@@ -444,9 +457,26 @@ final class PhoneModel: ObservableObject {
         connection?.send(.diff(path: folder))
     }
 
-    func loadPatch(folder: String, file: String) {
-        pendingPatch = (folder, file)
-        connection?.send(.diffFile(path: folder, file: file))
+    func loadPatch(folder: String, file: String, staged: Bool) {
+        pendingPatch = (folder, file, staged)
+        connection?.send(.diffFile(path: folder, file: file, staged: staged))
+    }
+
+    /// Stages files for the next commit. No files means every change.
+    func stage(_ files: [String], in folder: String) {
+        connection?.send(.gitStage(path: folder, files: files))
+    }
+
+    /// Takes files out of the next commit. No files means all of them.
+    func unstage(_ files: [String], in folder: String) {
+        connection?.send(.gitUnstage(path: folder, files: files))
+    }
+
+    /// Commits what is staged with the message written for the folder.
+    func commit(in folder: String) {
+        guard committing == nil, let message = commitDrafts[folder] else { return }
+        committing = folder
+        connection?.send(.gitCommit(path: folder, message: message))
     }
 
     /// `folder` nil loads every conversation on the Mac.

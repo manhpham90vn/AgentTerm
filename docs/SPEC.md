@@ -135,6 +135,14 @@ corner, the button that hides the side panel.
     icon switches the file list between a flat list and a tree grouped by
     folder; folders in the tree can be collapsed and show the totals of what
     is inside. It refreshes on its own while the app is in front.
+    The files are in two lists, **Staged** and **Changes**. A button on a
+    file moves it to the other list, a button on a list's title moves all of
+    them. A file changed again after it was staged is in both, each with its
+    own diff. Above the lists is the commit message and the **Commit**
+    button, which commits what is staged, with the identity and the hooks
+    the repository is set up with. What git says when it refuses is shown.
+    Not part of it: staging part of a file, discarding changes, amending,
+    push and pull.
   - **History.** The conversations each agent had in the selected folder, one
     section per agent, newest first, with a title and how
     long ago it was. A conversation can be resumed, which opens it in its
@@ -235,7 +243,8 @@ Files yet.
   Mac and the iPhone share.
 - Each folder opens what the Mac's side panel shows. **Git**: the changed
   files with added and removed line counts, and the diff of a file, which
-  scrolls sideways. **History**: the conversations each agent had in the
+  scrolls sideways; files can be staged, unstaged and committed as on the
+  Mac. **History**: the conversations each agent had in the
   folder, with a switch to every conversation on the Mac.
 - A conversation can be resumed in its agent, or handed off to another
   installed agent. The handoff sheet shows the prompt the agent will start

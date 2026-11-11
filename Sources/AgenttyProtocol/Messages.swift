@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttyProtocolVersion = 2
+public let agenttyProtocolVersion = 3
 
 /// Default TCP port the host daemon listens on.
 public let agenttyDefaultPort: UInt16 = 7717
@@ -151,8 +151,16 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case removeFolder(path: String)
     /// Asks for a folder's uncommitted git changes, without the diffs.
     case diff(path: String)
-    /// Asks for the diff of one changed file.
-    case diffFile(path: String, file: String)
+    /// Asks for the diff of one changed file: the staged part of it, or
+    /// what is only in the working tree.
+    case diffFile(path: String, file: String, staged: Bool)
+    /// Stages files for the next commit. No files means every change.
+    /// Answered with the folder's changes, as `diff` is.
+    case gitStage(path: String, files: [String])
+    /// Takes files out of the next commit. No files means all of them.
+    case gitUnstage(path: String, files: [String])
+    /// Commits what is staged.
+    case gitCommit(path: String, message: String)
     /// Asks for the conversations agents had in a folder, or everywhere on
     /// the host when `path` is nil.
     case history(path: String?)

@@ -403,15 +403,21 @@ public final class HostServer {
                 server.diffCache[path] = (snapshot, Date())
                 server.send(.diff(path: path, snapshot: snapshot.withoutPatches), to: client)
             }
-        case .diffFile(let path, let file):
+        case .diffFile(let path, let file, let staged):
             if let cached = diffCache[path], Date().timeIntervalSince(cached.at) < 20 {
-                send(.diffFile(path: path, file: cached.snapshot.files.first { $0.path == file }), to: client)
+                send(.diffFile(path: path, file: cached.snapshot.files.first { $0.path == file && $0.isStaged == staged }), to: client)
                 return
             }
             work(for: client, { GitDiff.snapshot(directory: path) }) { server, client, snapshot in
                 server.diffCache[path] = (snapshot, Date())
-                server.send(.diffFile(path: path, file: snapshot.files.first { $0.path == file }), to: client)
+                server.send(.diffFile(path: path, file: snapshot.files.first { $0.path == file && $0.isStaged == staged }), to: client)
             }
+        case .gitStage(let path, let files):
+            git(for: client, in: path) { GitActions.stage(files, in: path) }
+        case .gitUnstage(let path, let files):
+            git(for: client, in: path) { GitActions.unstage(files, in: path) }
+        case .gitCommit(let path, let message):
+            git(for: client, in: path) { GitActions.commit(message: message, in: path) }
         case .history(let path):
             let home = configuration.home
             work(for: client, {
@@ -467,6 +473,19 @@ public final class HostServer {
                     server.send(.error("cannot open that folder"), to: client)
                 }
             }
+        }
+    }
+
+    /// Runs a git change, then answers with the folder's changes as they are
+    /// now, so the client's list is right whether it worked or not.
+    private func git(for client: Client, in path: String, _ action: @escaping () -> String?) {
+        work(for: client, { () -> (String?, DiffSnapshot) in
+            let problem = action()
+            return (problem, GitDiff.snapshot(directory: path))
+        }) { server, client, result in
+            server.diffCache[path] = (result.1, Date())
+            if let problem = result.0 { server.send(.error(problem), to: client) }
+            server.send(.diff(path: path, snapshot: result.1.withoutPatches), to: client)
         }
     }
 

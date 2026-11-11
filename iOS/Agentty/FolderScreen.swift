@@ -85,41 +85,17 @@ private struct ChangesList: View {
                             }
                             .padding(.horizontal, 6)
                             .padding(.bottom, 10)
-                            VStack(spacing: 0) {
-                                if isTree {
-                                    let rows = DiffTree.rows(for: diff.files, collapsed: collapsedFolders)
-                                    ForEach(rows) { row in
-                                        switch row.kind {
-                                        case .folder(let expanded):
-                                            Button {
-                                                if expanded { collapsedFolders.insert(row.id) } else { collapsedFolders.remove(row.id) }
-                                            } label: {
-                                                TreeFolderRow(row: row, expanded: expanded)
-                                            }
-                                            .buttonStyle(.plain)
-                                        case .file(let file):
-                                            NavigationLink(value: Route.file(folder: folder, file: file.path)) {
-                                                FileRow(file: file, showsDirectory: false, depth: row.depth)
-                                            }
-                                            .buttonStyle(.plain)
-                                        }
-                                        if row.id != rows.last?.id {
-                                            Palette.hairline.frame(height: 1).padding(.leading, 38 + CGFloat(row.depth) * treeIndent)
-                                        }
-                                    }
-                                } else {
-                                    ForEach(diff.files) { file in
-                                        NavigationLink(value: Route.file(folder: folder, file: file.path)) {
-                                            FileRow(file: file)
-                                        }
-                                        .buttonStyle(.plain)
-                                        if file.id != diff.files.last?.id {
-                                            Palette.hairline.frame(height: 1).padding(.leading, 38)
-                                        }
-                                    }
-                                }
+                            CommitBox(folder: folder, stagedCount: diff.staged.count)
+                                .padding(.bottom, 14)
+                            if !diff.staged.isEmpty {
+                                SectionHeader(title: "Staged", count: diff.staged.count, action: "Unstage All") { model.unstage([], in: folder) }
+                                rows(diff.staged)
                             }
-                            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
+                            if !diff.unstaged.isEmpty {
+                                SectionHeader(title: "Changes", count: diff.unstaged.count, action: "Stage All") { model.stage([], in: folder) }
+                                    .padding(.top, diff.staged.isEmpty ? 0 : 16)
+                                rows(diff.unstaged)
+                            }
                         }
                         .padding(.horizontal, 16)
                         .padding(.bottom, 24)
@@ -131,6 +107,124 @@ private struct ChangesList: View {
             }
         }
         .onAppear { model.loadDiff(folder) }
+    }
+
+    /// The files of one of the two lists, flat or grouped by folder.
+    private func rows(_ files: [FileDiff]) -> some View {
+        VStack(spacing: 0) {
+            if isTree {
+                let rows = DiffTree.rows(for: files, collapsed: collapsedFolders)
+                ForEach(rows) { row in
+                    switch row.kind {
+                    case .folder(let expanded):
+                        Button {
+                            if expanded { collapsedFolders.insert(row.id) } else { collapsedFolders.remove(row.id) }
+                        } label: {
+                            TreeFolderRow(row: row, expanded: expanded)
+                        }
+                        .buttonStyle(.plain)
+                    case .file(let file):
+                        fileRow(file, showsDirectory: false, depth: row.depth)
+                    }
+                    if row.id != rows.last?.id {
+                        Palette.hairline.frame(height: 1).padding(.leading, 38 + CGFloat(row.depth) * treeIndent)
+                    }
+                }
+            } else {
+                ForEach(files) { file in
+                    fileRow(file, showsDirectory: true, depth: 0)
+                    if file.id != files.last?.id {
+                        Palette.hairline.frame(height: 1).padding(.leading, 38)
+                    }
+                }
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
+    }
+
+    /// A file: tapping it shows its diff, the button at its end stages or unstages it.
+    private func fileRow(_ file: FileDiff, showsDirectory: Bool, depth: Int) -> some View {
+        HStack(spacing: 0) {
+            NavigationLink(value: Route.file(folder: folder, file: file.path, staged: file.isStaged)) {
+                FileRow(file: file, showsDirectory: showsDirectory, depth: depth)
+            }
+            .buttonStyle(.plain)
+            Button {
+                if file.isStaged { model.unstage([file.path], in: folder) } else { model.stage([file.path], in: folder) }
+            } label: {
+                Image(systemName: file.isStaged ? "minus.circle" : "plus.circle")
+                    .font(.system(size: 20))
+                    .foregroundStyle(file.isStaged ? Color.secondary : Palette.tint)
+                    .frame(width: 46, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel((file.isStaged ? "Unstage " : "Stage ") + (file.path as NSString).lastPathComponent)
+        }
+    }
+}
+
+/// Where the commit message is written and the commit is made.
+private struct CommitBox: View {
+    @EnvironmentObject private var model: PhoneModel
+    let folder: String
+    let stagedCount: Int
+
+    private var message: Binding<String> {
+        Binding(get: { model.commitDrafts[folder] ?? "" }, set: { model.commitDrafts[folder] = $0 })
+    }
+
+    private var isCommitting: Bool { model.committing == folder }
+
+    private var canCommit: Bool {
+        stagedCount > 0 && model.committing == nil && !message.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var body: some View {
+        VStack(spacing: 8) {
+            TextField("Commit message", text: message, axis: .vertical)
+                .lineLimit(1...5)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.panel))
+                .accessibilityIdentifier("commit-message")
+            Button { model.commit(in: folder) } label: {
+                HStack(spacing: 8) {
+                    if isCommitting { ProgressView().controlSize(.small) }
+                    Text(stagedCount > 0 ? "Commit \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Stage Changes to Commit")
+                        .font(.body.weight(.semibold))
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 4)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(!canCommit)
+            .accessibilityIdentifier("commit")
+        }
+    }
+}
+
+/// Title of one of the two lists, with a button that moves every file to the other.
+private struct SectionHeader: View {
+    let title: String
+    let count: Int
+    let action: String
+    let perform: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title.uppercased())
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Text("\(count)")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.tertiary)
+            Spacer()
+            Button(action, action: perform)
+                .font(.footnote.weight(.medium))
+        }
+        .padding(.horizontal, 6)
+        .padding(.bottom, 8)
     }
 }
 
@@ -173,9 +267,9 @@ private struct FileRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text(file.isUntracked ? "U" : "M")
+            Text(file.marker)
                 .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundStyle(file.isUntracked ? Palette.added : Color.orange)
+                .foregroundStyle(file.isUntracked || file.status == .added ? Palette.added : (file.status == .deleted ? Palette.danger : Color.orange))
                 .frame(width: 16)
             VStack(alignment: .leading, spacing: 2) {
                 Text((file.path as NSString).lastPathComponent)
@@ -192,12 +286,9 @@ private struct FileRow: View {
             }
             Spacer(minLength: 8)
             DiffCount(added: file.added, deleted: file.deleted)
-            Image(systemName: "chevron.right")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.tertiary)
         }
         .padding(.leading, 12 + CGFloat(depth) * treeIndent)
-        .padding(.trailing, 12)
+        .padding(.trailing, 2)
         .padding(.vertical, 11)
         .contentShape(Rectangle())
     }
@@ -221,8 +312,10 @@ struct PatchScreen: View {
     @EnvironmentObject private var model: PhoneModel
     let folder: String
     let file: String
+    /// The staged part of the file, or what is only in the working tree.
+    let staged: Bool
 
-    private var key: String { PhoneModel.patchKey(folder: folder, file: file) }
+    private var key: String { PhoneModel.patchKey(folder: folder, file: file, staged: staged) }
 
     var body: some View {
         Group {
@@ -256,7 +349,7 @@ struct PatchScreen: View {
         .background(Palette.canvas.ignoresSafeArea())
         .navigationTitle((file as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { model.loadPatch(folder: folder, file: file) }
+        .onAppear { model.loadPatch(folder: folder, file: file, staged: staged) }
     }
 
     private func foreground(_ line: String) -> Color {

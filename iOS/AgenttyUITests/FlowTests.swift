@@ -127,6 +127,28 @@ final class FlowTests: XCTestCase {
             capture("7b-diff")
             app.navigationBars.buttons.firstMatch.tap()
 
+            // Stage the file, take it back, stage it again and commit it.
+            let commit = app.buttons["commit"]
+            XCTAssertTrue(commit.waitForExistence(timeout: 5))
+            XCTAssertFalse(commit.isEnabled, "nothing is staged yet")
+            app.buttons["Stage notes.txt"].tap()
+            XCTAssertTrue(app.buttons["Unstage notes.txt"].waitForExistence(timeout: 10), "the file was not staged")
+            XCTAssertTrue(app.staticTexts["STAGED"].exists)
+            capture("7b2-staged")
+            app.buttons["Unstage All"].tap()
+            XCTAssertTrue(app.buttons["Stage notes.txt"].waitForExistence(timeout: 10), "the file was not unstaged")
+            app.buttons["Stage All"].tap()
+            XCTAssertTrue(app.buttons["Unstage notes.txt"].waitForExistence(timeout: 10))
+            XCTAssertFalse(commit.isEnabled, "there is no message yet")
+            let message = app.textFields["commit-message"].exists ? app.textFields["commit-message"] : app.textViews["commit-message"]
+            message.tap()
+            message.typeText("test: add a second line")
+            XCTAssertTrue(commit.isEnabled)
+            capture("7b3-ready-to-commit")
+            commit.tap()
+            XCTAssertTrue(app.staticTexts["No uncommitted changes."].waitForExistence(timeout: 15), "the commit was not made")
+            capture("7b4-committed")
+
             app.buttons["History"].tap()
             let conversation = app.staticTexts["write tests for the parser"]
             XCTAssertTrue(conversation.waitForExistence(timeout: 10), "the conversation is not listed")

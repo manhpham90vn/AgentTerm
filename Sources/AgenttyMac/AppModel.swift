@@ -34,7 +34,11 @@ final class AppModel: ObservableObject {
     /// Sessions currently sized by another device, with that device's grid.
     @Published private(set) var foreignSizes: [SessionID: TermSize] = [:]
     @Published private(set) var diff: DiffSnapshot?
+    /// `id` of the change whose diff is shown.
     @Published var selectedDiffFile: String?
+    /// The commit message being written, by folder.
+    @Published var commitMessages: [String: String] = [:]
+    @Published private(set) var isCommitting = false
     /// Past agent conversations of the selected folder. `nil` while loading.
     @Published private(set) var history: [Conversation]?
     /// History lists the selected folder's conversations, or every
@@ -490,9 +494,50 @@ final class AppModel: ObservableObject {
             DispatchQueue.main.async { [weak self] in
                 guard let self, generation == self.diffGeneration, self.selectedFolder == directory else { return }
                 if self.diff != snapshot { self.diff = snapshot }
-                if let selected = self.selectedDiffFile, !snapshot.files.contains(where: { $0.path == selected }) {
-                    self.selectedDiffFile = nil
+                if let selected = self.selectedDiffFile, !snapshot.files.contains(where: { $0.id == selected }) {
+                    // A file that was just staged or unstaged stays selected in its new list.
+                    let path = selected.hasPrefix("staged:") ? String(selected.dropFirst("staged:".count)) : selected
+                    self.selectedDiffFile = snapshot.files.first { $0.path == path }?.id
                 }
+            }
+        }
+    }
+
+    /// Stages files for the next commit. No files means every change.
+    func stage(_ files: [FileDiff]) {
+        let paths = files.map(\.path)
+        git { GitActions.stage(paths, in: $0) }
+    }
+
+    /// Takes files out of the next commit. No files means all of them.
+    func unstage(_ files: [FileDiff]) {
+        let paths = files.map(\.path)
+        git { GitActions.unstage(paths, in: $0) }
+    }
+
+    /// Commits what is staged in the selected folder with the message written for it.
+    func commit() {
+        guard let directory = selectedFolder, !isCommitting else { return }
+        let message = commitMessages[directory] ?? ""
+        isCommitting = true
+        git({ GitActions.commit(message: message, in: $0) }) { [weak self] succeeded in
+            self?.isCommitting = false
+            if succeeded { self?.commitMessages[directory] = nil }
+        }
+    }
+
+    /// Runs a git change in the selected folder off the main thread, then
+    /// shows what git said if it failed and reads the changes again.
+    private func git(_ action: @escaping (String) -> String?, then: ((Bool) -> Void)? = nil) {
+        guard let directory = selectedFolder else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let problem = action(directory)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                if let problem { self.notice = problem }
+                then?(problem == nil)
+                self.refreshDiff()
+                self.files.refresh()
             }
         }
     }

@@ -5,6 +5,13 @@ import Foundation
 // which produces these, and by the macOS and iOS apps, which show them.
 
 public struct FileDiff: Codable, Identifiable, Equatable, Sendable {
+    /// What happened to the file, as git names it.
+    public enum Status: String, Codable, Sendable {
+        case modified = "M"
+        case added = "A"
+        case deleted = "D"
+    }
+
     public var path: String
     public var added: Int
     public var deleted: Int
@@ -12,16 +19,30 @@ public struct FileDiff: Codable, Identifiable, Equatable, Sendable {
     /// Unified diff for this file, starting at the first hunk header. Empty
     /// in a list of files sent over the network; ask for the file to get it.
     public var patch: String
+    /// True for what is staged for the next commit, false for what is only
+    /// in the working tree. A file changed after it was staged has an entry
+    /// of each kind.
+    public var isStaged: Bool
+    public var status: Status
 
-    public var id: String { path }
+    /// Staged and unstaged entries of one file are different rows.
+    public var id: String { (isStaged ? "staged:" : "") + path }
 
-    public init(path: String, added: Int, deleted: Int, isUntracked: Bool, patch: String) {
+    public init(
+        path: String, added: Int, deleted: Int, isUntracked: Bool, patch: String,
+        isStaged: Bool = false, status: Status = .modified
+    ) {
         self.path = path
         self.added = added
         self.deleted = deleted
         self.isUntracked = isUntracked
         self.patch = patch
+        self.isStaged = isStaged
+        self.status = status
     }
+
+    /// One letter for a list: git's letter, or "U" for a file git does not track yet.
+    public var marker: String { isUntracked ? "U" : status.rawValue }
 }
 
 public struct DiffSnapshot: Codable, Equatable, Sendable {
@@ -36,6 +57,11 @@ public struct DiffSnapshot: Codable, Equatable, Sendable {
     }
 
     public static let notARepository = DiffSnapshot(isRepository: false, branch: nil, files: [])
+
+    /// What the next commit would contain.
+    public var staged: [FileDiff] { files.filter(\.isStaged) }
+    /// Changes that are not staged, files git does not track yet included.
+    public var unstaged: [FileDiff] { files.filter { !$0.isStaged } }
 
     /// The same list without the diffs themselves, which can be megabytes.
     public var withoutPatches: DiffSnapshot {

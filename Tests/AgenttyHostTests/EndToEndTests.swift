@@ -364,8 +364,8 @@ final class EndToEndTests: XCTestCase {
         XCTAssertEqual(snapshot?.files.map(\.added), [1, 1])
         XCTAssertEqual(snapshot?.files.map(\.patch), ["", ""], "the list does not carry the diffs")
 
-        phone.connection.send(.diffFile(path: directory.path, file: "b.txt"))
-        phone.connection.send(.diffFile(path: directory.path, file: "gone.txt"))
+        phone.connection.send(.diffFile(path: directory.path, file: "b.txt", staged: false))
+        phone.connection.send(.diffFile(path: directory.path, file: "gone.txt", staged: false))
         var files: [FileDiff?] = []
         waitUntil("one file") {
             files = phone.messages.compactMap { if case .diffFile(directory.path, let f) = $0 { return .some(f) } else { return nil } }
@@ -377,6 +377,62 @@ final class EndToEndTests: XCTestCase {
 
         phone.connection.send(.diff(path: "/"))
         waitUntil("not a repository") { phone.messages.contains(.diff(path: "/", snapshot: .notARepository)) }
+    }
+
+    func testStagingAndCommittingFromAClient() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentty-e2e-commit-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        git("init", "-q", "-b", "main", in: directory)
+        git("config", "user.name", "Test", in: directory)
+        git("config", "user.email", "test@example.com", in: directory)
+        git("config", "commit.gpgsign", "false", in: directory)
+        try "one\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: directory)
+        git("commit", "-q", "-m", "init", in: directory)
+        try "one\ntwo\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "mới\n".write(to: directory.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+
+        let phone = connect("phone")
+        /// The newest list of changes the phone was sent.
+        func latest() -> [String]? {
+            phone.messages.compactMap { message -> [String]? in
+                if case .diff(directory.path, let snapshot) = message { return snapshot.files.map { ($0.isStaged ? "staged " : "") + $0.marker + " " + $0.path } }
+                return nil
+            }.last
+        }
+
+        phone.connection.send(.gitStage(path: directory.path, files: ["a.txt"]))
+        waitUntil("staged") { latest() == ["staged M a.txt", "U b.txt"] }
+
+        // The staged part of the file is its own diff.
+        phone.connection.send(.diffFile(path: directory.path, file: "a.txt", staged: true))
+        waitUntil("staged diff") {
+            phone.messages.contains { if case .diffFile(directory.path, let file?) = $0 { return file.isStaged && file.patch.contains("+two") } else { return false } }
+        }
+
+        phone.connection.send(.gitUnstage(path: directory.path, files: []))
+        waitUntil("unstaged") { latest() == ["M a.txt", "U b.txt"] }
+
+        // Nothing staged: git refuses, the phone is told why, nothing is committed.
+        phone.connection.send(.gitCommit(path: directory.path, message: "nothing yet"))
+        waitUntil("refused") {
+            phone.messages.contains { if case .error(let text) = $0 { return text.lowercased().contains("no changes added") || text.lowercased().contains("nothing") } else { return false } }
+        }
+
+        phone.connection.send(.gitStage(path: directory.path, files: []))
+        waitUntil("all staged") { latest() == ["staged M a.txt", "staged A b.txt"] }
+        phone.connection.send(.gitCommit(path: directory.path, message: "feat: thêm dòng"))
+        waitUntil("committed") { latest() == [] }
+
+        let log = Process()
+        let pipe = Pipe()
+        log.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        log.arguments = ["-C", directory.path, "log", "--format=%s"]
+        log.standardOutput = pipe
+        try log.run()
+        log.waitUntilExit()
+        XCTAssertEqual(String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self), "feat: thêm dòng\ninit\n")
     }
 
     func testAClientCanBrowseFolders() throws {

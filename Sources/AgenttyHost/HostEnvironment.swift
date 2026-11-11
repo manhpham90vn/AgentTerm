@@ -89,14 +89,17 @@ public enum HostEnvironment {
 
 /// Runs a short helper command and returns its standard output.
 enum Subprocess {
-    static func run(_ executable: String, _ arguments: [String], cwd: String? = nil, timeout: TimeInterval = 10) -> (status: Int32, output: Data)? {
+    /// - Parameter mergeErrors: also capture what the command writes to standard error.
+    static func run(
+        _ executable: String, _ arguments: [String], cwd: String? = nil, timeout: TimeInterval = 10, mergeErrors: Bool = false
+    ) -> (status: Int32, output: Data)? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
         let pipe = Pipe()
         process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
+        process.standardError = mergeErrors ? pipe : FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
 

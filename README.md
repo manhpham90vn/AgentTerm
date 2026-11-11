@@ -14,7 +14,8 @@ to the same sessions over [Tailscale](https://tailscale.com).
 ## What works today
 
 - Three-pane window: project folders on the left, the terminal in the middle,
-  the folder's uncommitted git changes on the right.
+  the folder's uncommitted git changes on the right, to stage, unstage and
+  commit.
 - One-click launch for each agent CLI that is installed. Agentty looks them up
   through your login shell, so anything on your normal `PATH` is found, and
   agents that are not installed get no button.

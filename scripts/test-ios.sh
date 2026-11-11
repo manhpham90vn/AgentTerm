@@ -44,6 +44,11 @@ PROJECT="$STATE/project"
 FAKE_HOME="$STATE/home"
 mkdir -p "$PROJECT" "$FAKE_HOME/Projects/demo"
 git -C "$PROJECT" init -q -b main
+# The test commits from the phone: an identity of its own, and no signing,
+# whatever this machine is set up with.
+git -C "$PROJECT" config user.name t
+git -C "$PROJECT" config user.email t@example.com
+git -C "$PROJECT" config commit.gpgsign false
 printf 'first line\n' > "$PROJECT/notes.txt"
 git -C "$PROJECT" add . && git -C "$PROJECT" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m init
 printf 'first line\nsecond line\n' > "$PROJECT/notes.txt"
