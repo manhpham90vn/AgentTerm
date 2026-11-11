@@ -6,3 +6,9 @@ DerivedData/
 .DS_Store
 dist/
 iOS/AgentTerm/Info.plist
+
+# fastlane
+fastlane/report.xml
+fastlane/README.md
+*.ipa
+*.dSYM.zip

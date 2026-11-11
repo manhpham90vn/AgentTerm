@@ -117,3 +117,7 @@ The host daemon gives shell access, so it is careful about who connects:
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+## Releasing
+
+See [docs/RELEASE.md](docs/RELEASE.md): TestFlight for the iPhone app, a notarized disk image for the Mac app.

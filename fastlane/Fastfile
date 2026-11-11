@@ -1,0 +1,142 @@
+# Releases of AgentTerm.
+#
+#   ios beta      build the iPhone app and upload it to TestFlight
+#   ios build     the same without the upload, to check signing
+#   mac release   build AgentTerm.app, sign it with Developer ID, notarize it, make a .dmg
+#   mac sign      the same without notarizing, to check signing
+#
+# Run them through scripts/release.sh, which reads the secrets these lanes
+# need from the private dotfiles repo. Nothing secret is in this file.
+#
+#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_PATH   App Store Connect API key
+#   APPLE_TEAM_ID                             the developer team
+#   MATCH_GIT_URL, MATCH_PASSWORD             fastlane match (iPhone)
+#   DEVELOPER_ID_P12, DEVELOPER_ID_P12_PASSWORD   Developer ID certificate (Mac)
+
+APP_ID = "com.manhpham.agentterm".freeze
+ROOT = File.expand_path("..", __dir__).freeze
+DIST = File.join(ROOT, "dist").freeze
+
+def asc_key
+  app_store_connect_api_key(
+    key_id: ENV.fetch("ASC_KEY_ID"),
+    issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+    key_filepath: ENV.fetch("ASC_KEY_PATH"),
+    in_house: false
+  )
+end
+
+# "0.1.0", from the iPhone project unless VERSION says otherwise.
+def app_version
+  return ENV["VERSION"] unless ENV["VERSION"].to_s.empty?
+
+  File.read(File.join(ROOT, "iOS/project.yml"))[/MARKETING_VERSION:\s*([\d.]+)/, 1] || "0.1.0"
+end
+
+platform :ios do
+  desc "Build the iPhone app, signed for the App Store"
+  lane :build do |options|
+    key = asc_key
+    team = ENV.fetch("APPLE_TEAM_ID")
+    Dir.chdir(File.join(ROOT, "iOS")) { sh("xcodegen", "generate") }
+
+    # `create:true` lets match make the provisioning profile the first time.
+    # Otherwise it only reads what the match repository already holds.
+    match(
+      type: "appstore",
+      app_identifier: APP_ID,
+      api_key: key,
+      team_id: team,
+      git_url: ENV.fetch("MATCH_GIT_URL"),
+      readonly: !options[:create]
+    )
+    profile = ENV.fetch("sigh_#{APP_ID}_appstore_profile-name")
+
+    # The project is generated, so signing is set on it here, on the app
+    # alone: the Swift packages it builds must not get a profile.
+    update_code_signing_settings(
+      path: File.join(ROOT, "iOS/AgentTerm.xcodeproj"),
+      targets: ["AgentTerm"],
+      use_automatic_signing: false,
+      team_id: team,
+      code_sign_identity: "Apple Distribution",
+      profile_name: profile
+    )
+
+    number = options[:build_number] ||
+             latest_testflight_build_number(api_key: key, app_identifier: APP_ID, version: app_version, initial_build_number: 0) + 1
+    build_app(
+      project: File.join(ROOT, "iOS/AgentTerm.xcodeproj"),
+      scheme: "AgentTerm",
+      configuration: "Release",
+      export_method: "app-store",
+      export_options: { provisioningProfiles: { APP_ID => profile } },
+      xcargs: "MARKETING_VERSION=#{app_version} CURRENT_PROJECT_VERSION=#{number} -skipPackagePluginValidation",
+      output_directory: DIST,
+      output_name: "AgentTerm.ipa"
+    )
+  end
+
+  desc "Build the iPhone app and upload it to TestFlight"
+  lane :beta do |options|
+    build(options)
+    upload_to_testflight(
+      api_key: asc_key,
+      ipa: File.join(DIST, "AgentTerm.ipa"),
+      skip_waiting_for_build_processing: true
+    )
+  end
+end
+
+platform :mac do
+  desc "Build AgentTerm.app and sign it with Developer ID"
+  lane :sign do
+    version = app_version
+    app = File.join(DIST, "AgentTerm.app")
+    dmg = File.join(DIST, "AgentTerm-#{version}.dmg")
+    Dir.chdir(ROOT) { sh({ "VERSION" => version, "CONFIG" => "release" }, "./scripts/bundle-mac.sh") }
+
+    # The certificate goes into a keychain of its own for the length of the
+    # run, so the login keychain is left as it was.
+    keychain = "agentterm-release"
+    password = SecureRandom.hex(16)
+    delete_keychain(name: keychain) if File.exist?(File.expand_path("~/Library/Keychains/#{keychain}-db"))
+    create_keychain(name: keychain, password: password, unlock: true, timeout: 3600, add_to_search_list: true, default_keychain: false)
+    begin
+      import_certificate(
+        certificate_path: ENV.fetch("DEVELOPER_ID_P12"),
+        certificate_password: ENV["DEVELOPER_ID_P12_PASSWORD"].to_s,
+        keychain_name: keychain,
+        keychain_password: password
+      )
+      path = File.expand_path("~/Library/Keychains/#{keychain}-db")
+      identity = sh("security", "find-identity", "-v", "-p", "codesigning", path, log: false)[/"(Developer ID Application: [^"]+)"/, 1]
+      UI.user_error!("No Developer ID Application certificate in #{ENV['DEVELOPER_ID_P12']}") unless identity
+
+      # Inside out: the daemon, then the app around it. The hardened runtime
+      # and a timestamp are what notarization asks for.
+      flags = ["--force", "--options", "runtime", "--timestamp", "--keychain", path, "--sign", identity]
+      sh("codesign", *flags, File.join(app, "Contents/MacOS/agenttermd"))
+      sh("codesign", *flags, app)
+      sh("codesign", "--verify", "--deep", "--strict", "--verbose=2", app)
+
+      FileUtils.rm_f(dmg)
+      sh("hdiutil", "create", "-volname", "AgentTerm", "-srcfolder", app, "-ov", "-format", "UDZO", dmg, log: false)
+      sh("codesign", "--force", "--timestamp", "--keychain", path, "--sign", identity, dmg)
+    ensure
+      delete_keychain(name: keychain)
+    end
+    UI.success("Signed #{dmg}")
+    dmg
+  end
+
+  desc "Build, sign and notarize AgentTerm for download outside the App Store"
+  lane :release do
+    dmg = sign
+    # Uploads the disk image to Apple's notary service, waits for the
+    # verdict and staples the ticket to it.
+    notarize(package: dmg, bundle_id: APP_ID, api_key: asc_key, print_log: true)
+    sh("spctl", "--assess", "--type", "open", "--context", "context:primary-signature", "--verbose=2", dmg)
+    UI.success("Notarized #{dmg}")
+  end
+end
