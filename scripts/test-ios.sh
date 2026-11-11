@@ -38,15 +38,24 @@ xcrun simctl bootstatus "$DEVICE" -b >/dev/null
 xcrun simctl keychain "$DEVICE" reset
 
 # TEST_RUNNER_ variables are handed to the test process without the prefix.
-# A pairing link works once and for five minutes, which covers the build below.
+XCODEBUILD=(xcodebuild -project iOS/Agentty.xcodeproj -scheme Agentty
+    -destination "platform=iOS Simulator,name=$DEVICE"
+    -derivedDataPath .build/ios -skipPackagePluginValidation)
+
+# Build first: a pairing link only lives five minutes, and a clean build can
+# take longer than that.
+if ! "${XCODEBUILD[@]}" build-for-testing > "$LOG" 2>&1; then
+    grep -E "error:|BUILD FAILED" "$LOG" | cut -c1-300 >&2
+    echo "test-ios.sh: build failed, full log in $LOG" >&2
+    exit 1
+fi
+
 export TEST_RUNNER_AGENTTY_PAIR_URL="$(AGENTTY_STATE_DIR="$STATE" "$AGENTTYD" pairing-link --port "$PORT" --host 127.0.0.1 --name "First Mac")"
 export TEST_RUNNER_AGENTTY_SECOND_PAIR_URL="$(AGENTTY_STATE_DIR="$SECOND_STATE" "$AGENTTYD" pairing-link --port "$SECOND_PORT" --host 127.0.0.1 --name "Second Mac")"
 export TEST_RUNNER_AGENTTY_LAUNCH="${AGENTTY_LAUNCH:-Start Shell}"
 if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export TEST_RUNNER_AGENTTY_SHOT_DIR="$SHOTS"; fi
 
-if xcodebuild -project iOS/Agentty.xcodeproj -scheme Agentty \
-    -destination "platform=iOS Simulator,name=$DEVICE" \
-    -derivedDataPath .build/ios -skipPackagePluginValidation test > "$LOG" 2>&1; then
+if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     grep -E "Test Case .* (passed|failed)|Executed [0-9]+ test" "$LOG" | tail -3
     echo "iOS UI test passed."
     rm -f "$LOG"
