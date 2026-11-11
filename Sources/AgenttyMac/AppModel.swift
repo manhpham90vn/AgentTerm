@@ -43,8 +43,17 @@ final class AppModel: ObservableObject {
     /// The commit message being written, by folder.
     @Published var commitMessages: [String: String] = [:]
     @Published private(set) var isCommitting = false
-    /// Asks before "Close All" ends the running sessions.
-    @Published var confirmingCloseAll = false
+    /// A request to close many tabs that would end running sessions, and so
+    /// waits to be confirmed.
+    @Published var pendingCloseRequest: CloseRequest?
+
+    /// Closing every tab but the one named. Nothing named closes them all.
+    struct CloseRequest: Identifiable {
+        var keepSession: SessionID?
+        var keepFile: String?
+        var keepDiff = false
+        let id = UUID()
+    }
     /// Past agent conversations of the selected folder. `nil` while loading.
     @Published private(set) var history: [Conversation]?
     /// History lists the selected folder's conversations, or every
@@ -411,15 +420,29 @@ final class AppModel: ObservableObject {
         files.closeAll(except: kept)
     }
 
-    /// Closes every tab. Sessions are running programs, so ending them is
-    /// asked about first.
-    func closeAllTabs() {
-        if sessions.isEmpty { closeFileTabs() } else { confirmingCloseAll = true }
+    /// The sessions a request would end.
+    func sessionsEnded(by request: CloseRequest) -> [SessionInfo] {
+        sessions.filter { $0.id != request.keepSession }
     }
 
-    func closeAllTabsConfirmed() {
-        closeFileTabs()
-        for session in sessions { close(session.id) }
+    /// Closes every tab but the one the request keeps. Sessions are running
+    /// programs, so ending any is asked about first.
+    func closeTabs(_ request: CloseRequest = CloseRequest()) {
+        if sessionsEnded(by: request).isEmpty { closeTabsConfirmed(request) } else { pendingCloseRequest = request }
+    }
+
+    func closeTabsConfirmed(_ request: CloseRequest) {
+        closeFileTabs(except: request.keepFile, keepDiff: request.keepDiff)
+        for session in sessionsEnded(by: request) { close(session.id) }
+        // What was kept comes to the front.
+        if let kept = request.keepSession, let session = sessions.first(where: { $0.id == kept }) {
+            // Not past a file with unsaved changes that is asking what to do.
+            if files.pendingClose == nil { select(session: session) }
+        } else if let kept = request.keepFile {
+            if files.pendingClose == nil { files.active = kept }
+        } else if request.keepDiff {
+            if files.pendingClose == nil { showDiffTab() }
+        }
     }
 
     /// Closes the tab in front: a file is closed, a session is ended.

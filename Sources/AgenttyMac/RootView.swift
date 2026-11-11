@@ -65,12 +65,13 @@ struct RootView: View {
             Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog(
-            "End \(model.sessions.count) \(model.sessions.count == 1 ? "session" : "sessions") and close every tab?",
-            isPresented: $model.confirmingCloseAll, titleVisibility: .visible
-        ) {
-            Button("End Sessions and Close All", role: .destructive) { model.closeAllTabsConfirmed() }
+            closeQuestion,
+            isPresented: Binding(get: { model.pendingCloseRequest != nil }, set: { if !$0 { model.pendingCloseRequest = nil } }),
+            titleVisibility: .visible, presenting: model.pendingCloseRequest
+        ) { request in
+            Button("End Sessions and Close", role: .destructive) { model.closeTabsConfirmed(request) }
             Button("Cancel", role: .cancel) {}
-        } message: {
+        } message: { _ in
             Text("What is running in the terminals stops. Files with unsaved changes stay open.")
         }
         .sheet(item: $model.pendingHandoff) { conversation in
@@ -137,6 +138,13 @@ struct LaunchButton: View {
 struct CenterView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var files: FilesModel
+
+    private var closeQuestion: String {
+        guard let request = model.pendingCloseRequest else { return "" }
+        let count = model.sessionsEnded(by: request).count
+        let kept = request.keepSession != nil || request.keepFile != nil || request.keepDiff
+        return "End \(count) \(count == 1 ? "session" : "sessions") and close \(kept ? "every other tab" : "every tab")?"
+    }
 
     var body: some View {
         ZStack {

@@ -130,8 +130,9 @@ corner, the button that hides the side panel.
   tab in that place, ⌘⇧] and ⌘⇧[ go to the next and previous, ⌘W ends the
   session on screen. Open files are tabs in the same strip, and so is the
   diff picked in the Git tab. A tab's menu (right click) closes it, the
-  other files, every file (terminals stay), or everything, which ends the
-  sessions and so asks first. Files with unsaved changes are never closed
+  other files, every file (terminals stay), everything else (only that
+  file or session stays), or everything. Whatever would end a session asks
+  first. Files with unsaved changes are never closed
   without asking.
 - **Right: side panel**, with three tabs. The panel can be hidden.
   - **Git.** Uncommitted git changes of the selected folder: the changed files

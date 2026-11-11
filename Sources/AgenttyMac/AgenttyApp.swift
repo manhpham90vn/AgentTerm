@@ -108,7 +108,14 @@ private struct TabCommands: View {
         Button("Close All Files") { model.closeFileTabs() }
             .keyboardShortcut("w", modifiers: [.command, .shift])
             .disabled(files.documents.isEmpty && model.diffTabFile == nil)
-        Button(model.sessions.isEmpty ? "Close All" : "Close All and End Sessions…") { model.closeAllTabs() }
+        Button("Close Everything Else…") {
+            model.closeTabs(.init(
+                keepSession: model.diffInFront || files.active != nil ? nil : model.selectedSession,
+                keepFile: model.diffInFront ? nil : files.active, keepDiff: model.diffInFront
+            ))
+        }
+        .disabled(model.tabCount < 2)
+        Button(model.sessions.isEmpty ? "Close All" : "Close All and End Sessions…") { model.closeTabs() }
             .disabled(model.tabCount == 0)
     }
 }

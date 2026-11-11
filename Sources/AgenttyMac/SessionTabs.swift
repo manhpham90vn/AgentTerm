@@ -121,6 +121,7 @@ private struct SessionTab: View {
         .help("\(session.summary.map { "\(session.title): \($0)" } ?? session.title)\n\((session.cwd as NSString).abbreviatingWithTildeInPath)")
         .contextMenu {
             Button("End Session") { model.close(session.id) }
+            CloseOthersButton(request: .init(keepSession: session.id))
             Divider()
             TabStripMenu()
         }
@@ -187,6 +188,7 @@ private struct FileTab: View {
             Button("Close") { files.requestClose(document.path) }
             Button("Close Other Files") { model.closeFileTabs(except: document.path) }
                 .disabled(files.documents.count < 2 && model.diffTabFile == nil)
+            CloseOthersButton(request: .init(keepFile: document.path))
             Divider()
             TabStripMenu()
         }
@@ -252,6 +254,7 @@ private struct DiffTab: View {
             Button("Close") { model.closeDiffTab() }
             Button("Close Other Files") { model.closeFileTabs(keepDiff: true) }
                 .disabled(model.files.documents.isEmpty)
+            CloseOthersButton(request: .init(keepDiff: true))
             Divider()
             TabStripMenu()
         }
@@ -270,7 +273,20 @@ struct TabStripMenu: View {
         Button("Close All Files") { model.closeFileTabs() }
             .disabled(files.documents.isEmpty && model.diffTabFile == nil)
             .help("Close every file and diff. The terminals stay.")
-        Button(model.sessions.isEmpty ? "Close All" : "Close All and End Sessions…") { model.closeAllTabs() }
+        Button(model.sessions.isEmpty ? "Close All" : "Close All and End Sessions…") { model.closeTabs() }
             .disabled(model.tabCount == 0)
+    }
+}
+
+/// Closes every other tab, sessions included, keeping the one named.
+struct CloseOthersButton: View {
+    @EnvironmentObject private var model: AppModel
+    let request: AppModel.CloseRequest
+
+    var body: some View {
+        // The dots say a question follows, which it does when sessions would end.
+        Button(model.sessionsEnded(by: request).isEmpty ? "Close Everything Else" : "Close Everything Else…") { model.closeTabs(request) }
+            .disabled(model.tabCount < 2)
+            .help("Close every other tab, terminals included")
     }
 }
