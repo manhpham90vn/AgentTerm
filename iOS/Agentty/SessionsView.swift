@@ -39,12 +39,34 @@ struct SessionsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
+                        // Every paired Mac, to switch between them.
+                        Section("Macs") {
+                            ForEach(model.hosts) { host in
+                                Button { model.select(host) } label: {
+                                    Label(host.name, systemImage: host.id == model.pairing?.id ? "checkmark" : "desktopcomputer")
+                                }
+                            }
+                            Button { model.showPairSheet = true } label: { Label("Pair Another Mac…", systemImage: "plus") }
+                        }
                         Button { model.refreshAgents() } label: { Label("Check Agents Again", systemImage: "arrow.clockwise") }
                         Button(role: .destructive) { confirmingForget = true } label: { Label("Forget This Mac", systemImage: "xmark.circle") }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
+                    .accessibilityIdentifier("mac-menu")
                 }
+            }
+            .sheet(isPresented: $model.showPairSheet) {
+                NavigationStack {
+                    PairView(addingAnother: true)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button("Cancel") { model.showPairSheet = false }
+                            }
+                        }
+                }
+                .environmentObject(model)
+                .preferredColorScheme(.dark)
             }
             .navigationDestination(for: SessionID.self) { id in
                 TerminalScreen(session: id)
@@ -52,7 +74,7 @@ struct SessionsView: View {
             .confirmationDialog("Forget this Mac?", isPresented: $confirmingForget, titleVisibility: .visible) {
                 Button("Forget", role: .destructive) { model.forgetMac() }
             } message: {
-                Text("Sessions keep running on the Mac. To connect again you scan its pairing code.")
+                Text("Sessions keep running on \(model.pairing?.name ?? "the Mac"). To connect again you pair with it once more.")
             }
             .alert("Agentty", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
                 Button("OK", role: .cancel) {}

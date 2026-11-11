@@ -68,7 +68,28 @@ final class FlowTests: XCTestCase {
         // Back in the list the session is there to return to.
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 5))
-        sleep(1)
+        XCTAssertTrue(app.staticTexts["First Mac"].waitForExistence(timeout: 5))
+        let session = app.staticTexts["zsh"].firstMatch
+        XCTAssertTrue(session.waitForExistence(timeout: 5))
         capture("7-session-listed")
+
+        // A second Mac can be paired. It becomes the one on screen, with
+        // nothing of the first Mac's sessions.
+        guard let second = environment["AGENTTY_SECOND_PAIR_URL"] else { return }
+        app.open(try XCTUnwrap(URL(string: second)))
+        XCTAssertTrue(app.staticTexts["Second Mac"].waitForExistence(timeout: 15), "the second Mac did not pair")
+        XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["zsh"].exists, "the first Mac's session must not show under the second")
+        capture("8-second-mac")
+
+        // The menu lists both, and switching goes back to the first Mac and
+        // its session, which kept running.
+        app.buttons["mac-menu"].tap()
+        XCTAssertTrue(app.buttons["Second Mac"].waitForExistence(timeout: 5))
+        capture("9-mac-menu")
+        app.buttons["First Mac"].tap()
+        XCTAssertTrue(app.staticTexts["First Mac"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.staticTexts["zsh"].firstMatch.waitForExistence(timeout: 10), "the first Mac's session is back")
+        capture("10-back-on-first")
     }
 }

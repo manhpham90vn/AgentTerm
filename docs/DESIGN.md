@@ -283,9 +283,13 @@ the same folder can therefore be mixed up; the History tab is exact.
 
 ## iPhone app structure
 
-- `PhoneModel` holds the pairing, the connection and the single
+- `PhoneModel` holds the paired Macs, the connection and the single
   `TerminalController` for the session on screen.
-- The pairing link, which contains the token, is kept in the Keychain.
+- There is one connection at a time, to the Mac on screen. Switching Macs
+  closes it and opens another, so a Mac that is not on screen costs nothing
+  and its sessions are not resized by this phone.
+- The paired Macs, each with this phone's token for it, are kept in the
+  Keychain as one list. Pairing again with a Mac replaces its entry.
 - `PairView` scans with VisionKit's `DataScannerViewController`. Where there
   is no camera (the simulator) the link can be entered as text, and the app
   also opens `agentty://pair` links.
@@ -298,9 +302,10 @@ the same folder can therefore be mixed up; the History tab is exact.
 
 - `swift test` covers the protocol, PTY behavior, the size arbiter, parsing
   and the host server end to end over a real loopback WebSocket.
-- `scripts/test-ios.sh` runs an XCUITest in the simulator against a throwaway
-  host: pair by link, start a shell, send Vietnamese text from the compose
-  field, use the key bar, go back.
+- `scripts/test-ios.sh` runs an XCUITest in the simulator against two
+  throwaway hosts: pair by link, start a shell, send Vietnamese text from the
+  compose field, use the key bar, go back, pair the second host, and switch
+  between the two.
 - `AGENTTY_STATE_DIR` moves the host's token, folder list and log to another
   folder, which keeps test hosts away from the real pairing.
 

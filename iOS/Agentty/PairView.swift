@@ -4,6 +4,8 @@ import VisionKit
 /// First run: pair this iPhone with a Mac.
 struct PairView: View {
     @EnvironmentObject private var model: PhoneModel
+    /// True when this is the sheet for adding a Mac to the ones already paired.
+    var addingAnother = false
     @State private var scanning = false
     @State private var enteringLink = false
     @State private var link = ""
@@ -43,7 +45,7 @@ struct PairView: View {
                 .font(.system(size: 54, weight: .light))
                 .foregroundStyle(Palette.tint)
                 .padding(.bottom, 22)
-            Text("Pair with your Mac")
+            Text(addingAnother ? "Pair another Mac" : "Pair with your Mac")
                 .font(.system(size: 28, weight: .bold))
             Text("Run your coding agents on the Mac.\nSteer them from here.")
                 .font(.body)
@@ -54,7 +56,7 @@ struct PairView: View {
 
             VStack(alignment: .leading, spacing: 16) {
                 Step(number: 1, text: "Connect this iPhone and your Mac to Tailscale.")
-                Step(number: 2, text: "Open Agentty on the Mac and choose Pair iPhone.")
+                Step(number: 2, text: addingAnother ? "Open Agentty on that Mac and choose Pair iPhone." : "Open Agentty on the Mac and choose Pair iPhone.")
                 Step(number: 3, text: "Scan the code it shows.")
             }
             .padding(.top, 34)

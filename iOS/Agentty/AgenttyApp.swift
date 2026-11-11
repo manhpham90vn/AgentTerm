@@ -9,7 +9,7 @@ struct AgenttyApp: App {
     var body: some Scene {
         WindowGroup {
             Group {
-                if model.pairing == nil {
+                if model.hosts.isEmpty {
                     PairView()
                 } else {
                     SessionsView()

@@ -19,8 +19,12 @@ var arguments = CommandLine.arguments.dropFirst()
 if arguments.first == "pairing-link" {
     arguments.removeFirst()
     var host: String?
+    var name: String?
     while let argument = arguments.popFirst() {
         switch argument {
+        case "--name":
+            guard let value = arguments.popFirst() else { fail("--name needs a name", status: 2) }
+            name = value
         case "--port":
             guard let value = arguments.popFirst().flatMap(UInt16.init) else { fail("--port needs a number", status: 2) }
             port = value
@@ -31,7 +35,7 @@ if arguments.first == "pairing-link" {
             fail("unknown option \(argument)", status: 2)
         }
     }
-    printPairingLink(port: port, host: host)
+    printPairingLink(port: port, host: host, name: name)
 }
 
 while let argument = arguments.popFirst() {
@@ -47,7 +51,7 @@ while let argument = arguments.popFirst() {
     case "--help", "-h":
         print("""
         Usage: agenttyd [--port N] [--local-only]
-               agenttyd pairing-link [--port N] [--host NAME]
+               agenttyd pairing-link [--port N] [--host NAME] [--name LABEL]
 
           --port N       TCP port to listen on, or of the daemon to ask (default \(agenttyDefaultPort))
           --local-only   Listen on 127.0.0.1 only, not on the Tailscale address
@@ -55,7 +59,8 @@ while let argument = arguments.popFirst() {
         pairing-link prints a link that pairs one device with the running
         daemon. It works once and for five minutes. --host sets the name the
         device should connect to (default: this Mac's Tailscale name, or
-        127.0.0.1 when Tailscale is not connected).
+        127.0.0.1 when Tailscale is not connected). --name sets what the device
+        calls this Mac (default: the Mac's name).
         """)
         exit(0)
     default:
@@ -95,7 +100,7 @@ func fail(_ message: String, status: Int32 = 1) -> Never {
     exit(status)
 }
 
-func printPairingLink(port: UInt16, host: String?) -> Never {
+func printPairingLink(port: UInt16, host: String?, name: String?) -> Never {
     guard let token = try? HostEnvironment.loadOrCreateToken() else { fail("could not read this Mac's token") }
     var target = host
     if target == nil, case .ready(let name) = Tailscale.status() { target = name }
@@ -105,7 +110,7 @@ func printPairingLink(port: UInt16, host: String?) -> Never {
         case .welcome:
             connection.send(.createPairingCode)
         case .pairingCode(let code, _):
-            let info = PairingInfo(host: target ?? "127.0.0.1", port: port, code: code, name: Host.current().localizedName ?? "Mac")
+            let info = PairingInfo(host: target ?? "127.0.0.1", port: port, code: code, name: name ?? Host.current().localizedName ?? "Mac")
             print(info.url.absoluteString)
             exit(0)
         case .error(let text):

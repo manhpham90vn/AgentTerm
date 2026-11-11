@@ -21,8 +21,12 @@ struct FolderGroup: Identifiable {
 
 @MainActor
 final class PhoneModel: ObservableObject {
-    /// The Mac this iPhone is paired with.
+    /// Every Mac this iPhone is paired with.
+    @Published private(set) var hosts: [SavedHost] = []
+    /// The Mac on screen. There is one connection at a time, to this Mac.
     @Published private(set) var pairing: SavedHost?
+    /// The sheet for pairing one more Mac.
+    @Published var showPairSheet = false
     /// A pairing code is being traded for a token.
     @Published private(set) var isPairing = false
     @Published private(set) var status: LinkStatus = .offline(nil)
@@ -45,12 +49,15 @@ final class PhoneModel: ObservableObject {
     private var retryScheduled = false
     private var active = true
     private static let fontSizeKey = "terminalFontSize"
+    private static let currentHostKey = "currentHost"
     static let fontSizes: ClosedRange<Double> = 9...18
 
     init() {
         let saved = UserDefaults.standard.double(forKey: Self.fontSizeKey)
         fontSize = Self.fontSizes.contains(saved) ? saved : 12
-        pairing = PairingStore.load()
+        hosts = PairingStore.load()
+        let last = UserDefaults.standard.string(forKey: Self.currentHostKey)
+        pairing = hosts.first { $0.id == last } ?? hosts.first
         if pairing != nil { connect() }
     }
 
@@ -99,12 +106,34 @@ final class PhoneModel: ObservableObject {
         pair(with: url)
     }
 
+    /// Shows another paired Mac. The connection moves with it.
+    func select(_ host: SavedHost) {
+        guard host.id != pairing?.id else { return }
+        disconnect()
+        clearHostState()
+        setCurrent(host)
+        connect()
+    }
+
+    /// Forgets the Mac on screen and moves to another one if there is any.
     func forgetMac() {
         disconnect()
+        clearHostState()
         pendingPairing = nil
         isPairing = false
-        PairingStore.clear()
-        pairing = nil
+        hosts.removeAll { $0.id == pairing?.id }
+        PairingStore.save(hosts)
+        setCurrent(hosts.first)
+        if pairing != nil { connect() }
+    }
+
+    private func setCurrent(_ host: SavedHost?) {
+        pairing = host
+        UserDefaults.standard.set(host?.id, forKey: Self.currentHostKey)
+    }
+
+    /// What was shown belongs to the Mac that is being left.
+    private func clearHostState() {
         sessions = []
         folders = []
         agents = []
@@ -173,12 +202,15 @@ final class PhoneModel: ObservableObject {
             connection = nil
             status = .offline(reason)
             if isPairing {
-                // Never got as far as an answer to the code.
+                // Pairing did not work out: the Mac refused the code, or
+                // could not be reached at all.
                 isPairing = false
                 pendingPairing = nil
                 if message == nil {
                     message = "Could not reach the Mac. Check that Tailscale is connected on this iPhone and on the Mac, then try again."
                 }
+                // Back to the Mac that was on screen before, if there was one.
+                if pairing != nil { connect() }
             } else {
                 scheduleRetry()
             }
@@ -242,15 +274,21 @@ final class PhoneModel: ObservableObject {
             break
         case .paired(_, let token):
             guard let info = pendingPairing else { return }
-            let saved = SavedHost(host: info.host, port: info.port, name: info.name, token: token)
-            PairingStore.save(saved)
-            pairing = saved
+            let saved = SavedHost(id: UUID().uuidString, host: info.host, port: info.port, name: info.name, token: token)
+            // Pairing again with a Mac replaces what was saved for it.
+            hosts.removeAll { $0.host == saved.host && $0.port == saved.port }
+            hosts.append(saved)
+            PairingStore.save(hosts)
+            clearHostState()
+            setCurrent(saved)
             pendingPairing = nil
             isPairing = false
+            showPairSheet = false
         case .error(let text):
             if text == "invalid token" {
+                let name = pairing?.name ?? "The Mac"
                 forgetMac()
-                self.message = "This iPhone was removed from the Mac's paired devices. Pair it again to reconnect."
+                self.message = "\(name) removed this iPhone from its paired devices. Pair it again to reconnect."
             } else if text == "invalid pairing code" {
                 self.message = "That pairing code has expired or was already used. Show a new one on the Mac and try again."
             } else {

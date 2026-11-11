@@ -141,7 +141,10 @@ corner, the button that hides the side panel.
 
 ### iPhone app
 
-- List of sessions on the paired Mac, with the folder each runs in.
+- The iPhone can be paired with several Macs. A menu lists them, switches
+  between them and pairs another one. It shows one Mac at a time, and opens
+  on the Mac it showed last. Forgetting a Mac leaves the others paired.
+- List of sessions on the Mac on screen, with the folder each runs in.
 - Full terminal for a session, sized to the screen.
 - A key bar above the keyboard for keys a phone keyboard lacks: Esc, Tab,
   Shift+Tab, Ctrl, arrows, and Enter.
