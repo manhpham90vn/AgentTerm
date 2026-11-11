@@ -1,5 +1,3 @@
-#if os(macOS)
-import AgenttyProtocol
 import Foundation
 
 /// One visible row of the changes list when it is shown as a folder tree.
@@ -90,4 +88,3 @@ public enum DiffTree {
         a.localizedStandardCompare(b) == .orderedAscending
     }
 }
-#endif

@@ -113,6 +113,15 @@ final class FlowTests: XCTestCase {
             app.buttons["Git"].tap()
             XCTAssertTrue(app.staticTexts["notes.txt"].waitForExistence(timeout: 10), "the changed file is not listed")
             capture("7a-changes")
+            // The files can be grouped by folder, and the choice sticks.
+            let group = app.buttons["Group by folder"]
+            if group.exists {
+                group.tap()
+                XCTAssertTrue(app.buttons["Show as a flat list"].waitForExistence(timeout: 5))
+                XCTAssertTrue(app.staticTexts["notes.txt"].exists)
+                capture("7a2-changes-tree")
+                app.buttons["Show as a flat list"].tap()
+            }
             app.staticTexts["notes.txt"].tap()
             XCTAssertTrue(app.staticTexts["+second line"].waitForExistence(timeout: 10), "the diff is not shown")
             capture("7b-diff")
@@ -124,6 +133,7 @@ final class FlowTests: XCTestCase {
             capture("7c-history")
             conversation.tap()
             XCTAssertTrue(app.buttons["Resume in Claude Code"].waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["Copy Resume Command"].exists)
             // The prompt the receiving agent would start with is shown.
             let prompt = app.descendants(matching: .any)["handoff-prompt"].firstMatch
             XCTAssertTrue(prompt.waitForExistence(timeout: 10), "the handoff prompt is not shown")

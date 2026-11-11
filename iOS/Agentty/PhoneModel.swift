@@ -58,6 +58,8 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var patches: [String: FileDiff?] = [:]
     /// Conversations by folder. The empty key is "everywhere on the Mac".
     @Published private(set) var histories: [String: [Conversation]] = [:]
+    /// The conversation of a running session that is being handed off.
+    @Published var sessionHandoff: Conversation?
     /// What the receiving agent would be told, while the handoff sheet is open.
     @Published private(set) var handoffPlan: HandoffPlan?
     /// The folder shown in the folder picker.
@@ -358,6 +360,17 @@ final class PhoneModel: ObservableObject {
             pendingPatch = nil
         case .history(let folder, let conversations):
             histories[folder ?? ""] = conversations
+            if let session = pendingSessionHandoff, folder == session.cwd {
+                pendingSessionHandoff = nil
+                // The session's conversation is the newest one its agent has
+                // in that folder since the session started.
+                let agent = agentID(for: session)
+                if let found = conversations.first(where: { $0.agent == agent && $0.updatedAt >= session.createdAt.addingTimeInterval(-5) }) {
+                    sessionHandoff = found
+                } else {
+                    self.message = "\(session.title) has not saved a conversation for this session yet, so there is nothing to hand off."
+                }
+            }
         case .directory(let listing):
             self.listing = listing
         case .handoffPlan(let id, let prompt):
@@ -406,6 +419,8 @@ final class PhoneModel: ObservableObject {
     // MARK: Changes, history, folders
 
     private var pendingPatch: (folder: String, file: String)?
+    /// A running session whose conversation is being looked up to hand off.
+    private var pendingSessionHandoff: SessionInfo?
 
     func loadDiff(_ folder: String) {
         connection?.send(.diff(path: folder))
@@ -455,6 +470,25 @@ final class PhoneModel: ObservableObject {
 
     func addFolder(_ path: String) {
         connection?.send(.addFolder(path: path))
+    }
+
+    /// Takes a folder off the list the Mac and the iPhone share. Its sessions
+    /// keep running.
+    func removeFolder(_ path: String) {
+        connection?.send(.removeFolder(path: path))
+    }
+
+    /// True when a session runs an agent whose work could go to another one.
+    func canHandOff(_ session: SessionInfo) -> Bool {
+        let agent = agentID(for: session)
+        return agent != "shell" && !handoffTargets(from: agent).isEmpty
+    }
+
+    /// Finds the conversation a running session is having, to hand it off.
+    func requestHandoff(session: SessionInfo) {
+        guard status == .connected else { return }
+        pendingSessionHandoff = session
+        connection?.send(.history(path: session.cwd))
     }
 
     func end(_ id: SessionID) {

@@ -59,6 +59,14 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastError: String?
     /// Shown in an alert, for problems that are not tied to the launch screen.
     @Published var notice: String?
+    /// Point size of the terminal text, for every session.
+    @Published private(set) var terminalFontSize: Double = {
+        let saved = UserDefaults.standard.double(forKey: "terminalFontSize")
+        return AppModel.fontSizes.contains(saved) ? saved : AppModel.defaultFontSize
+    }()
+    static let fontSizes: ClosedRange<Double> = 9...24
+    static let defaultFontSize: Double = 13
+
     /// Devices that were paired with this Mac.
     @Published private(set) var devices: [DeviceInfo] = []
     /// The pairing code on show, while the pairing sheet is open.
@@ -231,7 +239,7 @@ final class AppModel: ObservableObject {
     }
 
     private func makeController(for id: SessionID) -> TerminalController {
-        let controller = TerminalController(session: id)
+        let controller = TerminalController(session: id, fontSize: terminalFontSize)
         controller.onInput = { [weak self] data in self?.connection?.sendInput(data, to: id) }
         controller.onResize = { [weak self] size in self?.connection?.send(.resize(session: id, size: size)) }
         controller.onClaim = { [weak self] size in self?.connection?.send(.takeControl(session: id, size: size)) }
@@ -247,6 +255,16 @@ final class AppModel: ObservableObject {
         selectNextAttached = true
         let size = currentController?.naturalSize ?? TermSize(cols: 100, rows: 30)
         connection?.send(.create(CreateRequest(command: agent?.id, cwd: workingDirectory, title: agent?.name, size: size)))
+    }
+
+    /// Makes the terminal text larger or smaller, or default when `delta` is nil.
+    func changeFontSize(by delta: Double?) {
+        let wanted = delta.map { terminalFontSize + $0 } ?? Self.defaultFontSize
+        let size = min(max(wanted, Self.fontSizes.lowerBound), Self.fontSizes.upperBound)
+        guard size != terminalFontSize else { return }
+        terminalFontSize = size
+        UserDefaults.standard.set(size, forKey: "terminalFontSize")
+        controllers.values.forEach { $0.setFontSize(size) }
     }
 
     func close(_ session: SessionID) {

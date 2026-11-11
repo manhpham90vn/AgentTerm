@@ -27,6 +27,16 @@ struct AgenttyApp: App {
                     .keyboardShortcut("o")
             }
             CommandGroup(after: .sidebar) {
+                Button("Bigger Text") { model.changeFontSize(by: 1) }
+                    .keyboardShortcut("+")
+                    .disabled(model.terminalFontSize >= AppModel.fontSizes.upperBound)
+                Button("Smaller Text") { model.changeFontSize(by: -1) }
+                    .keyboardShortcut("-")
+                    .disabled(model.terminalFontSize <= AppModel.fontSizes.lowerBound)
+                Button("Actual Size") { model.changeFontSize(by: nil) }
+                    .keyboardShortcut("0")
+                    .disabled(model.terminalFontSize == AppModel.defaultFontSize)
+                Divider()
                 Button(model.showSidebar ? "Hide Folders" : "Show Folders") { model.showSidebar.toggle() }
                     .keyboardShortcut("s", modifiers: [.command, .control])
                 Button(model.showDiff ? "Hide Side Panel" : "Show Side Panel") { model.showDiff.toggle() }

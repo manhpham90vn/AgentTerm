@@ -27,6 +27,22 @@ struct FolderScreen: View {
         .background(Palette.canvas.ignoresSafeArea())
         .navigationTitle((folder as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            if model.folders.contains(folder) {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button(role: .destructive) {
+                            model.removeFolder(folder)
+                            if !model.path.isEmpty { model.path.removeLast() }
+                        } label: {
+                            Label("Remove from List", systemImage: "minus.circle")
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -35,6 +51,11 @@ struct FolderScreen: View {
 private struct ChangesList: View {
     @EnvironmentObject private var model: PhoneModel
     let folder: String
+    /// "list" shows every file in one flat list, "tree" groups them by folder.
+    @AppStorage("diffViewMode") private var viewMode = "list"
+    @State private var collapsedFolders: Set<String> = []
+
+    private var isTree: Bool { viewMode == "tree" }
 
     var body: some View {
         Group {
@@ -55,17 +76,46 @@ private struct ChangesList: View {
                                 }
                                 Spacer()
                                 DiffCount(added: diff.files.reduce(0) { $0 + $1.added }, deleted: diff.files.reduce(0) { $0 + $1.deleted })
+                                Button { viewMode = isTree ? "list" : "tree" } label: {
+                                    Image(systemName: isTree ? "list.bullet" : "list.bullet.indent")
+                                        .font(.system(size: 15, weight: .semibold))
+                                        .padding(.leading, 6)
+                                }
+                                .accessibilityLabel(isTree ? "Show as a flat list" : "Group by folder")
                             }
                             .padding(.horizontal, 6)
                             .padding(.bottom, 10)
                             VStack(spacing: 0) {
-                                ForEach(diff.files) { file in
-                                    NavigationLink(value: Route.file(folder: folder, file: file.path)) {
-                                        FileRow(file: file)
+                                if isTree {
+                                    let rows = DiffTree.rows(for: diff.files, collapsed: collapsedFolders)
+                                    ForEach(rows) { row in
+                                        switch row.kind {
+                                        case .folder(let expanded):
+                                            Button {
+                                                if expanded { collapsedFolders.insert(row.id) } else { collapsedFolders.remove(row.id) }
+                                            } label: {
+                                                TreeFolderRow(row: row, expanded: expanded)
+                                            }
+                                            .buttonStyle(.plain)
+                                        case .file(let file):
+                                            NavigationLink(value: Route.file(folder: folder, file: file.path)) {
+                                                FileRow(file: file, showsDirectory: false, depth: row.depth)
+                                            }
+                                            .buttonStyle(.plain)
+                                        }
+                                        if row.id != rows.last?.id {
+                                            Palette.hairline.frame(height: 1).padding(.leading, 38 + CGFloat(row.depth) * treeIndent)
+                                        }
                                     }
-                                    .buttonStyle(.plain)
-                                    if file.id != diff.files.last?.id {
-                                        Palette.hairline.frame(height: 1).padding(.leading, 38)
+                                } else {
+                                    ForEach(diff.files) { file in
+                                        NavigationLink(value: Route.file(folder: folder, file: file.path)) {
+                                            FileRow(file: file)
+                                        }
+                                        .buttonStyle(.plain)
+                                        if file.id != diff.files.last?.id {
+                                            Palette.hairline.frame(height: 1).padding(.leading, 38)
+                                        }
                                     }
                                 }
                             }
@@ -84,8 +134,42 @@ private struct ChangesList: View {
     }
 }
 
+/// Width of one level of nesting in the folder tree.
+private let treeIndent: CGFloat = 16
+
+private struct TreeFolderRow: View {
+    let row: DiffTreeRow
+    let expanded: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundStyle(.secondary)
+                .frame(width: 16)
+            Image(systemName: "folder.fill")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+            Text(row.name)
+                .font(.body.weight(.medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Spacer(minLength: 8)
+            DiffCount(added: row.added, deleted: row.deleted).opacity(0.75)
+        }
+        .padding(.leading, 12 + CGFloat(row.depth) * treeIndent)
+        .padding(.trailing, 12)
+        .padding(.vertical, 11)
+        .contentShape(Rectangle())
+        .accessibilityLabel("\(row.name), folder, \(expanded ? "expanded" : "collapsed")")
+    }
+}
+
 private struct FileRow: View {
     let file: FileDiff
+    /// The flat list shows where each file lives; the tree already does.
+    var showsDirectory = true
+    var depth = 0
 
     var body: some View {
         HStack(spacing: 10) {
@@ -98,7 +182,7 @@ private struct FileRow: View {
                     .font(.body)
                     .lineLimit(1)
                 let directory = (file.path as NSString).deletingLastPathComponent
-                if !directory.isEmpty {
+                if showsDirectory, !directory.isEmpty {
                     Text(directory)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -112,7 +196,8 @@ private struct FileRow: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.tertiary)
         }
-        .padding(.horizontal, 12)
+        .padding(.leading, 12 + CGFloat(depth) * treeIndent)
+        .padding(.trailing, 12)
         .padding(.vertical, 11)
         .contentShape(Rectangle())
     }
@@ -198,6 +283,7 @@ struct HistoryList: View {
     let folder: String?
     @AppStorage("historyShowsAll") private var storedShowsAll = false
     @State private var selected: Conversation?
+    @State private var collapsedAgents: Set<String> = []
 
     /// With no folder there is only "everything" to show.
     private var showsAll: Bool { folder == nil || storedShowsAll }
@@ -239,14 +325,27 @@ struct HistoryList: View {
                     ScrollView {
                         LazyVStack(alignment: .leading, spacing: 18) {
                             ForEach(sections, id: \.id) { section in
+                                let expanded = !collapsedAgents.contains(section.id)
                                 VStack(alignment: .leading, spacing: 8) {
-                                    HStack(spacing: 7) {
-                                        Image(systemName: AgentStyle.symbol(for: section.id))
-                                            .font(.system(size: 12, weight: .semibold))
-                                            .foregroundStyle(AgentStyle.accent(for: section.id))
-                                        Text(section.name).font(.subheadline.weight(.semibold))
+                                    Button {
+                                        if expanded { collapsedAgents.insert(section.id) } else { collapsedAgents.remove(section.id) }
+                                    } label: {
+                                        HStack(spacing: 7) {
+                                            Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                                                .font(.system(size: 10, weight: .bold))
+                                                .foregroundStyle(.secondary)
+                                            Image(systemName: AgentStyle.symbol(for: section.id))
+                                                .font(.system(size: 12, weight: .semibold))
+                                                .foregroundStyle(AgentStyle.accent(for: section.id))
+                                            Text(section.name).font(.subheadline.weight(.semibold))
+                                            Spacer(minLength: 0)
+                                        }
+                                        .contentShape(Rectangle())
                                     }
+                                    .buttonStyle(.plain)
                                     .padding(.horizontal, 6)
+                                    .accessibilityLabel("\(section.name), \(expanded ? "expanded" : "collapsed")")
+                                    if expanded {
                                     VStack(spacing: 0) {
                                         ForEach(section.conversations) { conversation in
                                             Button { selected = conversation } label: {
@@ -259,6 +358,7 @@ struct HistoryList: View {
                                         }
                                     }
                                     .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
+                                    }
                                 }
                             }
                         }
@@ -327,10 +427,14 @@ private func relativeTime(_ date: Date) -> String {
 
 /// What can be done with a past conversation: continue it in its own agent,
 /// or hand its work to another one.
-private struct ConversationSheet: View {
+struct ConversationSheet: View {
     @EnvironmentObject private var model: PhoneModel
     @Environment(\.dismiss) private var dismiss
     let conversation: Conversation
+    /// False when the conversation belongs to a session that is running:
+    /// there is nothing to resume, only to hand off.
+    var showsResume = true
+    @State private var copied = false
     @AppStorage("handoffTarget") private var rememberedTarget = ""
     @State private var targetID = ""
     @State private var note = ""
@@ -360,17 +464,29 @@ private struct ConversationSheet: View {
                             .truncationMode(.head)
                     }
 
-                    Button {
-                        model.resume(conversation)
-                        dismiss()
-                    } label: {
-                        Label("Resume in \(sourceName)", systemImage: "play.fill")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
+                    if showsResume {
+                        VStack(spacing: 10) {
+                            Button {
+                                model.resume(conversation)
+                                dismiss()
+                            } label: {
+                                Label("Resume in \(sourceName)", systemImage: "play.fill")
+                                    .font(.headline)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(.vertical, 6)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(AgentStyle.accent(for: conversation.agent))
+                            Button {
+                                UIPasteboard.general.string = conversation.resumeCommand
+                                copied = true
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                            } label: {
+                                Label(copied ? "Copied" : "Copy Resume Command", systemImage: copied ? "checkmark" : "doc.on.doc")
+                                    .font(.footnote.weight(.medium))
+                            }
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .tint(AgentStyle.accent(for: conversation.agent))
 
                     if !targets.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
@@ -459,7 +575,7 @@ private struct ConversationSheet: View {
                 .padding(20)
             }
             .background(Palette.canvas.ignoresSafeArea())
-            .navigationTitle("Conversation")
+            .navigationTitle(showsResume ? "Conversation" : "Hand Off")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

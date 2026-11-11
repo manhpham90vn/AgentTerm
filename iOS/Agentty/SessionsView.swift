@@ -94,6 +94,11 @@ struct SessionsView: View {
                         .navigationBarTitleDisplayMode(.inline)
                 }
             }
+            .sheet(item: $model.sessionHandoff) { conversation in
+                ConversationSheet(conversation: conversation, showsResume: false)
+                    .environmentObject(model)
+                    .preferredColorScheme(.dark)
+            }
             .sheet(isPresented: $model.showBrowser) {
                 BrowseSheet()
                     .environmentObject(model)
@@ -181,6 +186,9 @@ private struct FolderSection: View {
                     }
                     .buttonStyle(.plain)
                     .contextMenu {
+                        if model.canHandOff(session) {
+                            Button { model.requestHandoff(session: session) } label: { Label("Hand Off…", systemImage: "arrowshape.turn.up.right") }
+                        }
                         Button(role: .destructive) { model.end(session.id) } label: { Label("End Session", systemImage: "xmark.circle") }
                     }
                     Palette.hairline.frame(height: 1).padding(.leading, 38)

@@ -130,6 +130,25 @@ corner, the button that hides the side panel.
     subfolder belong to that subfolder. A switch at the top changes the list
     to **All**: every conversation on the Mac, each row naming its folder.
 
+### What the two apps share
+
+The Mac and the iPhone offer the same things wherever the device allows:
+folders (add, remove), sessions (start, end), the terminal with a text size
+setting, the Git view as a list or grouped by folder, History with both
+scopes, resume, copying the resume command, and handoff from a past
+conversation or a running session with the prompt shown.
+
+They differ where the device does:
+
+- The Mac refreshes Git and History by itself while it is in front. The
+  iPhone loads them when a screen opens and on pull to refresh.
+- The iPhone starts an agent in any folder through its folder picker. The Mac
+  adds the folder to its list first.
+- Pairing is one sided: the Mac shows codes and manages devices, the iPhone
+  scans and manages Macs.
+- "Show in Finder" is on the Mac only. The key bar and the compose field are
+  on the iPhone only.
+
 ### Pairing and remote access
 
 - The Mac shows a QR code containing its Tailscale name, the port and a
@@ -173,8 +192,11 @@ corner, the button that hides the side panel.
   scrolls sideways. **History**: the conversations each agent had in the
   folder, with a switch to every conversation on the Mac.
 - A conversation can be resumed in its agent, or handed off to another
-  installed agent with optional instructions. Both open the new session's
-  terminal on the iPhone.
+  installed agent. The handoff sheet shows the prompt the agent will start
+  with, which can be edited and reset, and takes optional instructions. Both
+  open the new session's terminal on the iPhone.
+- A running session can be handed off too, from its terminal's menu.
+- A folder can be taken off the shared list.
 - Text size can be changed, which changes how many columns fit.
 - When the connection drops, the app reconnects on its own and returns to the
   session that was open.

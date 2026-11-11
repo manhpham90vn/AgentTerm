@@ -71,6 +71,13 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
 
     public func setFontSize(_ size: CGFloat) {
         view.font = TerminalStyle.font(size: size)
+        // The grid's size in points changed with the cells, so a container
+        // that sizes the view to another device's grid has to place it again.
+        #if os(macOS)
+        view.superview?.needsLayout = true
+        #else
+        view.superview?.setNeedsLayout()
+        #endif
     }
 
     /// The user is using the session here: asks to drive it at the grid

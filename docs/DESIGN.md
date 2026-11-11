@@ -163,7 +163,8 @@ Client to host:
 | `diff(path)` / `diffFile(path, file)` | A folder's uncommitted changes without the diffs, then one file's diff. |
 | `history(path)` | Conversations agents had in a folder, or everywhere when `path` is nil. |
 | `resume(agent, sessionID, cwd, size)` | Reopen a conversation in its agent, in a new session. |
-| `handoff(agent, sessionID, cwd, target, note, size)` | Hand a conversation to another agent, in a new session. |
+| `handoffPlan(agent)` | What the receiving agent would be told, to show it before handing off. |
+| `handoff(agent, sessionID, cwd, target, plan, prompt, note, size)` | Hand a conversation to another agent, in a new session. |
 | `listDirectory(path)` | The folders inside a folder, or inside home. |
 
 Host to client: `welcome`, `sessions`, `agents`, `folders`, `attached`,
