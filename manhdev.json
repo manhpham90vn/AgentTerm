@@ -1,0 +1,28 @@
+{
+  "$schema": "https://manhdev.click/manhdev.schema.json",
+  "tagline": "A native Mac terminal for AI coding agents, with an iPhone remote.",
+  "description": "Run Claude Code, Codex, Antigravity and Copilot CLI in real terminal sessions on your Mac, and pick the same sessions up from your iPhone by scanning a QR code.",
+  "overview": [
+    "AgentTerm is a terminal built around coding agents. One click starts Claude Code, Codex, Antigravity or Copilot CLI in a project folder. Next to the terminal you have the folder's git changes to stage and commit, the conversations each agent had there to resume or hand off to another agent, a file browser with an editor, and a band that shows the model, how full its context is and what your account has left before its limits reset.",
+    "Sessions are held by a small host on the Mac, so they keep running when the window is closed. Pair an iPhone by scanning a QR code and the same sessions open there over your own Tailscale network: the terminal resizes to the phone, a key bar gives you Esc, Tab and the arrows, and a compose field takes prompts from the normal iOS keyboard, Vietnamese included. The Mac app is open source."
+  ],
+  "features": [
+    { "title": "One click to an agent", "body": "Claude Code, Codex, Antigravity and Copilot CLI, each in a real terminal session." },
+    { "title": "iPhone remote", "body": "Pair with a QR code and use the same sessions from your phone over Tailscale." },
+    { "title": "Git, history, files", "body": "Stage and commit, resume or hand off a conversation, browse and edit files, preview Markdown." },
+    { "title": "Usage at a glance", "body": "Model, context and what is left of your limits, with their reset times." },
+    { "title": "Sessions that stay", "body": "They live in a host on the Mac and keep running with the window closed." }
+  ],
+  "requirements": "macOS 14 Sonoma or later (Apple silicon) · iOS 17 or later for the iPhone app · Tailscale on both devices for remote access",
+  "screenshot": {
+    "src": "docs/screenshots/mac.png",
+    "alt": "AgentTerm with a Claude Code session, the folder's git changes and the usage band",
+    "width": 1800,
+    "height": 1073,
+    "chrome": false
+  },
+  "downloads": [
+    { "platform": "macos", "label": "macOS", "sub": "Disk image · .dmg", "asset": "^AgentTerm-[\\d.]+(-[\\w.]+)?\\.dmg$", "file": "AgentTerm-{version}.dmg" }
+  ],
+  "version": "v0.1.0-beta.1"
+}
