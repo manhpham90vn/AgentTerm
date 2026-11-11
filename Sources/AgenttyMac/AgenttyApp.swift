@@ -9,6 +9,7 @@ struct AgenttyApp: App {
         Window("Agentty", id: "main") {
             RootView()
                 .environmentObject(model)
+                .environmentObject(model.files)
                 .preferredColorScheme(.dark)
                 .frame(minWidth: 940, minHeight: 540)
         }
@@ -25,6 +26,9 @@ struct AgenttyApp: App {
                 Divider()
                 Button("Add Folder…") { model.addFolder() }
                     .keyboardShortcut("o")
+            }
+            CommandGroup(replacing: .saveItem) {
+                SaveCommand(files: model.files)
             }
             CommandMenu("Session") {
                 // Command and a number shows the tab in that place.
@@ -72,4 +76,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+}
+
+/// File > Save, for the file open in the Files tab. Its own view so the menu
+/// item follows the file's unsaved state.
+private struct SaveCommand: View {
+    @ObservedObject var files: FilesModel
+
+    var body: some View {
+        Button("Save") { files.save() }
+            .keyboardShortcut("s")
+            .disabled(files.document?.isDirty != true)
+    }
 }

@@ -20,6 +20,14 @@ mkdir -p "$APP/Contents/MacOS"
 cp "$BIN/AgenttyMac" "$APP/Contents/MacOS/Agentty"
 cp "$BIN/agenttyd" "$APP/Contents/MacOS/agenttyd"
 
+# Packages ship files of their own (the syntax highlighter's grammars and
+# themes, for one) as resource bundles next to the binaries. Without them in
+# the app, those packages only work on the machine that built it.
+mkdir -p "$APP/Contents/Resources"
+for bundle in "$BIN"/*.bundle; do
+    [ -e "$bundle" ] && cp -R "$bundle" "$APP/Contents/Resources/"
+done
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

@@ -18,6 +18,8 @@ to the same sessions over [Tailscale](https://tailscale.com).
 - One-click launch for each agent CLI that is installed. Agentty looks them up
   through your login shell, so anything on your normal `PATH` is found, and
   agents that are not installed get no button.
+- A Files tab: browse the folder, create, rename and trash files and folders,
+  edit text with syntax coloring, preview Markdown.
 - Real PTYs: job control, Ctrl-C, colors, resize, UTF-8 (Vietnamese included).
 - Sessions live in the `agenttyd` daemon and survive closing the app.
 - A session can be watched from several clients. The client being used decides

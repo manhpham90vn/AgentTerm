@@ -14,6 +14,10 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", from: "1.2.0"),
+        // Syntax coloring for the file editor (highlight.js).
+        .package(url: "https://github.com/raspu/Highlightr.git", from: "2.2.0"),
+        // Markdown preview.
+        .package(url: "https://github.com/gonzalezreal/swift-markdown-ui.git", from: "2.4.0"),
     ],
     targets: [
         // Wire protocol shared by the host daemon and every client (macOS, iOS).
@@ -36,6 +40,8 @@ let package = Package(
                 "AgenttyClient",
                 "AgenttyHost",
                 "AgenttyTerminal",
+                .product(name: "Highlightr", package: "Highlightr"),
+                .product(name: "MarkdownUI", package: "swift-markdown-ui"),
             ]
         ),
         .testTarget(name: "AgenttyProtocolTests", dependencies: ["AgenttyProtocol"]),

@@ -225,6 +225,24 @@ right after the list does not run git again. Git and file reading for
 clients run on a separate concurrent queue, off the queue that moves terminal
 bytes.
 
+## Files tab
+
+`FileBrowser` (in `AgenttyHost`) lists a folder, reads a file and tells text
+from images, other binaries and files too large to open, and creates,
+renames, writes and trashes. Names are checked to be a single path
+component, and an existing name is never overwritten. The Mac app calls it
+directly; it is not in the protocol, so the iPhone has no Files tab.
+
+`FilesModel` holds the tree (folders load when opened and are read again
+every 5 seconds while the app is in front) and the one open document.
+
+The editor is an `NSTextView` whose text storage is Highlightr's
+`CodeAttributedString`, which recolors text as it is edited using
+highlight.js. Markdown is rendered by MarkdownUI, with its code blocks
+colored by the same highlighter. Both are package dependencies of the Mac
+app only. Highlightr brings a resource bundle (the grammars and themes),
+which `scripts/bundle-mac.sh` copies into the app's `Contents/Resources`.
+
 ## Conversation history
 
 `AgentHistory` reads the files each agent CLI keeps about its own

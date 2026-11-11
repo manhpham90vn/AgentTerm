@@ -78,6 +78,9 @@ final class AppModel: ObservableObject {
             ?? TermSize(cols: 100, rows: 30)
     }
 
+    /// The Files tab's tree and open file, for the selected folder.
+    let files = FilesModel()
+
     /// Devices that were paired with this Mac.
     @Published private(set) var devices: [DeviceInfo] = []
     /// The pairing code on show, while the pairing sheet is open.
@@ -330,6 +333,7 @@ final class AppModel: ObservableObject {
     private func folderChanged() {
         diff = nil
         selectedDiffFile = nil
+        files.setRoot(selectedFolder)
         refreshDiff()
         // The list of every conversation does not depend on the folder.
         if !historyShowsAll {

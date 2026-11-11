@@ -11,8 +11,9 @@ struct RightPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 4) {
-                PanelTab(title: "Git", symbol: "arrow.triangle.branch", selected: tab != "history") { tab = "git" }
+                PanelTab(title: "Git", symbol: "arrow.triangle.branch", selected: tab != "history" && tab != "files") { tab = "git" }
                 PanelTab(title: "History", symbol: "clock.arrow.circlepath", selected: tab == "history") { tab = "history" }
+                PanelTab(title: "Files", symbol: "folder", selected: tab == "files") { tab = "files" }
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 10)
@@ -20,6 +21,8 @@ struct RightPanel: View {
             Theme.hairline.frame(height: 1)
             if tab == "history" {
                 HistoryView()
+            } else if tab == "files" {
+                FilesView()
             } else {
                 DiffView()
             }
