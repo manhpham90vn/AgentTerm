@@ -8,6 +8,7 @@ struct PairingView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var info: PairingInfo?
     @State private var loaded = false
+    @State private var copied = false
 
     var body: some View {
         VStack(spacing: 18) {
@@ -22,15 +23,29 @@ struct PairingView: View {
                     .padding(14)
                     .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white))
                 VStack(spacing: 4) {
-                    Text("Scan this code with Agentty on your iPhone.")
+                    Text("Scan this code with Agentty on your iPhone, or copy the link and paste it there.")
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text("\(info.host):\(String(info.port))")
                         .font(.system(size: 11.5, design: .monospaced))
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
-                Label("Anyone with this code can run commands on this Mac. Don't share it.", systemImage: "lock.fill")
+                // The iPhone app can also take the link as text, for when
+                // scanning is not possible.
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(info.url.absoluteString, forType: .string)
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
+                } label: {
+                    Label(copied ? "Copied" : "Copy Pairing Link", systemImage: copied ? "checkmark" : "doc.on.doc")
+                }
+                .help("Copy the link to paste into \"Enter a pairing link\" on the iPhone")
+                Label("Anyone with this code or link can run commands on this Mac. Don't share it.", systemImage: "lock.fill")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else if loaded {
                 Image(systemName: "network.slash")
                     .font(.system(size: 34))
