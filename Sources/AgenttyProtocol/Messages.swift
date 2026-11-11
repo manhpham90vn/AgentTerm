@@ -140,8 +140,13 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case history(path: String?)
     /// Reopens a conversation in its agent, in a new session the sender is attached to.
     case resume(agent: String, sessionID: String, cwd: String, size: TermSize)
-    /// Hands a conversation's work to `target`, in a new session the sender is attached to.
-    case handoff(agent: String, sessionID: String, cwd: String, target: String, note: String, size: TermSize)
+    /// Asks what the receiving agent would be told when a conversation of
+    /// `agent` is handed off, so the prompt can be shown and edited first.
+    case handoffPlan(agent: String)
+    /// Hands a conversation's work to `target`, in a new session the sender
+    /// is attached to. `plan` is the id of a plan that was shown; `prompt`
+    /// replaces that plan's prompt when the user edited it.
+    case handoff(agent: String, sessionID: String, cwd: String, target: String, plan: String?, prompt: String?, note: String, size: TermSize)
     /// Asks which folders are inside a folder, or inside home when `path` is nil.
     case listDirectory(path: String?)
 }
@@ -170,6 +175,8 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case diffFile(path: String, file: FileDiff?)
     case history(path: String?, conversations: [Conversation])
     case directory(DirectoryListing)
+    /// Answer to `handoffPlan`: the prompt, and an id to hand off with.
+    case handoffPlan(id: String, prompt: String)
 }
 
 public enum MessageCoding {

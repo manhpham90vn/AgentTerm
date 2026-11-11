@@ -439,7 +439,18 @@ final class EndToEndTests: XCTestCase {
         phone.connection.send(.resume(agent: "claude", sessionID: "x; touch /tmp/pwned", cwd: "/tmp", size: .default))
         phone.connection.send(.resume(agent: "vim", sessionID: "c-1", cwd: "/tmp", size: .default))
         waitUntil("refused twice") { phone.messages.filter { $0 == .error("cannot resume that conversation") }.count == 2 }
-        phone.connection.send(.handoff(agent: "claude", sessionID: "no-such", cwd: project, target: "codex", note: "", size: .default))
+        // The prompt can be asked for first, to show it.
+        phone.connection.send(.handoffPlan(agent: "claude"))
+        phone.connection.send(.handoffPlan(agent: "vim"))
+        var plan: (id: String, prompt: String)?
+        waitUntil("plan") {
+            plan = phone.messages.compactMap { if case .handoffPlan(let id, let prompt) = $0 { return (id, prompt) } else { return nil } }.last
+            return plan != nil && phone.messages.contains(.error("cannot hand off from that agent"))
+        }
+        XCTAssertTrue(plan!.prompt.hasPrefix("You are taking over a task from Claude Code in this folder. Read .agentty/handoffs/"))
+        XCTAssertTrue(plan!.prompt.contains("-from-claude.md first"))
+
+        phone.connection.send(.handoff(agent: "claude", sessionID: "no-such", cwd: project, target: "codex", plan: plan!.id, prompt: nil, note: "", size: .default))
         waitUntil("unknown conversation") { phone.messages.contains(.error("That conversation is no longer on this Mac.")) }
         XCTAssertEqual(withHome.sessionCount, 0)
     }

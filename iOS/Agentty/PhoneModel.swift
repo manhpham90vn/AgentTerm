@@ -20,6 +20,11 @@ enum Route: Hashable {
     case allHistory
 }
 
+struct HandoffPlan: Equatable {
+    let id: String
+    let prompt: String
+}
+
 /// A project folder on the Mac with the sessions running in it.
 struct FolderGroup: Identifiable {
     /// `nil` is the home directory, offered when the Mac has no folders yet.
@@ -53,6 +58,8 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var patches: [String: FileDiff?] = [:]
     /// Conversations by folder. The empty key is "everywhere on the Mac".
     @Published private(set) var histories: [String: [Conversation]] = [:]
+    /// What the receiving agent would be told, while the handoff sheet is open.
+    @Published private(set) var handoffPlan: HandoffPlan?
     /// The folder shown in the folder picker.
     @Published private(set) var listing: DirectoryListing?
     @Published var showBrowser = false
@@ -175,6 +182,7 @@ final class PhoneModel: ObservableObject {
         patches = [:]
         histories = [:]
         listing = nil
+        handoffPlan = nil
     }
 
     // MARK: Connection
@@ -352,6 +360,8 @@ final class PhoneModel: ObservableObject {
             histories[folder ?? ""] = conversations
         case .directory(let listing):
             self.listing = listing
+        case .handoffPlan(let id, let prompt):
+            handoffPlan = HandoffPlan(id: id, prompt: prompt)
         case .pairingCode, .devices:
             break
         }
@@ -418,14 +428,24 @@ final class PhoneModel: ObservableObject {
         connection?.send(.resume(agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd, size: TermSize(cols: 48, rows: 30)))
     }
 
+    /// Asks the Mac what the receiving agent would be told, to show it.
+    func requestHandoffPlan(for conversation: Conversation) {
+        handoffPlan = nil
+        connection?.send(.handoffPlan(agent: conversation.agent))
+    }
+
     /// Hands a conversation's work to another agent and shows its terminal.
-    func handoff(_ conversation: Conversation, to target: AgentInfo, note: String) {
+    /// `prompt` is the plan's prompt as the user left it.
+    func handoff(_ conversation: Conversation, to target: AgentInfo, prompt: String, note: String) {
         guard status == .connected else { return }
         openCreatedSession = true
+        let plan = handoffPlan
+        let edited = plan.map { prompt != $0.prompt } ?? false
         connection?.send(.handoff(
             agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd,
-            target: target.id, note: note, size: TermSize(cols: 48, rows: 30)
+            target: target.id, plan: plan?.id, prompt: edited ? prompt : nil, note: note, size: TermSize(cols: 48, rows: 30)
         ))
+        handoffPlan = nil
     }
 
     /// Shows the folders inside `path`, or inside the home folder.

@@ -223,7 +223,7 @@ final class AppModel: ObservableObject {
                 pairingCode = nil
             }
             devices = list
-        case .paired, .diff, .diffFile, .history, .directory:
+        case .paired, .diff, .diffFile, .history, .directory, .handoffPlan:
             // The Mac app reads changes, history and folders directly: it
             // runs on the machine they are on.
             break

@@ -124,6 +124,10 @@ final class FlowTests: XCTestCase {
             capture("7c-history")
             conversation.tap()
             XCTAssertTrue(app.buttons["Resume in Claude Code"].waitForExistence(timeout: 5))
+            // The prompt the receiving agent would start with is shown.
+            let prompt = app.descendants(matching: .any)["handoff-prompt"].firstMatch
+            XCTAssertTrue(prompt.waitForExistence(timeout: 10), "the handoff prompt is not shown")
+            XCTAssertTrue((prompt.value as? String)?.contains("You are taking over a task from Claude Code") == true, "\(String(describing: prompt.value))")
             capture("7d-conversation")
             app.buttons["Close"].tap()
             app.navigationBars.buttons.firstMatch.tap()

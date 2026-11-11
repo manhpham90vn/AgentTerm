@@ -94,6 +94,9 @@ public final class HostServer {
     /// The last changes read per folder, so asking for one file's diff right
     /// after the list does not run git again.
     private var diffCache: [String: (snapshot: DiffSnapshot, at: Date)] = [:]
+    /// Handoff plans that were shown to a user, until they are used. The
+    /// prompt in a plan names a file, and the handoff has to write that file.
+    private var handoffPlans: [String: (plan: Handoff.Plan, at: Date)] = [:]
     private var listeners: [String: NWListener] = [:]
     private var tailscaleTimer: DispatchSourceTimer?
     private var clients: [ClientID: Client] = [:]
@@ -412,15 +415,29 @@ public final class HostServer {
             }
             let conversation = Conversation(agent: agent, sessionID: sessionID, title: "", updatedAt: Date(), cwd: cwd)
             create(CreateRequest(command: conversation.resumeCommand, cwd: cwd, title: Handoff.name(of: agent), size: size), for: client)
-        case .handoff(let agent, let sessionID, let cwd, let target, let note, let size):
+        case .handoffPlan(let agent):
+            guard AgentDetector.known.contains(where: { $0.id == agent }) else {
+                send(.error("cannot hand off from that agent"), to: client)
+                return
+            }
+            // Plans nobody used are dropped after an hour.
+            handoffPlans = handoffPlans.filter { Date().timeIntervalSince($0.value.at) < 3600 }
+            let plan = Handoff.plan(for: Conversation(agent: agent, sessionID: "", title: "", updatedAt: Date(), cwd: ""))
+            let id = UUID().uuidString
+            handoffPlans[id] = (plan, Date())
+            send(.handoffPlan(id: id, prompt: plan.prompt), to: client)
+        case .handoff(let agent, let sessionID, let cwd, let target, let planID, let prompt, let note, let size):
             let home = configuration.home
+            // Only a plan this host made is honored, so a client names a
+            // plan and never a path to write to.
+            let plan = planID.flatMap { handoffPlans.removeValue(forKey: $0) }?.plan
             work(for: client, { () -> Result<(Handoff.Prepared, String), Error> in
                 // Looked up again here: the conversation's files are on this
                 // machine, and what the client holds is only a description.
                 let found = AgentHistory.conversations(in: cwd, home: home).first { $0.agent == agent && $0.sessionID == sessionID }
                     ?? AgentHistory.allConversations(home: home).first { $0.agent == agent && $0.sessionID == sessionID }
                 guard let found else { return .failure(HandoffRequestError.notFound) }
-                return Result { (try Handoff.prepare(found, to: target, note: note), found.cwd) }
+                return Result { (try Handoff.prepare(found, to: target, plan: plan, prompt: prompt, note: note), found.cwd) }
             }) { server, client, result in
                 switch result {
                 case .success(let (prepared, directory)):

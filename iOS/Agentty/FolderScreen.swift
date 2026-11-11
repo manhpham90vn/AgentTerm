@@ -334,7 +334,10 @@ private struct ConversationSheet: View {
     @AppStorage("handoffTarget") private var rememberedTarget = ""
     @State private var targetID = ""
     @State private var note = ""
+    /// The prompt the receiving agent starts with, as the user left it.
+    @State private var prompt = ""
 
+    private var promptIsEdited: Bool { model.handoffPlan.map { prompt != $0.prompt } ?? false }
     private var targets: [AgentInfo] { model.handoffTargets(from: conversation.agent) }
     private var target: AgentInfo? { targets.first { $0.id == targetID } ?? targets.first }
     private var sourceName: String { model.agents.first { $0.id == conversation.agent }?.name ?? conversation.agent }
@@ -398,14 +401,49 @@ private struct ConversationSheet: View {
                                     }
                                 }
                             }
-                            TextField("Your instructions (optional)", text: $note, axis: .vertical)
-                                .lineLimit(3...8)
-                                .padding(12)
-                                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.raised))
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack {
+                                    Text("Prompt \(target?.name ?? "the agent") starts with")
+                                        .font(.footnote.weight(.semibold))
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    if promptIsEdited {
+                                        Button("Reset") { prompt = model.handoffPlan?.prompt ?? "" }
+                                            .font(.footnote.weight(.semibold))
+                                    }
+                                }
+                                if model.handoffPlan == nil {
+                                    ProgressView()
+                                        .frame(maxWidth: .infinity, minHeight: 60)
+                                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.raised))
+                                } else {
+                                    TextField("Prompt", text: $prompt, axis: .vertical)
+                                        .lineLimit(2...10)
+                                        .font(.callout)
+                                        .padding(12)
+                                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.raised))
+                                        .accessibilityIdentifier("handoff-prompt")
+                                }
+                                Text("It can be edited. Keep the line that names the handoff file.")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Your instructions (optional)")
+                                    .font(.footnote.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                TextField("What to focus on, what to leave alone", text: $note, axis: .vertical)
+                                    .lineLimit(3...8)
+                                    .padding(12)
+                                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.raised))
+                                Text("Added after the prompt.")
+                                    .font(.caption)
+                                    .foregroundStyle(.tertiary)
+                            }
                             Button {
                                 guard let target else { return }
                                 rememberedTarget = target.id
-                                model.handoff(conversation, to: target, note: note)
+                                model.handoff(conversation, to: target, prompt: prompt, note: note)
                                 dismiss()
                             } label: {
                                 Label("Hand Off to \(target?.name ?? "Agent")", systemImage: "arrowshape.turn.up.right.fill")
@@ -414,7 +452,7 @@ private struct ConversationSheet: View {
                                     .padding(.vertical, 6)
                             }
                             .buttonStyle(.bordered)
-                            .disabled(target == nil)
+                            .disabled(target == nil || model.handoffPlan == nil)
                         }
                     }
                 }
@@ -430,6 +468,10 @@ private struct ConversationSheet: View {
             }
             .onAppear {
                 targetID = targets.contains { $0.id == rememberedTarget } ? rememberedTarget : (targets.first?.id ?? "")
+                if !targets.isEmpty { model.requestHandoffPlan(for: conversation) }
+            }
+            .onChange(of: model.handoffPlan) { _, plan in
+                if let plan { prompt = plan.prompt }
             }
         }
     }
