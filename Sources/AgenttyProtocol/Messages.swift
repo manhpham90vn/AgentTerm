@@ -34,14 +34,32 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
     public var cwd: String
     public var size: TermSize
     public var createdAt: Date
+    /// Id of the agent running in the session ("claude", "codex", "agy",
+    /// "copilot"), or nil for a shell or any other program.
+    public var agent: String?
+    /// What the session is about: the title of the conversation the agent is
+    /// having in it. Nil until the agent has saved one.
+    public var summary: String?
+    /// The agent's own id of that conversation, once it is known.
+    public var conversationID: String?
 
-    public init(id: SessionID, title: String, cwd: String, size: TermSize, createdAt: Date) {
+    public init(
+        id: SessionID, title: String, cwd: String, size: TermSize, createdAt: Date,
+        agent: String? = nil, summary: String? = nil, conversationID: String? = nil
+    ) {
         self.id = id
         self.title = title
         self.cwd = cwd
         self.size = size
         self.createdAt = createdAt
+        self.agent = agent
+        self.summary = summary
+        self.conversationID = conversationID
     }
+
+    /// What to call the session in a list: its summary, or its title until
+    /// there is one.
+    public var displayName: String { summary ?? title }
 }
 
 public struct CreateRequest: Codable, Equatable, Sendable {

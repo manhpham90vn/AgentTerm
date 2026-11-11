@@ -137,6 +137,7 @@ struct CenterView: View {
             case .connected:
                 if let controller = model.currentController {
                     VStack(spacing: 0) {
+                        SessionTabs()
                         if let size = model.foreignSizes[controller.session] {
                             ForeignSizeBanner(size: size)
                         }
@@ -149,7 +150,10 @@ struct CenterView: View {
                             .padding(.top, foreign == nil ? 6 : 0)
                     }
                 } else {
-                    WelcomeView()
+                    VStack(spacing: 0) {
+                        SessionTabs()
+                        WelcomeView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             }
         }

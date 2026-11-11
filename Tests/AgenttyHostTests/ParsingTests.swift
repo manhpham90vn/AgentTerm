@@ -185,4 +185,62 @@ final class ParsingTests: XCTestCase {
             XCTAssertFalse(TerminalReply.isReply(data(input)), input)
         }
     }
+
+    // MARK: Naming sessions after their conversations
+
+    private func conversation(_ id: String, agent: String = "claude", cwd: String = "/p", started: TimeInterval?, updated: TimeInterval, title: String? = nil) -> Conversation {
+        Conversation(agent: agent, sessionID: id, title: title ?? "about \(id)", updatedAt: Date(timeIntervalSince1970: updated), cwd: cwd,
+                     startedAt: started.map(Date.init(timeIntervalSince1970:)))
+    }
+
+    private func running(_ id: SessionID, agent: String = "claude", cwd: String = "/p", created: TimeInterval, known: String? = nil) -> SessionSummaries.Running {
+        SessionSummaries.Running(id: id, agent: agent, cwd: cwd, createdAt: Date(timeIntervalSince1970: created), conversationID: known)
+    }
+
+    func testAgentIsReadFromTheCommand() {
+        XCTAssertEqual(SessionSummaries.agent(forCommand: "claude"), "claude")
+        XCTAssertEqual(SessionSummaries.agent(forCommand: "codex resume 0198-abc"), "codex")
+        XCTAssertEqual(SessionSummaries.agent(forCommand: "agy -i 'take over'"), "agy")
+        XCTAssertEqual(SessionSummaries.agent(forCommand: "/opt/homebrew/bin/copilot --resume=x"), "copilot")
+        XCTAssertNil(SessionSummaries.agent(forCommand: nil))
+        XCTAssertNil(SessionSummaries.agent(forCommand: "vim claude.txt"))
+        XCTAssertNil(SessionSummaries.agent(forCommand: "  "))
+    }
+
+    func testASessionGetsTheConversationThatBeganAfterIt() {
+        let conversations = [
+            conversation("old", started: 100, updated: 5_000),   // touched lately, but began long before
+            conversation("mine", started: 1_010, updated: 1_500),
+            conversation("other-agent", agent: "codex", started: 1_005, updated: 1_400),
+            conversation("other-folder", cwd: "/q", started: 1_005, updated: 1_400),
+        ]
+        let matches = SessionSummaries.assign([running(1, created: 1_000)], conversations: conversations)
+        XCTAssertEqual(matches[1]?.sessionID, "mine")
+        XCTAssertTrue(SessionSummaries.assign([running(1, created: 2_000)], conversations: conversations).isEmpty, "nothing began since")
+    }
+
+    func testTwoSessionsOfOneAgentInOneFolderGetTheirOwn() {
+        let conversations = [conversation("first", started: 1_020, updated: 3_000), conversation("second", started: 2_030, updated: 2_500)]
+        let matches = SessionSummaries.assign([running(2, created: 2_000), running(1, created: 1_000)], conversations: conversations)
+        XCTAssertEqual(matches[1]?.sessionID, "first")
+        XCTAssertEqual(matches[2]?.sessionID, "second")
+    }
+
+    func testAKnownConversationStaysWithItsSession() {
+        // Session 1 resumed "old". A newer session must not take it, nor
+        // session 1 be moved to a conversation that began later.
+        let conversations = [conversation("old", started: 100, updated: 9_000), conversation("new", started: 1_500, updated: 1_600)]
+        let matches = SessionSummaries.assign([running(1, created: 1_000, known: "old"), running(2, created: 1_400)], conversations: conversations)
+        XCTAssertEqual(matches[1]?.sessionID, "old")
+        XCTAssertEqual(matches[2]?.sessionID, "new")
+    }
+
+    func testWithoutAStartTimeTheLatestTouchedConversationIsUsed() {
+        let conversations = [
+            conversation("before", agent: "agy", started: nil, updated: 900),
+            conversation("a", agent: "agy", started: nil, updated: 1_200),
+            conversation("b", agent: "agy", started: nil, updated: 1_800),
+        ]
+        XCTAssertEqual(SessionSummaries.assign([running(1, agent: "agy", created: 1_000)], conversations: conversations)[1]?.sessionID, "b")
+    }
 }

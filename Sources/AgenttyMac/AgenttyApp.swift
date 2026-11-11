@@ -26,6 +26,24 @@ struct AgenttyApp: App {
                 Button("Add Folder…") { model.addFolder() }
                     .keyboardShortcut("o")
             }
+            CommandMenu("Session") {
+                // Command and a number shows the tab in that place.
+                ForEach(Array(model.sessions.prefix(9).enumerated()), id: \.element.id) { index, session in
+                    Button(session.displayName) { model.selectSession(number: index + 1) }
+                        .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                }
+                if !model.sessions.isEmpty { Divider() }
+                Button("Next Session") { model.selectSession(offset: 1) }
+                    .keyboardShortcut("]", modifiers: [.command, .shift])
+                    .disabled(model.sessions.count < 2)
+                Button("Previous Session") { model.selectSession(offset: -1) }
+                    .keyboardShortcut("[", modifiers: [.command, .shift])
+                    .disabled(model.sessions.count < 2)
+                Divider()
+                Button("End Session") { if let id = model.selectedSession { model.close(id) } }
+                    .keyboardShortcut("w")
+                    .disabled(model.selectedSession == nil)
+            }
             CommandGroup(after: .sidebar) {
                 Button("Bigger Text") { model.changeFontSize(by: 1) }
                     .keyboardShortcut("+")

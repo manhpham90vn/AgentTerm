@@ -122,7 +122,7 @@ final class PhoneModel: ObservableObject {
     }
 
     func agentID(for session: SessionInfo) -> String {
-        agents.first { $0.name == session.title }?.id ?? "shell"
+        session.agent ?? "shell"
     }
 
     // MARK: Pairing
@@ -365,7 +365,12 @@ final class PhoneModel: ObservableObject {
                 // The session's conversation is the newest one its agent has
                 // in that folder since the session started.
                 let agent = agentID(for: session)
-                if let found = conversations.first(where: { $0.agent == agent && $0.updatedAt >= session.createdAt.addingTimeInterval(-5) }) {
+                let own = conversations.filter { $0.agent == agent }
+                let current = self.session(session.id) ?? session
+                // The Mac already worked out which conversation the session
+                // is having; without that, the newest one since it started.
+                if let found = own.first(where: { $0.sessionID == current.conversationID })
+                    ?? own.first(where: { $0.updatedAt >= session.createdAt.addingTimeInterval(-5) }) {
                     sessionHandoff = found
                 } else {
                     self.message = "\(session.title) has no conversation to hand off in this session yet. It saves one after your first message."

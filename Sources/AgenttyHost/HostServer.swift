@@ -99,6 +99,8 @@ public final class HostServer {
     private var handoffPlans: [String: (plan: Handoff.Plan, at: Date)] = [:]
     private var listeners: [String: NWListener] = [:]
     private var tailscaleTimer: DispatchSourceTimer?
+    private var summaryTimer: DispatchSourceTimer?
+    private var summarizing = false
     private var clients: [ClientID: Client] = [:]
     private var sessions: [SessionID: Session] = [:]
     private var nextClientID: ClientID = 1
@@ -127,6 +129,13 @@ public final class HostServer {
     public func start() throws -> UInt16 {
         let port = try listen(on: "127.0.0.1", port: configuration.port)
         queue.sync { boundPort = port }
+
+        // Names sessions after the conversations their agents are having.
+        let summaries = DispatchSource.makeTimerSource(queue: queue)
+        summaries.schedule(deadline: .now() + 3, repeating: 6)
+        summaries.setEventHandler { [weak self] in self?.refreshSummaries() }
+        queue.sync { summaryTimer = summaries }
+        summaries.resume()
         guard configuration.listenOnTailscale else { return port }
 
         let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -141,6 +150,8 @@ public final class HostServer {
         queue.sync {
             tailscaleTimer?.cancel()
             tailscaleTimer = nil
+            summaryTimer?.cancel()
+            summaryTimer = nil
             listeners.values.forEach { $0.cancel() }
             listeners.removeAll()
             clients.values.forEach { $0.connection.cancel() }
@@ -414,7 +425,8 @@ public final class HostServer {
                 return
             }
             let conversation = Conversation(agent: agent, sessionID: sessionID, title: "", updatedAt: Date(), cwd: cwd)
-            create(CreateRequest(command: conversation.resumeCommand, cwd: cwd, title: Handoff.name(of: agent), size: size), for: client)
+            // A resumed session's conversation is known from the start.
+            create(CreateRequest(command: conversation.resumeCommand, cwd: cwd, title: Handoff.name(of: agent), size: size), for: client, conversationID: sessionID)
         case .handoffPlan(let agent):
             guard AgentDetector.known.contains(where: { $0.id == agent }) else {
                 send(.error("cannot hand off from that agent"), to: client)
@@ -489,6 +501,43 @@ public final class HostServer {
         let parent = url.path == "/" ? nil : url.deletingLastPathComponent().path
         let standardHome = URL(fileURLWithPath: home).standardizedFileURL.path
         return DirectoryListing(path: url.path, parent: parent, folders: folders, isHome: url.path == standardHome)
+    }
+
+    /// Looks up what each agent session is about and tells the clients when
+    /// a session's name changed. Reads the agents' files, so off this queue.
+    private func refreshSummaries() {
+        guard !summarizing else { return }
+        let running = sessions.values.compactMap { session -> SessionSummaries.Running? in
+            guard let agent = session.info.agent else { return nil }
+            return SessionSummaries.Running(
+                id: session.info.id, agent: agent, cwd: session.info.cwd,
+                createdAt: session.info.createdAt, conversationID: session.info.conversationID
+            )
+        }
+        guard !running.isEmpty else { return }
+        summarizing = true
+        let home = configuration.home
+        workQueue.async { [weak self] in
+            var conversations: [Conversation] = []
+            for folder in Set(running.map(\.cwd)) {
+                conversations += AgentHistory.conversations(in: folder, home: home)
+            }
+            let matches = SessionSummaries.assign(running, conversations: conversations)
+            self?.queue.async {
+                guard let self else { return }
+                self.summarizing = false
+                var changed = false
+                for (id, conversation) in matches {
+                    guard let session = self.sessions[id] else { continue }
+                    if session.info.summary != conversation.title || session.info.conversationID != conversation.sessionID {
+                        session.info.summary = conversation.title
+                        session.info.conversationID = conversation.sessionID
+                        changed = true
+                    }
+                }
+                if changed { self.broadcastSessions() }
+            }
+        }
     }
 
     /// Tells the client why, then closes once the message had time to arrive.
@@ -578,7 +627,7 @@ public final class HostServer {
 
     // MARK: Sessions
 
-    private func create(_ request: CreateRequest, for client: Client) {
+    private func create(_ request: CreateRequest, for client: Client, conversationID: String? = nil) {
         var cwd = request.cwd ?? HostEnvironment.homeDirectory
         var isDirectory: ObjCBool = false
         if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDirectory) || !isDirectory.boolValue {
@@ -604,7 +653,10 @@ public final class HostServer {
         nextSessionID += 1
         let fallbackTitle = request.command?.split(separator: " ").first.map(String.init)
             ?? (HostEnvironment.shell as NSString).lastPathComponent
-        let info = SessionInfo(id: id, title: request.title ?? fallbackTitle, cwd: cwd, size: size, createdAt: Date())
+        let info = SessionInfo(
+            id: id, title: request.title ?? fallbackTitle, cwd: cwd, size: size, createdAt: Date(),
+            agent: SessionSummaries.agent(forCommand: request.command), conversationID: conversationID
+        )
         let session = Session(info: info, process: process)
         sessions[id] = session
 

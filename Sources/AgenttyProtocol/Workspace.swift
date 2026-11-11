@@ -62,16 +62,22 @@ public struct Conversation: Codable, Identifiable, Equatable, Sendable {
     /// File on the host holding the conversation's messages, when the agent
     /// keeps one that can be read.
     public var source: String?
+    /// When the conversation began, where the agent's files tell.
+    public var startedAt: Date?
 
     public var id: String { agent + ":" + sessionID }
 
-    public init(agent: String, sessionID: String, title: String, updatedAt: Date, cwd: String, source: String? = nil) {
+    public init(
+        agent: String, sessionID: String, title: String, updatedAt: Date, cwd: String,
+        source: String? = nil, startedAt: Date? = nil
+    ) {
         self.agent = agent
         self.sessionID = sessionID
         self.title = title
         self.updatedAt = updatedAt
         self.cwd = cwd
         self.source = source
+        self.startedAt = startedAt
     }
 
     /// Command line that reopens the conversation in its agent.

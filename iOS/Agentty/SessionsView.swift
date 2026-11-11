@@ -209,11 +209,13 @@ private struct SessionRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Circle()
-                .fill(AgentStyle.accent(for: model.agentID(for: session)))
-                .frame(width: 9, height: 9)
-                .padding(.leading, 4)
-            Text(session.title)
+            Image(systemName: AgentStyle.symbol(for: model.agentID(for: session)))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(AgentStyle.accent(for: model.agentID(for: session)))
+                .frame(width: 18)
+            // The conversation's title once the agent has saved one, the
+            // agent's name until then.
+            Text(session.displayName)
                 .font(.body)
                 .lineLimit(1)
             Spacer(minLength: 8)

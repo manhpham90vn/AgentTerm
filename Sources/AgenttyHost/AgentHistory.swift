@@ -112,7 +112,7 @@ public enum AgentHistory {
                     ?? lines(of: data, containing: "\"user\"").lazy.compactMap(claudePrompt).first
             }
             guard let title else { return nil }
-            return Conversation(agent: "claude", sessionID: session, title: clean(title), updatedAt: file.modified, cwd: cwd, source: file.url.path)
+            return Conversation(agent: "claude", sessionID: session, title: clean(title), updatedAt: file.modified, cwd: cwd, source: file.url.path, startedAt: created(file.url))
         }
     }
 
@@ -170,7 +170,7 @@ public enum AgentHistory {
                 return payload["message"] as? String
             }.first
             guard let title else { return nil }
-            return Conversation(agent: "codex", sessionID: id, title: clean(title), updatedAt: file.modified, cwd: cwd, source: file.url.path)
+            return Conversation(agent: "codex", sessionID: id, title: clean(title), updatedAt: file.modified, cwd: cwd, source: file.url.path, startedAt: created(file.url))
         }
     }
 
@@ -230,11 +230,21 @@ public enum AgentHistory {
             }
             let modified = (try? workspace.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
             guard let title, let date = fields["updated_at"].flatMap(parseDate) ?? modified else { return nil }
-            return Conversation(agent: "copilot", sessionID: id, title: clean(title), updatedAt: date, cwd: cwd, source: folder.appendingPathComponent("events.jsonl").path)
+            return Conversation(
+                agent: "copilot", sessionID: id, title: clean(title), updatedAt: date, cwd: cwd,
+                source: folder.appendingPathComponent("events.jsonl").path,
+                startedAt: fields["created_at"].flatMap(parseDate) ?? created(workspace)
+            )
         }
     }
 
     // MARK: Helpers
+
+    /// When a file was created, which for a session file is when the
+    /// conversation began.
+    private static func created(_ url: URL) -> Date? {
+        (try? url.resourceValues(forKeys: [.creationDateKey]))?.creationDate
+    }
 
     private static func recentFiles(in folder: URL, suffix: String) -> [(url: URL, modified: Date)] {
         let urls = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []

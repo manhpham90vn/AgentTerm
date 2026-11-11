@@ -113,19 +113,21 @@ struct SessionRow: View {
     var showsPath = false
     @State private var hovering = false
 
-    private var agentID: String {
-        model.agents.first { $0.name == session.title }?.id ?? "shell"
-    }
+    private var agentID: String { session.agent ?? "shell" }
 
     var body: some View {
         HStack(spacing: 8) {
-            Circle()
-                .fill(Theme.accent(for: agentID))
-                .frame(width: 7, height: 7)
+            Image(systemName: Theme.symbol(for: agentID))
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(Theme.accent(for: agentID))
+                .frame(width: 14)
             VStack(alignment: .leading, spacing: 1) {
-                Text(session.title)
+                // The conversation's title once the agent has saved one,
+                // the agent's name until then.
+                Text(session.displayName)
                     .font(.system(size: 12.5))
                     .lineLimit(1)
+                    .truncationMode(.tail)
                 if showsPath {
                     Text((session.cwd as NSString).abbreviatingWithTildeInPath)
                         .font(.system(size: 10.5))
@@ -165,5 +167,6 @@ struct SessionRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture { model.select(session: session) }
+        .help(session.summary.map { "\(session.title): \($0)" } ?? session.title)
     }
 }

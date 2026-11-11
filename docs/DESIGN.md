@@ -239,6 +239,25 @@ host builds the command itself from the agent and the id, after checking
 both; for `handoff` it looks the conversation up again on its own disk, so a
 client only ever names a conversation and never supplies a path or command.
 
+## Session names
+
+`SessionInfo` carries `agent`, `summary` and `conversationID`. The host fills
+them in, so every client shows the same name without reading any files:
+
+- `agent` comes from the command the session was started with.
+- Every 6 seconds `SessionSummaries.assign` pairs agent sessions with the
+  conversations `AgentHistory` finds in their folders. Agents do not say
+  which conversation a terminal belongs to, so the pairing uses the agent,
+  the folder and time: the oldest session takes the first conversation that
+  began after it started. For Antigravity, which records no start, it is the
+  conversation touched most recently since the session began.
+- A resumed session's conversation is known from the start, and a pairing
+  once made is kept, so a later, newer conversation does not steal it.
+- Two sessions of one agent started in one folder within the same few
+  seconds can be mixed up.
+
+Handing off a running session uses `conversationID` when it is set.
+
 ## Handoff
 
 `Handoff.prepare` turns a `Conversation` into a handoff file and a command:

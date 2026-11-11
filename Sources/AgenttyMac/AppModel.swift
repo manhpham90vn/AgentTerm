@@ -335,7 +335,20 @@ final class AppModel: ObservableObject {
     }
 
     func agentID(of session: SessionInfo) -> String? {
-        agents.first { $0.name == session.title }?.id
+        session.agent
+    }
+
+    /// Shows the session `offset` places after the one on screen, wrapping.
+    func selectSession(offset: Int) {
+        guard !sessions.isEmpty else { return }
+        let current = sessions.firstIndex { $0.id == selectedSession } ?? (offset > 0 ? -1 : 0)
+        select(session: sessions[(current + offset + sessions.count) % sessions.count])
+    }
+
+    /// Shows the session in the given place of the tab strip, counted from 1.
+    func selectSession(number: Int) {
+        guard sessions.indices.contains(number - 1) else { return }
+        select(session: sessions[number - 1])
     }
 
     /// Opens the handoff sheet for a conversation.
@@ -353,8 +366,11 @@ final class AppModel: ObservableObject {
         guard let agent = agentID(of: session) else { return }
         let name = session.title
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let newest = AgentHistory.conversations(in: session.cwd)
-                .first { $0.agent == agent && $0.updatedAt >= session.createdAt.addingTimeInterval(-5) }
+            let conversations = AgentHistory.conversations(in: session.cwd).filter { $0.agent == agent }
+            // The host already worked out which conversation the session is
+            // having; without that, the newest one since it started.
+            let newest = conversations.first { $0.sessionID == session.conversationID }
+                ?? conversations.first { $0.updatedAt >= session.createdAt.addingTimeInterval(-5) }
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let newest {

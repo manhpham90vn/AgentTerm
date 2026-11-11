@@ -31,7 +31,7 @@ struct TerminalScreen: View {
             }
         }
         .background(Palette.canvas.ignoresSafeArea())
-        .navigationTitle(model.session(session)?.title ?? "Session")
+        .navigationTitle(model.session(session)?.displayName ?? "Session")
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

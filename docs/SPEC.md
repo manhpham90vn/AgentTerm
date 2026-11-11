@@ -49,6 +49,16 @@ itself.
 - A client that attaches gets the recent output replayed so it sees the
   current screen.
 
+### Session names
+
+- A session is named after what it is about: the title of the conversation
+  its agent is having, the same title the History tab shows.
+- Until the agent has saved a conversation the session keeps the agent's
+  name ("Claude Code"), and it changes by itself once there is one. A shell
+  keeps the shell's name.
+- The name and the agent's icon are the same on the Mac (folder list and
+  tabs) and on the iPhone.
+
 ### Terminal size
 
 - The terminal resizes to fit the device being used. Opening a session on the
@@ -112,10 +122,13 @@ are in the middle, and at the far right are the pairing button and, in the
 corner, the button that hides the side panel.
 
 - **Left: folders.** Project folders the user added, each with its running
-  sessions underneath. The list belongs to the host, so the iPhone shows the
+  sessions underneath. A session shows its agent's icon and a name. The list belongs to the host, so the iPhone shows the
   same folders. Sessions started elsewhere are listed under "Other".
 - **Middle: terminal.** The selected session. With no session selected, a
-  launch screen for the selected folder.
+  launch screen for the selected folder. Above it, every running session is a
+  tab, with a "+" to start another. Command and a number (⌘1 to ⌘9) shows the
+  tab in that place, ⌘⇧] and ⌘⇧[ go to the next and previous, ⌘W ends the
+  session on screen.
 - **Right: side panel**, with two tabs. The panel can be hidden.
   - **Git.** Uncommitted git changes of the selected folder: the changed files
     with added and removed line counts, and the diff of the selected file. An
