@@ -46,8 +46,10 @@ struct UsageMeter: View {
     }
 }
 
-/// One line under an agent's terminal: the model, how full its context is,
-/// and what is left of the account's limits. Clicking it shows all of it.
+/// A band under an agent's terminal with the few figures worth a glance:
+/// the model, how full the context is, and what the account's main limits
+/// have left. Each sits in a cell of its own, a number over a small bar.
+/// As many cells are shown as fit; clicking the band shows everything.
 public struct UsageBar: View {
     let agent: String
     let name: String
@@ -66,59 +68,67 @@ public struct UsageBar: View {
         self.action = action
     }
 
-    private var size: CGFloat { compact ? 11 : 11.5 }
+    /// One figure of the band.
+    private struct Cell: Identifiable {
+        let id: String
+        let label: String
+        let value: String
+        /// How much of the bar is filled, from 0 to 1.
+        let fill: Double
+        /// How much is used, which decides the color.
+        let used: Double
+        /// Said after the bar where there is room: when the limit starts over.
+        let note: String?
+    }
 
-    /// The account's own limits when its service was asked; what the session
-    /// recorded otherwise.
-    private var accountLimits: [AccountLimit] { account?.groups.first?.limits ?? [] }
+    private var cells: [Cell] {
+        var cells: [Cell] = []
+        if let usage, let tokens = usage.contextTokens {
+            if let fraction = usage.contextFraction {
+                cells.append(Cell(id: "context", label: "Context", value: "\(Int((fraction * 100).rounded()))%", fill: fraction, used: fraction * 100, note: usage.contextWindow.map { "of \(SessionUsage.short($0))" }))
+            } else {
+                cells.append(Cell(id: "context", label: "Context", value: SessionUsage.short(tokens), fill: 0, used: 0, note: "tokens"))
+            }
+        }
+        if let account, let limits = account.groups.first?.limits, !limits.isEmpty {
+            // The account's own limits, as its service reports them.
+            for limit in limits {
+                cells.append(Cell(
+                    id: limit.id, label: limit.shortTitle, value: account.percentText(limit),
+                    fill: (account.showsRemaining ? limit.leftPercent : limit.usedPercent) / 100, used: limit.usedPercent,
+                    note: limit.resetsAt.map { UsageStyle.shortReset($0) }
+                ))
+            }
+        } else if let usage {
+            // What the session itself recorded, until the service has answered.
+            for (index, limit) in usage.limits.enumerated() {
+                let left = max(0, 100 - limit.usedPercent)
+                cells.append(Cell(id: "recorded-\(index)", label: limit.label, value: "\(Int(left.rounded()))% left", fill: left / 100, used: limit.usedPercent, note: limit.resetsAt.map { UsageStyle.shortReset($0) }))
+            }
+        }
+        return cells
+    }
 
     public var body: some View {
+        let cells = cells
         HStack(spacing: 0) {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: compact ? 10 : 14) {
-                    HStack(spacing: 5) {
-                        Image(systemName: AgentStyle.symbol(for: agent))
-                            .font(.system(size: size - 1, weight: .semibold))
-                            .foregroundStyle(AgentStyle.accent(for: agent))
-                        Text(usage?.model ?? name)
-                            .font(.system(size: size, weight: .medium))
-                            .foregroundStyle(.primary.opacity(0.85))
-                    }
-                    if let tokens = usage?.contextTokens, let usage {
-                        context(tokens, usage)
-                    }
-                    if let account, !accountLimits.isEmpty {
-                        ForEach(accountLimits) { limit in
-                            self.limit(title: limit.shortTitle, text: account.percentText(limit), used: limit.usedPercent, resets: limit.resetsAt, fillsWithLeft: account.showsRemaining)
-                        }
-                        let more = account.limits.count - accountLimits.count
-                        if more > 0 { Text("+\(more) more").font(.system(size: size)).foregroundStyle(.secondary) }
-                    } else if let usage, !usage.limits.isEmpty {
-                        ForEach(Array(usage.limits.enumerated()), id: \.offset) { _, limit in
-                            self.limit(title: limit.label, text: "\(Int(max(0, 100 - limit.usedPercent).rounded()))% left", used: limit.usedPercent, resets: limit.resetsAt, fillsWithLeft: true)
-                        }
-                    } else if let problem = account?.problem {
-                        Text(problem).font(.system(size: size)).foregroundStyle(.secondary)
-                    } else if usage == nil {
-                        Text("No usage yet").font(.system(size: size)).foregroundStyle(.secondary)
-                    }
-                    if let spent = usage?.premiumRequests, account == nil {
-                        item("Premium requests", spent == spent.rounded() ? "\(Int(spent))" : String(format: "%.1f", spent))
-                    }
+            // Fewer cells on a narrow screen, rather than cells squeezed
+            // until they cannot be read.
+            ViewThatFits(in: .horizontal) {
+                ForEach(Array(stride(from: cells.count, through: 0, by: -1)), id: \.self) { count in
+                    row(Array(cells.prefix(count)), hidden: cells.count - count)
                 }
-                .lineLimit(1)
-                .padding(.leading, compact ? 12 : 14)
-                .padding(.trailing, 8)
-                .padding(.vertical, compact ? 5 : 6)
             }
+            Spacer(minLength: 0)
             if action != nil {
                 Image(systemName: "chevron.up")
-                    .font(.system(size: size - 2.5, weight: .bold))
+                    .font(.system(size: compact ? 9 : 9.5, weight: .bold))
                     .foregroundStyle(.tertiary)
-                    .padding(.horizontal, compact ? 10 : 12)
+                    .padding(.horizontal, compact ? 10 : 14)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: compact ? 40 : 42)
         .contentShape(Rectangle())
         .onTapGesture { action?() }
         .accessibilityElement(children: .combine)
@@ -127,41 +137,71 @@ public struct UsageBar: View {
         .accessibilityIdentifier("usage-bar")
     }
 
-    private func item(_ label: String, _ value: String, color: Color = .primary.opacity(0.85)) -> some View {
-        HStack(spacing: 5) {
-            Text(label).foregroundStyle(.secondary)
-            Text(value).foregroundStyle(color).monospacedDigit()
-        }
-        .font(.system(size: size))
-    }
-
-    @ViewBuilder
-    private func context(_ tokens: Int, _ usage: SessionUsage) -> some View {
-        if let fraction = usage.contextFraction, let window = usage.contextWindow {
+    private func row(_ cells: [Cell], hidden: Int) -> some View {
+        HStack(spacing: 0) {
             HStack(spacing: 6) {
-                item("Context", "\(Int((fraction * 100).rounded()))%", color: UsageStyle.color(forUsed: fraction * 100))
-                UsageMeter(usedFraction: fraction, color: UsageStyle.color(forUsed: fraction * 100))
-                Text("\(SessionUsage.short(tokens)) / \(SessionUsage.short(window))")
-                    .font(.system(size: size))
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+                Image(systemName: AgentStyle.symbol(for: agent))
+                    .font(.system(size: compact ? 11 : 11.5, weight: .semibold))
+                    .foregroundStyle(AgentStyle.accent(for: agent))
+                Text(usage?.model ?? name)
+                    .font(.system(size: compact ? 11.5 : 12, weight: .medium))
+                    .foregroundStyle(.primary.opacity(0.9))
+                    .lineLimit(1)
+                    .fixedSize()
             }
-        } else {
-            item("Context", "\(SessionUsage.short(tokens)) tokens")
+            .padding(.leading, compact ? 12 : 14)
+            .padding(.trailing, compact ? 10 : 14)
+            ForEach(cells) { cell in
+                Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1, height: 24)
+                view(for: cell)
+            }
+            if cells.isEmpty {
+                Rectangle().fill(Color.white.opacity(0.08)).frame(width: 1, height: 24)
+                Text(account?.problem ?? "No usage yet")
+                    .font(.system(size: compact ? 11 : 11.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.horizontal, compact ? 10 : 14)
+                    .frame(maxWidth: compact ? 220 : 420, alignment: .leading)
+            } else if hidden > 0 {
+                Text("+\(hidden)")
+                    .font(.system(size: compact ? 10.5 : 11, weight: .medium))
+                    .foregroundStyle(.tertiary)
+                    .padding(.leading, compact ? 8 : 12)
+                    .fixedSize()
+            }
         }
     }
 
-    /// The bar fills with what the words beside it count: what is left, or what is used.
-    private func limit(title: String, text: String, used: Double, resets: Date?, fillsWithLeft: Bool) -> some View {
-        HStack(spacing: 6) {
-            item(title, text, color: UsageStyle.color(forUsed: used))
-            UsageMeter(usedFraction: (fillsWithLeft ? 100 - used : used) / 100, color: UsageStyle.color(forUsed: used))
-            if let resets, !compact {
-                Text("resets \(UsageStyle.shortReset(resets))")
-                    .font(.system(size: size))
+    private func view(for cell: Cell) -> some View {
+        VStack(alignment: .leading, spacing: compact ? 4 : 5) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(cell.label)
+                    .font(.system(size: compact ? 10 : 10.5))
                     .foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Text(cell.value)
+                    .font(.system(size: compact ? 11 : 11.5, weight: .medium))
+                    .monospacedDigit()
+                    .foregroundStyle(UsageStyle.color(forUsed: cell.used))
+            }
+            .lineLimit(1)
+            .fixedSize()
+            HStack(spacing: 6) {
+                UsageMeter(usedFraction: cell.fill, color: cell.used >= 70 ? UsageStyle.color(forUsed: cell.used) : Color(red: 0.45, green: 0.62, blue: 0.98), width: nil, height: 3)
+                if let note = cell.note, !compact {
+                    Text(note)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.tertiary)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .fixedSize()
+                }
             }
         }
+        .frame(width: compact ? nil : 132, alignment: .leading)
+        .fixedSize(horizontal: compact, vertical: false)
+        .padding(.horizontal, compact ? 10 : 14)
     }
 }
 

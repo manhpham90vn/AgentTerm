@@ -61,10 +61,11 @@ itself.
 
 ### Usage
 
-Under an agent's terminal, on the Mac and on the iPhone, one line says what
-the session has used and what the account has left: the model, how full the
-context is, and each limit of the account with when it starts over.
-Clicking the line opens everything the agent's own usage screen shows.
+Under an agent's terminal, on the Mac and on the iPhone, a band shows the
+few figures worth a glance: the model, how full the context is, and what the
+account's main limits have left, each in a cell of its own with a small bar
+(and, on the Mac, when it starts over). As many cells are shown as fit.
+Clicking the band opens everything the agent's own usage screen shows.
 
 | Agent | What is shown, as `/usage` or `/status` shows it |
 |---|---|
