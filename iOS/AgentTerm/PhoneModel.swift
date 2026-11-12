@@ -67,6 +67,15 @@ final class PhoneModel: ObservableObject {
     /// has said, which an older version never does.
     @Published private(set) var keepAwake: Bool?
 
+    /// Whether the Mac's host starts when its user logs in. Nil from a Mac
+    /// that cannot do that, or that has not said yet.
+    @Published private(set) var startAtLogin: Bool?
+
+    func setStartAtLogin(_ on: Bool) {
+        startAtLogin = on
+        connection?.send(.setStartAtLogin(on))
+    }
+
     func setKeepAwake(_ on: Bool) {
         keepAwake = on
         connection?.send(.setKeepAwake(on))
@@ -198,7 +207,10 @@ final class PhoneModel: ObservableObject {
         return folders.indices.contains(index + offset)
     }
     /// True once the Mac on screen has listed its sessions.
-    private var sessionsKnown = false
+    /// True once the Mac has listed its sessions.
+    @Published private(set) var sessionsKnown = false
+    /// The session whose earlier output is being sent, until all of it is here.
+    @Published private(set) var replaying: SessionID?
     /// True once it has sent the arrangement.
     private var layoutKnown = false
     private var applyingHostLayout = false
@@ -503,6 +515,7 @@ final class PhoneModel: ObservableObject {
     /// What was shown belongs to the Mac that is being left.
     private func clearHostState() {
         keepAwake = nil
+        startAtLogin = nil
         keepAwakeOptions = KeepAwakeOptions()
         commitWriter = CommitWriterSettings()
         writingCommitMessage = []
@@ -596,6 +609,7 @@ final class PhoneModel: ObservableObject {
             break
         case .closed(let reason):
             connection = nil
+            replaying = nil
             status = .offline(reason)
             if isPairing {
                 // Pairing did not work out: the Mac refused the code, or
@@ -675,6 +689,8 @@ final class PhoneModel: ObservableObject {
         case .agents(let list):
             agents = list
             agentsLoaded = true
+        case .startAtLogin(let on):
+            startAtLogin = on
         case .keepAwake(let on):
             keepAwake = on
         case .keepAwakeOptions(let options):
@@ -713,7 +729,10 @@ final class PhoneModel: ObservableObject {
                 tab = "sessions"
             }
             // What follows is the session's earlier output, until `replayed`.
-            if controller?.session == info.id { controller?.beginReplay(size: info.size) }
+            if controller?.session == info.id {
+                controller?.beginReplay(size: info.size)
+                replaying = info.id
+            }
         case .replaying(let id, let from):
             guard let current = controller, current.session == id, current.position != from else { return }
             if current.position != nil {
@@ -724,6 +743,7 @@ final class PhoneModel: ObservableObject {
             }
             controller?.position = from
         case .replayed(let id):
+            if replaying == id { replaying = nil }
             if controller?.session == id { controller?.endReplay() }
         case .resized(let id, let size, let driver):
             if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].size = size }

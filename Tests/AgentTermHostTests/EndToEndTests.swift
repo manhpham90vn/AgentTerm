@@ -838,6 +838,35 @@ final class EndToEndTests: XCTestCase {
         waitUntil("still ahead") { latest(mine)?.upstream == "origin/main" && latest(mine)?.ahead == 1 }
     }
 
+    func testStartingAtLoginIsSwitchedFromAnyClient() throws {
+        let root = state("e2e-login")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let item = LoginItem(
+            label: "com.example.host", file: root.appendingPathComponent("LaunchAgents/com.example.host.plist"), executable: "/bin/agenttermd",
+            arguments: ["--port", "1"], log: root.appendingPathComponent("host.log"))
+        // A host that cannot be started at login says nothing about it.
+        let plain = connect("plain")
+        XCTAssertFalse(plain.messages.contains { if case .startAtLogin = $0 { return true } else { return false } })
+
+        var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, detectAgents: { [] })
+        configuration.loginItem = item
+        let host = HostServer(configuration: configuration)
+        let hostPort = try host.start()
+        defer { host.stop() }
+        func latest(_ client: TestClient) -> Bool? {
+            client.messages.compactMap { if case .startAtLogin(let on) = $0 { return on } else { return nil } }.last
+        }
+        let mac = TestClient(port: hostPort, token: token, name: "mac")
+        let phone = TestClient(port: hostPort, token: token, name: "phone")
+        waitUntil("told it is off") { latest(mac) == false && latest(phone) == false }
+        phone.connection.send(.setStartAtLogin(true))
+        waitUntil("on, for both") { latest(mac) == true && latest(phone) == true }
+        XCTAssertTrue(item.isOn)
+        mac.connection.send(.setStartAtLogin(false))
+        waitUntil("off, for both") { latest(mac) == false && latest(phone) == false }
+        XCTAssertFalse(item.isOn)
+    }
+
     func testTheEndOfAPushIsSaidApartFromTheChanges() throws {
         let root = state("e2e-synced")
         defer { try? FileManager.default.removeItem(at: root) }

@@ -27,6 +27,10 @@ struct SessionsView: View {
                                 .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
                         }
                     }
+                    if model.status == .connected && !model.sessionsKnown {
+                        // Connected, and the Mac has not said yet what is on it.
+                        LoadingView("Loading the sessions…").frame(height: 120)
+                    }
                     ForEach(model.groups) { group in
                         FolderSection(group: group)
                     }
@@ -198,6 +202,7 @@ struct CommitWriterSheet: View {
             }
             .navigationTitle("Commit Messages")
             .navigationBarTitleDisplayMode(.inline)
+            .keyboardDismissButton()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) { Button("Save", action: save) }

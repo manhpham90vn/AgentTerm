@@ -86,7 +86,7 @@ struct DiffView: View {
                 }
             }
         } else {
-            ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+            LoadingView("Loading the changes…") { model.refreshDiff() }
         }
     }
 

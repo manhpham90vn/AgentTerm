@@ -217,6 +217,17 @@ public struct CodeEditor: UIViewRepresentable {
         textView.accessibilityIdentifier = "code-editor"
         textView.text = text
         context.coordinator.path = path
+        // A bar above the keyboard with a button that hides it: a phone's
+        // keyboard has no key for that, and it covers half of the file.
+        let bar = UIToolbar(frame: CGRect(x: 0, y: 0, width: 320, height: 44))
+        let hide = UIBarButtonItem(
+            image: UIImage(systemName: "keyboard.chevron.compact.down"), style: .plain, target: textView,
+            action: #selector(UIResponder.resignFirstResponder))
+        hide.accessibilityLabel = "Hide Keyboard"
+        hide.accessibilityIdentifier = "hide-keyboard"
+        bar.items = [UIBarButtonItem(systemItem: .flexibleSpace), hide]
+        bar.sizeToFit()
+        textView.inputAccessoryView = bar
         return textView
     }
 

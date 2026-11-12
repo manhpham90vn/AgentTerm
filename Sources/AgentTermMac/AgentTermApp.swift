@@ -211,6 +211,24 @@ private struct SettingsView: View {
                 }
                 .toggleStyle(.switch)
             }
+            if let startAtLogin = model.startAtLogin {
+                SettingsCard {
+                    Toggle(isOn: Binding(get: { startAtLogin }, set: { model.setStartAtLogin($0) })) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Start the host when you log in")
+                                .font(.system(size: 13, weight: .medium))
+                            Text(
+                                "After the Mac restarts, your iPhone can reach it without this app being opened first. Only the host starts, with no window; the app uses it when you open it."
+                            )
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .accessibilityIdentifier("start-at-login")
+                }
+            }
             if let keepAwake = model.keepAwake {
                 SettingsCard {
                     Toggle(isOn: Binding(get: { keepAwake }, set: { model.setKeepAwake($0) })) {

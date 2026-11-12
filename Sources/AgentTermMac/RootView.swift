@@ -367,6 +367,15 @@ struct CenterView: View {
                         let foreign = model.foreignSizes[controller.session]
                         TerminalPane(controller: controller, foreignSize: foreign)
                             .id(controller.session)
+                            .overlay {
+                                // The session's earlier output is on its
+                                // way, megabytes of it: a terminal racing
+                                // through that says less than a word that
+                                // it is loading.
+                                if model.replaying.contains(controller.session) {
+                                    LoadingView("Loading the session…", cover: Theme.canvas.opacity(0.92))
+                                }
+                            }
                             // The framed preview of another device's screen
                             // is centered, so it gets no one-sided padding.
                             .padding(.leading, foreign == nil ? 10 : 0)

@@ -31,6 +31,7 @@ struct FolderScreen: View {
         .navigationTitle((folder as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
+        .keyboardDismissButton()
         .toolbar {
             if model.folders.contains(folder) {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -137,7 +138,7 @@ private struct ChangesList: View {
                     .refreshable { model.loadDiff(folder) }
                 }
             } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                LoadingView("Loading the changes…") { model.loadDiff(folder) }
             }
         }
         .onAppear { model.loadDiff(folder) }
@@ -464,7 +465,7 @@ struct PatchScreen: View {
                     Placeholder(text: "This file no longer has changes.")
                 }
             } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                LoadingView("Loading the diff…")
             }
         }
         .background(Palette.canvas.ignoresSafeArea())
@@ -643,7 +644,7 @@ struct HistoryList: View {
                     .refreshable { load() }
                 }
             } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                LoadingView("Loading the history…") { load() }
             }
         }
         .onAppear(perform: load)

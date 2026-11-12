@@ -128,6 +128,15 @@ final class AppModel: ObservableObject {
     /// has said, which an older host never does.
     @Published private(set) var keepAwake: Bool?
 
+    /// Whether the host starts when the user logs in. Nil from a host that
+    /// cannot be started that way, or that has not said yet.
+    @Published private(set) var startAtLogin: Bool?
+
+    func setStartAtLogin(_ on: Bool) {
+        startAtLogin = on
+        connection?.send(.setStartAtLogin(on))
+    }
+
     func setKeepAwake(_ on: Bool) {
         keepAwake = on
         connection?.send(.setKeepAwake(on))
@@ -268,6 +277,8 @@ final class AppModel: ObservableObject {
 
     /// True once the host has listed its sessions.
     var sessionsKnown = false
+    /// The sessions whose earlier output is being sent, until all of it is here.
+    @Published private(set) var replaying: Set<SessionID> = []
 
     /// True between the host's welcome and the connection closing.
     private var wasConnected = false
@@ -449,8 +460,10 @@ final class AppModel: ObservableObject {
             stoppingHost = false
             connection = nil
             controllers.removeAll()
+            replaying = []
             sessionsKnown = false
             keepAwake = nil
+            startAtLogin = nil
             hostVersion = 0
             system.stats = nil
             sshHosts = []
@@ -509,6 +522,8 @@ final class AppModel: ObservableObject {
         case .agents(let list):
             agents = list
             agentsLoaded = true
+        case .startAtLogin(let on):
+            startAtLogin = on
         case .keepAwake(let on):
             keepAwake = on
         case .keepAwakeOptions(let options):
@@ -549,6 +564,7 @@ final class AppModel: ObservableObject {
             if controllers[info.id] == nil { controllers[info.id] = makeController(for: info.id) }
             // What follows is the session's earlier output, until `replayed`.
             controllers[info.id]?.beginReplay(size: info.size)
+            replaying.insert(info.id)
             if !sessions.contains(where: { $0.id == info.id }) { sessions.append(info) }
             if selectNextAttached || selectedSession == nil {
                 // A session that was just started comes to the front, also
@@ -561,6 +577,7 @@ final class AppModel: ObservableObject {
                 selectedSession = info.id
             }
         case .replayed(let id):
+            replaying.remove(id)
             controllers[id]?.endReplay()
         case .resized(let id, let size, let driver):
             if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].size = size }

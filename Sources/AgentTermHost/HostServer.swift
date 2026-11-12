@@ -17,6 +17,9 @@ public final class HostServer {
         public var listenOnTailscale: Bool
         /// Bytes of recent output kept per session and replayed on attach.
         public var scrollbackLimit: Int
+        /// What starts this host at login, for a host that can be. Nil for
+        /// one that cannot: clients then show no switch for it.
+        public var loginItem: LoginItem?
         /// Overrides agent detection, mainly for tests.
         public var detectAgents: () -> [AgentInfo]
         /// Where the shared folder list is saved. `nil` keeps it in memory only.
@@ -47,6 +50,7 @@ public final class HostServer {
             token: String,
             listenOnTailscale: Bool = true,
             scrollbackLimit: Int = 4 * 1024 * 1024,
+            loginItem: LoginItem? = nil,
             detectAgents: @escaping () -> [AgentInfo] = AgentDetector.detect,
             foldersFile: URL? = nil,
             devicesFile: URL? = nil,
@@ -59,6 +63,7 @@ public final class HostServer {
             self.token = token
             self.listenOnTailscale = listenOnTailscale
             self.scrollbackLimit = scrollbackLimit
+            self.loginItem = loginItem
             self.detectAgents = detectAgents
             self.foldersFile = foldersFile
             self.devicesFile = devicesFile
@@ -558,6 +563,15 @@ public final class HostServer {
             guard let session = sessions[id] else { return }
             session.process.hangUp()
             queue.asyncAfter(deadline: .now() + 3) { [weak session] in session?.process.forceKill() }
+        case .setStartAtLogin(let wanted):
+            guard let item = configuration.loginItem else { return }
+            do {
+                if wanted { try item.turnOn() } else { try item.turnOff() }
+            } catch {
+                send(.error("Could not \(wanted ? "set the host to start" : "stop the host from starting") at login: \(error.localizedDescription)"), to: client)
+            }
+            // To everyone, and as it is now: also when it could not be changed.
+            for other in clients.values where other.authenticated { send(.startAtLogin(item.isOn), to: other) }
         case .setKeepAwake(let wanted):
             guard wanted != keepAwake else { return }
             keepAwake = wanted
@@ -1028,6 +1042,7 @@ public final class HostServer {
         send(.keepAwake(keepAwake), to: client)
         send(.keepAwakeOptions(keepAwakeOptions), to: client)
         send(.commitWriter(commitWriter), to: client)
+        if let item = configuration.loginItem { send(.startAtLogin(item.isOn), to: client) }
         // Without any yet, the client is sent none and hands over its own.
         send(.displaySettings(displaySettings), to: client)
         if let systemStats { send(.systemStats(systemStats), to: client) }

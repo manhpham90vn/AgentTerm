@@ -179,6 +179,7 @@ Client to host:
 | `writeCommitMessage(path)` / `cancelCommitMessage(path)` | Have an agent write the message for what is staged, or stop it. Answered with `commitMessage(path, message)`, whose message is nil when it was stopped or failed. |
 | `setCommitWriter(settings)` | Which agent writes commit messages, on which model, with which prompt. |
 | `setKeepAwake(on)` / `setKeepAwakeOptions(options)` | Keep the Mac awake while sessions run, and how: the display too, only on power, for how long. |
+| `setStartAtLogin(on)` | Have the host start when the user logs in to the Mac, or not. The host writes or removes its launch agent (`LoginItem`) and tells every client with `startAtLogin(on)`. A host that cannot be started that way, one with a state folder of its own, never sends `startAtLogin`, and the clients show no switch. |
 | `setDisplaySettings(settings)` | How things are shown on every device: the temperature's unit, diffs in one panel or two, changes as a list or a tree. The host keeps it in `settings.json` and passes it on as `displaySettings`. A host that keeps none yet sends nil, and the client hands it its own. Each app also writes the values to its own preferences, which is what its views read. |
 | `sshHosts` / `connectSSH(host, size)` | The hosts of the Mac's SSH configuration, and `ssh <host>` in a new session. |
 | `history(path)` | Conversations agents had in a folder, or everywhere when `path` is nil. |
@@ -629,6 +630,19 @@ the same folder can therefore be mixed up; the History tab is exact.
   the terminal or closing the app. The Mac needs nothing for this: what is
   typed there is already in the program's own input, in the session.
   The keyboard shrinks the terminal's frame, which resizes the PTY.
+  While the keyboard is up, a button at the end of the key bar puts it
+  away (`KeyboardWatcher`); the other screens with something to write in
+  have that button in a bar above the keyboard.
+- With the phone on its side (`verticalSizeClass == .compact`) the
+  terminal screen has no navigation bar: back, the keys, the compose field
+  and the session's menu share one row under the terminal. Stacked as they
+  are upright they would leave the terminal a single line once the
+  keyboard is up.
+- Wherever a screen waits for the Mac it shows `LoadingView`, on the Mac
+  app too: nothing for the first 300 ms, then a spinner and what is being
+  waited for, and after ten seconds that it is taking long, with Try Again
+  where asking again is possible. A terminal is covered by it while the
+  session's earlier output is on its way (`replaying`).
 - While the app is in front it reconnects after a drop, at once the first
   time and then every few seconds, and re-attaches to the session that was
   open. The terminal screen says so meanwhile.
@@ -648,7 +662,8 @@ the same folder can therefore be mixed up; the History tab is exact.
 - `scripts/test-ios.sh` runs an XCUITest in the simulator against two
   throwaway hosts: pair by link, start a shell, send Vietnamese text from the
   compose field, use the key bar, go back, pair the second host, and switch
-  between the two.
+  between the two. `LANDSCAPE=only` runs the part that turns the phone on
+  its side, which the whole run leaves out.
 - `AGENTTERM_STATE_DIR` moves the host's token, folder list and log to another
   folder, which keeps test hosts away from the real pairing.
 

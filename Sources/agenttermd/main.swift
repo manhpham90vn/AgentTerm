@@ -141,6 +141,10 @@ do {
         port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home,
         statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil)
     configuration.protocolVersion = protocolVersion
+    // Started at login, when the user asked for that. The app may have been
+    // moved or updated since: launchd has to start the host that is here now.
+    configuration.loginItem = LoginItem.forThisHost()
+    configuration.loginItem?.refresh()
     server = HostServer(configuration: configuration)
     let bound = try server.start()
     print("agenttermd listening on 127.0.0.1:\(bound)")

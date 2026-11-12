@@ -1,5 +1,6 @@
 import AgentTermHost
 import AgentTermProtocol
+import AgentTermTerminal
 import Combine
 import SwiftUI
 
@@ -143,7 +144,7 @@ struct HistoryView: View {
                 }
             }
         } else {
-            ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+            LoadingView("Loading the history…")
         }
     }
 
