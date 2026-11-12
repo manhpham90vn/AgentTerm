@@ -119,12 +119,17 @@ platform :ios do
     # submitted for review; the screenshots have a lane of their own.
     notes = File.join(ROOT, "packaging/release-notes/v#{app_version[/^[\d.]+/]}.md")
     # App Store Connect takes the contact for App Review only with a phone
-    # number, which is not kept in the repository. Without
-    # review_information/phone_number.txt that folder is left out, and what
-    # App Store Connect has for App Review stays as it is.
+    # number. That is not kept in this repository: it comes in as
+    # APP_REVIEW_PHONE. Without it the contact and the notes are left out,
+    # and what App Store Connect has for App Review stays as it is.
     listing = File.join(Dir.mktmpdir, "metadata")
     FileUtils.cp_r(File.join(ROOT, "fastlane/metadata"), listing)
-    FileUtils.rm_rf(File.join(listing, "review_information")) unless File.size?(File.join(listing, "review_information/phone_number.txt"))
+    phone = ENV["APP_REVIEW_PHONE"].to_s.strip
+    if phone.empty?
+      FileUtils.rm_rf(File.join(listing, "review_information"))
+    else
+      File.write(File.join(listing, "review_information/phone_number.txt"), phone)
+    end
     upload_to_app_store(
       api_key: asc_key,
       app_identifier: APP_ID,
