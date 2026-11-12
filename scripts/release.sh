@@ -70,4 +70,6 @@ command -v fastlane >/dev/null || fail "fastlane is required (brew install fastl
 cd "$ROOT"
 # fastlane must not ask for anything or phone home about the run.
 export FASTLANE_SKIP_UPDATE_CHECK=1 FASTLANE_HIDE_CHANGELOG=1 FASTLANE_OPT_OUT_USAGE=1 CI=${CI:-}
+# Resolving the Swift packages can take xcodebuild longer to answer than fastlane's three seconds.
+export FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT=${FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT:-180} FASTLANE_XCODEBUILD_SETTINGS_RETRIES=${FASTLANE_XCODEBUILD_SETTINGS_RETRIES:-4}
 exec fastlane "$@"
