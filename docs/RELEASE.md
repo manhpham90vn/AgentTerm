@@ -157,7 +157,9 @@ channel, with links to the GitHub release and TestFlight, through a webhook
 of that channel. The webhook's address is the `DISCORD_WEBHOOK_URL` secret,
 kept in the dotfiles repo's `projects/agentterm/release.env`; without it
 nothing is posted. `scripts/announce-discord.sh <version>` does the same by
-hand, and `DRY_RUN=1` prints the message without sending it.
+hand, and `DRY_RUN=1` prints the message without sending it. To have the
+workflow announce a release that is already out, start it with both apps
+switched off: `gh workflow run release.yml -f version=<version> -f mac=false -f ios=false`.
 
 ## Homebrew
 

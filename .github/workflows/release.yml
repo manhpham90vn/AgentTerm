@@ -223,7 +223,9 @@ jobs:
     name: Announce on Discord
     needs: [mac, ios]
     # Also when only one of the two was released; not when one of them failed.
-    if: ${{ !cancelled() && !failure() && (needs.mac.result == 'success' || needs.ios.result == 'success') }}
+    # Started by hand with both apps switched off, the run only announces:
+    # for a release whose announcement did not go out.
+    if: ${{ !cancelled() && !failure() && (needs.mac.result == 'success' || needs.ios.result == 'success' || (github.event_name == 'workflow_dispatch' && !inputs.mac && !inputs.ios)) }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
