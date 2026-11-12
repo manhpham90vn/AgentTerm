@@ -109,6 +109,51 @@ final class CommitWriterTests: XCTestCase {
         XCTAssertEqual(CommitWriter.clean("feat: say \"hi\""), "feat: say \"hi\"")
     }
 
+    func testStoppingARunNeverLeavesItsAgentRunning() throws {
+        func agent() -> Process {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/bin/sleep")
+            process.arguments = ["30"]
+            return process
+        }
+        // Stopped before the agent was started: it is not started at all.
+        let early = CommitWriter.Run()
+        let never = agent()
+        early.cancel()
+        XCTAssertFalse(try early.start(never))
+        XCTAssertFalse(never.isRunning)
+
+        // Stopped once it runs: it is ended, at once.
+        let late = CommitWriter.Run()
+        let running = agent()
+        XCTAssertTrue(try late.start(running))
+        late.cancel()
+        let ended = Date()
+        running.waitUntilExit()
+        XCTAssertLessThan(Date().timeIntervalSince(ended), 5)
+        XCTAssertTrue(late.isCancelled)
+
+        // Stopped from another thread just as it starts, many times over:
+        // whichever comes first, no agent is left running.
+        for _ in 0..<200 {
+            let run = CommitWriter.Run()
+            let process = agent()
+            let stopped = DispatchSemaphore(value: 0)
+            DispatchQueue.global().async {
+                run.cancel()
+                stopped.signal()
+            }
+            let started = try run.start(process)
+            stopped.wait()
+            if started {
+                let deadline = Date().addingTimeInterval(5)
+                while process.isRunning && Date() < deadline { usleep(2_000) }
+            }
+            XCTAssertFalse(process.isRunning, "an agent was left running after Stop")
+            if process.isRunning { process.terminate() }
+        }
+    }
+
     func testTheAgentIsTheOneChosenOrTheFirstInstalled() {
         let agents = [
             AgentInfo(id: "claude", name: "Claude Code", path: nil), AgentInfo(id: "codex", name: "Codex", path: "/bin/codex"),

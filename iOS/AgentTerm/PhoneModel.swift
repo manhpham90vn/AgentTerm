@@ -662,8 +662,14 @@ final class PhoneModel: ObservableObject {
                 reattachAfterConnect = false
                 // The connection was lost while a terminal was on screen.
                 if let open = openSessionID {
-                    controller = nil
-                    self.open(open)
+                    if let controller, controller.session == open, let have = controller.position, hostVersion >= 6 {
+                        // The terminal is still here with all it was sent:
+                        // only what the session wrote since is asked for.
+                        connection?.send(.attach(session: open, size: session(open)?.size ?? .default, have: have))
+                    } else {
+                        controller = nil
+                        self.open(open)
+                    }
                 }
             }
         case .agents(let list):
@@ -708,6 +714,15 @@ final class PhoneModel: ObservableObject {
             }
             // What follows is the session's earlier output, until `replayed`.
             if controller?.session == info.id { controller?.beginReplay(size: info.size) }
+        case .replaying(let id, let from):
+            guard let current = controller, current.session == id, current.position != from else { return }
+            if current.position != nil {
+                // The Mac could not go on from where this terminal stopped
+                // and sends all it keeps: that is for a terminal that starts empty.
+                controller = makeController(for: id)
+                controller?.beginReplay(size: session(id)?.size)
+            }
+            controller?.position = from
         case .replayed(let id):
             if controller?.session == id { controller?.endReplay() }
         case .resized(let id, let size, let driver):

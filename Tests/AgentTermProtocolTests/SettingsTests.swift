@@ -8,6 +8,7 @@ final class SettingsTests: XCTestCase {
         let client: [ClientMessage] = [
             .gitPush(path: "/Users/me/app"),
             .gitPull(path: "/Users/me/app"),
+            .attach(session: 3, size: TermSize(cols: 48, rows: 30), have: 123_456_789_012),
             .writeCommitMessage(path: "/Users/me/app"),
             .cancelCommitMessage(path: "/Users/me/app"),
             .setCommitWriter(CommitWriterSettings(agent: "codex", model: "gpt-x", prompt: "Viết bằng tiếng Việt.")),
@@ -26,6 +27,7 @@ final class SettingsTests: XCTestCase {
             .commitMessage(path: "/Users/me/app", message: nil),
             .sshHosts(["build-server", "web-1"]),
             .gitSynced(path: "/Users/me/app"),
+            .replaying(session: 3, from: 123_456_789_012),
             .diff(
                 path: "/Users/me/app",
                 snapshot: DiffSnapshot(isRepository: true, branch: "main", files: [], upstream: "origin/main", ahead: 2, behind: 1)),
@@ -33,6 +35,12 @@ final class SettingsTests: XCTestCase {
         for message in server {
             XCTAssertEqual(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message)), message)
         }
+    }
+
+    func testAnAttachWithoutAPlaceStillReads() throws {
+        // As every client wrote it before a terminal could say where it is.
+        let old = #"{"attach":{"session":7,"size":{"cols":120,"rows":40}}}"#
+        XCTAssertEqual(MessageCoding.decode(ClientMessage.self, from: Data(old.utf8)), .attach(session: 7, size: TermSize(cols: 120, rows: 40)))
     }
 
     func testWhatAnOlderHostSendsStillReads() throws {

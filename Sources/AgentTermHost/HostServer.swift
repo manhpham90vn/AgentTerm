@@ -106,6 +106,12 @@ public final class HostServer {
         /// True once the oldest output was dropped: what is kept then
         /// starts somewhere in the middle of what the program wrote.
         var scrollbackIsCut = false
+        /// Where the end of `scrollback` is in all the session ever wrote.
+        /// It starts at a number of its own rather than at nothing: session
+        /// numbers start over when the host does, and a client that comes
+        /// back with a place in a session of before must not be taken to
+        /// have a place in this one.
+        var written = Int.random(in: 0..<(1 << 40))
 
         init(info: SessionInfo, process: PTYProcess) {
             self.info = info
@@ -532,12 +538,12 @@ public final class HostServer {
             requestAgents(for: client, refresh: refresh)
         case .create(let request):
             create(request, for: client)
-        case .attach(let id, let size):
+        case .attach(let id, let size, let have):
             guard let session = sessions[id] else {
                 send(.error("no such session"), to: client)
                 return
             }
-            attach(client, to: session, size: size)
+            attach(client, to: session, size: size, have: have)
         case .detach(let id):
             client.attached.remove(id)
             if let session = sessions[id], session.arbiter.remove(client.id) { applySize(of: session) }
@@ -1157,7 +1163,7 @@ public final class HostServer {
         refreshAccountUsage(olderThan: Self.accountInterval)
     }
 
-    private func attach(_ client: Client, to session: Session, size: TermSize) {
+    private func attach(_ client: Client, to session: Session, size: TermSize, have: Int? = nil) {
         client.attached.insert(session.info.id)
         // Watching is not using: this only sets the size if nobody else is attached.
         let changed = session.arbiter.update(client.id, size: size)
@@ -1168,11 +1174,17 @@ public final class HostServer {
         send(.attached(session.info), to: client)
         // In pieces: the whole of it is larger than one message may be.
         var replay = session.scrollback
-        if session.scrollbackIsCut, let newline = replay.prefix(16 * 1024).firstIndex(of: 0x0A) {
+        if let have, have <= session.written, session.written - have <= replay.count {
+            // A client that was here before, a phone after its network
+            // changed: its terminal has all up to `have`, so only what came
+            // since is sent, not megabytes it would only draw again.
+            replay = replay.suffix(session.written - have)
+        } else if session.scrollbackIsCut, let newline = replay.prefix(16 * 1024).firstIndex(of: 0x0A) {
             // What was cut starts in the middle of a line, perhaps of an
             // escape sequence. Start at the next whole line instead.
             replay = replay.suffix(from: replay.index(after: newline))
         }
+        send(.replaying(session: session.info.id, from: session.written - replay.count), to: client)
         var start = replay.startIndex
         while start < replay.endIndex {
             let end = replay.index(start, offsetBy: Self.replayPiece, limitedBy: replay.endIndex) ?? replay.endIndex
@@ -1193,6 +1205,7 @@ public final class HostServer {
 
     private func record(_ data: Data, in session: Session) {
         session.scrollback.append(data)
+        session.written += data.count
         // Cut back to the limit only once it is well past it: cutting
         // copies what is kept, and doing that for every piece of output of
         // a busy program would copy megabytes many times a second.

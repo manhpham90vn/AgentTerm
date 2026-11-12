@@ -54,7 +54,7 @@ public enum CommitWriter {
         /// then. Starting and cancelling exclude each other: a run cannot
         /// be cancelled between being taken on and being started, which
         /// would leave the agent running with nobody waiting for it.
-        fileprivate func start(_ process: Process) throws -> Bool {
+        func start(_ process: Process) throws -> Bool {
             lock.lock()
             defer { lock.unlock() }
             guard !cancelled else { return false }

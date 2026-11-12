@@ -257,6 +257,52 @@ final class EndToEndTests: XCTestCase {
         first.connection.send(.kill(session: id))
     }
 
+    func testAClientThatComesBackIsSentOnlyWhatItMissed() throws {
+        let first = connect("first")
+        first.connection.send(.create(CreateRequest(command: "cat", cwd: "/tmp")))
+        waitUntil("attached") { first.attached != nil }
+        let id = first.attached!.id
+        first.type("before-the-drop\n", in: id)
+        waitUntil("echoed") { first.text(id).contains("before-the-drop\r\nbefore-the-drop") }
+
+        func start(_ client: TestClient) -> Int? {
+            client.messages.compactMap { if case .replaying(id, let from) = $0 { return from } else { return nil } }.last
+        }
+        // A phone opens the session: all of it, and where that starts.
+        let phone = connect("phone")
+        phone.connection.send(.attach(session: id, size: .default))
+        waitUntil("replayed") { phone.messages.contains(.replayed(session: id)) }
+        let from = try XCTUnwrap(start(phone))
+        XCTAssertEqual(start(first), from, "the one that started the session was not told where its output starts")
+        let seen = phone.output[id]?.count ?? 0
+        XCTAssertEqual(phone.text(id), first.text(id))
+        // Its connection goes, and the session writes on meanwhile.
+        phone.connection.close()
+        waitUntil("gone") { phone.isClosed }
+        first.type("while-it-was-away\n", in: id)
+        waitUntil("echoed") { first.text(id).contains("while-it-was-away\r\nwhile-it-was-away") }
+
+        // Back, saying how far its terminal is: only what came since.
+        let back = connect("phone")
+        back.connection.send(.attach(session: id, size: .default, have: from + seen))
+        waitUntil("replayed") { back.messages.contains(.replayed(session: id)) }
+        XCTAssertEqual(start(back), from + seen)
+        XCTAssertEqual(back.text(id), "while-it-was-away\r\nwhile-it-was-away\r\n")
+        XCTAssertEqual(phone.text(id) + back.text(id), first.text(id))
+
+        // A place that is not one of this session's, as after the host was
+        // restarted: all of it again, and the client is told so.
+        for place in [from - 1, from + 1_000_000, 0] {
+            let lost = connect("lost")
+            lost.connection.send(.attach(session: id, size: .default, have: place))
+            waitUntil("replayed") { lost.messages.contains(.replayed(session: id)) }
+            XCTAssertEqual(start(lost), from)
+            XCTAssertEqual(lost.text(id), first.text(id))
+            lost.connection.close()
+        }
+        first.connection.send(.kill(session: id))
+    }
+
     func testAConnectionThatWentDeadIsNoticedAndALiveOneIsKept() throws {
         // A host that takes the connection and then says nothing more, not
         // even an answer to a ping: what a phone has after its network changed.
@@ -808,7 +854,7 @@ final class EndToEndTests: XCTestCase {
         git("commit", "-q", "-m", "init", in: mine)
         // A push that takes a while, as one over a network does.
         let hook = mine.appendingPathComponent(".git/hooks/pre-push")
-        try "#!/bin/sh\nsleep 1.5\n".write(to: hook, atomically: true, encoding: .utf8)
+        try "#!/bin/sh\nsleep 3\n".write(to: hook, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
 
         let phone = connect("phone")

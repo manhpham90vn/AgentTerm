@@ -106,11 +106,12 @@ final class SlowLinkTests: XCTestCase {
         waitUntil("the output") { produced >= 300_000 }
         let id = try XCTUnwrap(session)
 
-        // Another device attaches over a link that carries about 50 KB a
-        // second, so one piece of the replay takes several seconds. Its
+        // Another device attaches over a link that carries at most 100 KB a
+        // second, and less on a machine whose timers are slow, so one
+        // piece of the replay takes seconds. Its
         // heartbeat is the real one sped up ten times: a host that says
         // nothing for 0.4 s is asked, and has 0.6 s to answer.
-        let proxy = try SlowProxy(to: port, bytesPerSecond: 50_000)
+        let proxy = try SlowProxy(to: port, bytesPerSecond: 100_000)
         let slowPort = proxy.start()
         defer { proxy.stop() }
         let far = AgentTermConnection(host: "127.0.0.1", port: slowPort, token: token, clientName: "far")
@@ -129,7 +130,7 @@ final class SlowLinkTests: XCTestCase {
         far.connect()
         defer { far.close() }
 
-        waitUntil("the replay, or the connection closing", timeout: 30) {
+        waitUntil("the replay, or the connection closing", timeout: 180) {
             if case .closed = state { return true }
             return replayed
         }

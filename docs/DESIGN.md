@@ -168,7 +168,7 @@ Client to host:
 | `list` | Ask for the session list. |
 | `agents(refresh)` | Ask which agent CLIs are installed. |
 | `create(command, cwd, title, size)` | Start a session and attach to it. |
-| `attach(session, size)` / `detach(session)` | Start or stop receiving a session. |
+| `attach(session, size, have)` / `detach(session)` | Start or stop receiving a session. `have` is how far into the session's output the client's terminal already is; nil for a terminal that starts empty. |
 | `resize(session, size)` | Report that this client's grid changed. Applied only if it drives the session. |
 | `takeControl(session, size)` | The user is using the session here: become the driver at this size. |
 | `kill(session)` | Hang up the session (SIGHUP, then SIGKILL after 3 s). |
@@ -219,6 +219,18 @@ lines to scroll back through (SwiftTerm's own default is 500, which threw
 most of a replay away as it arrived). For full screen programs the replay
 relies on the program redrawing, which happens when the attach changes the
 size.
+
+A phone that lost its connection attaches again within seconds, with its
+terminal still holding all it was sent. Replaying megabytes it would only
+draw again costs time and cellular data at each change of network. So the
+host says where in the session's output a replay starts
+(`replaying(session, from)`), the terminal counts on from there
+(`TerminalController.position`), and attaching again names that place
+(`have`): the host then sends only what came since. When it no longer
+keeps that far back, or the place is not one of this session's, it sends
+all it keeps and says so with another `from`, and the client starts a new
+terminal for it. The Mac app does not use this: it loses its connection
+only when the host itself stops, and its sessions with it.
 
 The replay was drawn for the session's grid, so the emulator takes that
 grid before the first replayed byte (`TerminalController.beginReplay(size:)`),

@@ -35,6 +35,9 @@ final class FlowTests: XCTestCase {
         let start = app.buttons[launchButton].firstMatch
         XCTAssertTrue(start.waitForExistence(timeout: 15), "not connected to the host")
         capture("2-sessions")
+        // The Mac's figures arrive a moment after the list and push it
+        // down: a tap aimed at where the button was would land beside it.
+        _ = app.descendants(matching: .any)["system-cpu"].firstMatch.waitForExistence(timeout: 10)
         start.tap()
 
         // The terminal opens with the key bar and the compose field.
@@ -120,6 +123,15 @@ final class FlowTests: XCTestCase {
         app.staticTexts["zsh"].firstMatch.tap()
         XCTAssertTrue(compose.waitForExistence(timeout: 10))
         XCTAssertEqual(compose.value as? String, "not sent yet", "what was written and not sent was lost")
+        // Also when the app was closed in between.
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.buttons["First Mac"].waitForExistence(timeout: 15))
+        app.buttons["First Mac"].tap()
+        XCTAssertTrue(app.staticTexts["zsh"].firstMatch.waitForExistence(timeout: 15))
+        app.staticTexts["zsh"].firstMatch.tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 10))
+        XCTAssertEqual(compose.value as? String, "not sent yet", "what was written and not sent was lost when the app was closed")
         // Sent, it is no longer kept.
         app.buttons["Send"].tap()
         sleep(1)
@@ -195,6 +207,14 @@ final class FlowTests: XCTestCase {
             app.buttons["diff-layout"].tap()
             XCTAssertTrue(app.descendants(matching: .any)["split-diff-after"].firstMatch.waitForExistence(timeout: 10), "the diff is not shown as two panels")
             capture("7b1a-diff-two-panels")
+            // Each panel scrolls sideways on its own.
+            let after = app.descendants(matching: .any)["split-diff-after"].firstMatch
+            let changed = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'second line'")).firstMatch
+            XCTAssertTrue(changed.waitForExistence(timeout: 5), "the two panels do not show the changed line")
+            let before = changed.frame.minX
+            after.swipeLeft()
+            XCTAssertLessThan(changed.frame.minX, before, "the panel of what it is now does not scroll sideways")
+            after.swipeRight()
             app.buttons["diff-layout"].tap()
             XCTAssertTrue(app.descendants(matching: .any)["patch"].firstMatch.waitForExistence(timeout: 10))
             app.navigationBars.buttons.firstMatch.tap()

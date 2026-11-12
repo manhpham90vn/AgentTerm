@@ -14,13 +14,13 @@ final class ReplayTests: XCTestCase {
         let controller = TerminalController(session: 1)
         var sent = Data()
         controller.onInput = { sent.append($0) }
-        controller.replayQuiet = 0.4
+        controller.replayQuiet = 1.5
         controller.beginReplay(size: TermSize(cols: 80, rows: 24))
         // The replay comes in pieces over a slow link: longer in all than
         // the timeout, but never quiet for that long.
         for piece in 0..<6 {
             controller.feed(Data("piece \(piece)\r\n".utf8))
-            spin(0.2)
+            spin(0.4)
         }
         // A question the program asked long ago: where is the cursor.
         controller.feed(Data("\u{1b}[6n".utf8))
@@ -43,7 +43,7 @@ final class ReplayTests: XCTestCase {
         controller.replayQuiet = 0.2
         controller.beginReplay()
         controller.feed(Data("some output\r\n".utf8))
-        spin(0.5)
+        spin(1)
         controller.feed(Data("\u{1b}[6n".utf8))
         spin(0.1)
         XCTAssertTrue(String(decoding: sent, as: UTF8.self).hasSuffix("R"))

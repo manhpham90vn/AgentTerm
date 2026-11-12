@@ -76,7 +76,15 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         reportNaturalSizeSoon()
     }
 
+    /// Where in the session's output this terminal is: how much of all the
+    /// session wrote came before the next byte fed here. The host says
+    /// where a replay starts and this follows from there. With it a client
+    /// that lost its connection can ask for only what it has not seen. Nil
+    /// until the host has said, and with a host that never does.
+    public var position: Int?
+
     public func feed(_ data: Data) {
+        if let position { self.position = position + data.count }
         // A replay is megabytes in many pieces and may take a while over a
         // slow link. It is over when it says so, or when nothing more of it
         // comes: not some seconds after it began.

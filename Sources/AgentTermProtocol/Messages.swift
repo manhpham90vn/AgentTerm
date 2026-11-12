@@ -152,8 +152,11 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Starts a session and attaches the sender to it.
     case create(CreateRequest)
     /// Starts receiving a session. Watching does not change the session's
-    /// size, unless nobody else is attached.
-    case attach(session: SessionID, size: TermSize)
+    /// size, unless nobody else is attached. `have` is how far into the
+    /// session's output the sender's terminal already is, as `replaying`
+    /// and what followed it told: the host then sends only what came after,
+    /// when it still keeps that. Nil for a terminal that starts empty.
+    case attach(session: SessionID, size: TermSize, have: Int? = nil)
     case detach(session: SessionID)
     /// Reports that the sender's own grid changed (a window was resized, a
     /// keyboard appeared). The session follows only if the sender is the one
@@ -253,6 +256,12 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// Project folders on the host, in the order they were added.
     case folders([String])
     case attached(SessionInfo)
+    /// Sent after `attached`, before the session's earlier output: where in
+    /// the session's output what follows starts. It is the `have` the
+    /// client attached with when the host could go on from there. Any other
+    /// number means all that is kept comes again, for a terminal that
+    /// starts empty.
+    case replaying(session: SessionID, from: Int)
     /// Sent after `attached` and the session's earlier output that follows
     /// it: everything before this was a replay of what already happened.
     case replayed(session: SessionID)

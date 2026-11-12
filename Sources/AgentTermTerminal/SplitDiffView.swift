@@ -84,16 +84,41 @@ private struct SplitDiffLayout: View {
     private var numberWidth: CGFloat { content.numberWidth }
     private var rowHeight: CGFloat { (fontSize * 1.45).rounded() }
 
+    /// How far each side is scrolled sideways.
+    @State private var leftOffset: CGFloat = 0
+    @State private var rightOffset: CGFloat = 0
+
+    // A long diff has thousands of rows, and only the few dozen in view are
+    // made: the rows are in one lazy stack that scrolls down, both sides of
+    // a row together. A lazy stack inside a view that scrolls sideways
+    // would not be lazy, so the sides do not scroll themselves. Over each
+    // lies an empty view that does, and the rows are moved by as much.
     var body: some View {
         GeometryReader { viewport in
             let half = max(60, (viewport.size.width - 1) / 2)
+            let leftLine = max(leftWidth, half - numberWidth)
+            let rightLine = max(rightWidth, half - numberWidth)
             ScrollView(.vertical) {
-                HStack(alignment: .top, spacing: 0) {
-                    panel(\.left, hunks: true, width: half, content: leftWidth, tint: Self.removed)
-                        .accessibilityIdentifier("split-diff-before")
-                    Color.white.opacity(0.10).frame(width: 1)
-                    panel(\.right, hunks: false, width: half, content: rightWidth, tint: Self.added)
-                        .accessibilityIdentifier("split-diff-after")
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(rows) { row in
+                        HStack(alignment: .top, spacing: 0) {
+                            side(row, \.left, hunks: true, width: half, lineWidth: leftLine, offset: leftOffset, tint: Self.removed)
+                            Color.white.opacity(0.10).frame(width: 1)
+                            side(row, \.right, hunks: false, width: half, lineWidth: rightLine, offset: rightOffset, tint: Self.added)
+                        }
+                        .frame(height: rowHeight)
+                    }
+                }
+                .overlay {
+                    HStack(spacing: 0) {
+                        SidewaysScroller(contentWidth: numberWidth + leftLine, offset: $leftOffset)
+                            .frame(width: half)
+                            .accessibilityIdentifier("split-diff-before")
+                        Color.clear.frame(width: 1)
+                        SidewaysScroller(contentWidth: numberWidth + rightLine, offset: $rightOffset)
+                            .frame(width: half)
+                            .accessibilityIdentifier("split-diff-after")
+                    }
                 }
                 .padding(.vertical, 6)
                 if truncated {
@@ -107,20 +132,19 @@ private struct SplitDiffLayout: View {
         .accessibilityIdentifier("split-diff")
     }
 
-    /// One side: its lines with their numbers, as wide as its longest line
-    /// and at least as wide as its half of the view.
-    private func panel(_ side: KeyPath<SplitDiffRow, SplitDiffRow.Line?>, hunks: Bool, width: CGFloat, content: CGFloat, tint: Color) -> some View {
-        let lineWidth = max(content, width - numberWidth)
-        return ScrollView(.horizontal) {
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(rows) { row in
-                    line(row, side: side, hunks: hunks, tint: tint)
-                        .frame(width: numberWidth + lineWidth, height: rowHeight, alignment: .leading)
-                        .background(background(row, side: side, tint: tint))
-                }
-            }
-        }
-        .frame(width: width)
+    /// One side of a row: its line with its number, as wide as the side's
+    /// longest line, shown through its half of the view from where that
+    /// side is scrolled to.
+    private func side(
+        _ row: SplitDiffRow, _ side: KeyPath<SplitDiffRow, SplitDiffRow.Line?>, hunks: Bool, width: CGFloat, lineWidth: CGFloat, offset: CGFloat,
+        tint: Color
+    ) -> some View {
+        line(row, side: side, hunks: hunks, tint: tint)
+            .frame(width: numberWidth + lineWidth, height: rowHeight, alignment: .leading)
+            .background(background(row, side: side, tint: tint))
+            .offset(x: -offset)
+            .frame(width: width, alignment: .leading)
+            .clipped()
     }
 
     @ViewBuilder
@@ -135,7 +159,9 @@ private struct SplitDiffLayout: View {
                 .padding(.leading, 8)
         } else if let line = row[keyPath: side] {
             HStack(spacing: 0) {
-                Text("\(line.number)")
+                // As digits only: a number put in a text gets the separators of
+                // the language, 1,176, and the column is as wide as its digits.
+                Text(verbatim: String(line.number))
                     .font(.system(size: fontSize - 1, design: .monospaced))
                     .foregroundStyle(.tertiary)
                     .frame(width: numberWidth - 8, alignment: .trailing)
@@ -159,5 +185,30 @@ private struct SplitDiffLayout: View {
             return Color.black.opacity(0.18)
         }
         return line.changed ? tint.opacity(0.11) : .clear
+    }
+}
+
+/// Scrolls sideways over one side of the diff and says how far, with
+/// nothing in it to draw: the rows under it are moved by that much.
+private struct SidewaysScroller: View {
+    let contentWidth: CGFloat
+    @Binding var offset: CGFloat
+    @State private var space = UUID()
+
+    private struct Offset: PreferenceKey {
+        static let defaultValue: CGFloat = 0
+        static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+    }
+
+    var body: some View {
+        ScrollView(.horizontal) {
+            Color.clear
+                .frame(width: contentWidth)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .background(GeometryReader { content in Color.clear.preference(key: Offset.self, value: -content.frame(in: .named(space)).minX) })
+        }
+        .coordinateSpace(name: space)
+        .onPreferenceChange(Offset.self) { offset = $0 }
     }
 }
