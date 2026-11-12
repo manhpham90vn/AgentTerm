@@ -1,0 +1,69 @@
+name: CodeQL
+
+# Static analysis of this repository's code. It replaces GitHub's "default
+# setup", which cannot leave the dependencies out: it reported findings in
+# a dependency's build plugin under .build/checkouts.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '23 5 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  XCODE_VERSION: "27.0"  # keep in sync with ci.yml
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The workflows and the fastlane lanes need no build.
+  scripts:
+    name: ${{ matrix.language }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, ruby]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: .github/codeql/codeql-config.yml
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
+
+  # Swift and the small C target are analyzed while they are built.
+  swift:
+    name: swift, c-cpp
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: ${{ env.XCODE_VERSION }}
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: swift, c-cpp
+          build-mode: manual
+          config-file: .github/codeql/codeql-config.yml
+      # The build folder is outside the checkout, so the dependencies'
+      # sources are not part of what is analyzed.
+      - name: Build
+        run: swift build --scratch-path "$RUNNER_TEMP/build"
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:swift
