@@ -161,6 +161,13 @@ another one should finish it.
   changed.
 - The original session and conversation are left as they are.
 
+A handoff can also move the work to another folder: the sheet's **Continue
+in** lists the folders of the Mac's list, the conversation's own first. The
+handoff file is then written in the folder chosen, the receiving agent
+starts there, and the file says which folder the conversation happened in.
+In another folder the same agent can be picked too, which carries a
+conversation over to a neighbouring project.
+
 ### macOS window
 
 Three panes, like a code editor. The toolbar follows them: the button that
@@ -169,19 +176,28 @@ are in the middle, followed by the pairing button, which is filled so it
 stands out, and in the far right corner is the button that hides the side
 panel.
 
-- **Left: folders.** Project folders the user added, each with its running
+- **Left: folders.** A Settings button sits in the bottom left corner. Project folders the user added, each with its running
   sessions underneath. A session shows its agent's icon and a name. The list belongs to the host, so the iPhone shows the
   same folders. Sessions started elsewhere are listed under "Other".
+  A folder is dragged onto another to go before it, or moved up and down
+  from its menu; a folder dragged in from the Finder is added. A folder's
+  sessions are in the order of their tabs and can be dragged the same way.
 - **Middle: terminal.** The selected session. With no session selected, a
   launch screen for the selected folder. Above it, every running session is a
   tab, with a "+" to start another. Command and a number (⌘1 to ⌘9) shows the
   tab in that place, ⌘⇧] and ⌘⇧[ go to the next and previous, ⌘W ends the
   session on screen. Open files are tabs in the same strip, and so is the
   diff picked in the Git tab. A tab's menu (right click) closes it, the
-  other files, every file (terminals stay), everything else (only that
-  file or session stays), or everything. Whatever would end a session asks
-  first. Files with unsaved changes are never closed
+  other tabs, every file (terminals stay), or every tab. Whatever would end
+  a session asks first. Files with unsaved changes are never closed
   without asking.
+  Tabs are arranged by hand. A tab is dragged onto another to go before it
+  (or moved from its menu and the Tab menu). A **pinned** tab stays first
+  and is left open by the commands that close many tabs. Tabs can be put
+  in a **group**, which has a name and a color and shows as a label before
+  its tabs; clicking the label folds the group away. A tab takes on the
+  place it is dropped in: pinned among the pinned, in the group of the tab
+  it lands next to, or on a group's label to join it.
 - **Right: side panel**, with three tabs. The panel can be hidden.
   - **Git.** Uncommitted git changes of the selected folder: the changed files
     with added and removed line counts. Clicking a file shows its diff in the
@@ -261,7 +277,9 @@ sessions end with it, and the app's own is started.
 ### What the two apps share
 
 The Mac and the iPhone offer the same things wherever the device allows:
-folders (add, remove), sessions (start, end), the terminal with a text size
+folders (add, remove, reorder), the arrangement of sessions (order, pins
+and groups, kept by the host so both show the same and a change on one
+appears on the other), sessions (start, end), the terminal with a text size
 setting, the Git view as a list or grouped by folder, History with both
 scopes, resume, copying the resume command, and handoff from a past
 conversation or a running session with the prompt shown.
@@ -277,7 +295,8 @@ They differ where the device does:
 - "Show in Finder" is on the Mac only. The key bar and the compose field are
   on the iPhone only.
 - On the Mac files and diffs open as tabs next to the terminals; on the
-  iPhone they open as screens.
+  iPhone they open as screens. The Mac's file tabs are arranged with the
+  sessions' tabs but belong to its window; the iPhone leaves them alone.
 
 ### Files
 

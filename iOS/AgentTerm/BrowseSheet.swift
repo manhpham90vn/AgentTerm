@@ -6,6 +6,11 @@ import SwiftUI
 struct BrowseSheet: View {
     @EnvironmentObject private var model: PhoneModel
     @Environment(\.dismiss) private var dismiss
+    /// Set to pick a folder for something else than starting an agent in
+    /// it: the sheet then opens at `start` and hands back the folder chosen.
+    var start: String?
+    var pickTitle = "Choose"
+    var onPick: ((String) -> Void)?
 
     private var listing: DirectoryListing? { model.listing }
     private var name: String {
@@ -63,10 +68,33 @@ struct BrowseSheet: View {
             }
             .safeAreaInset(edge: .bottom) {
                 if let listing {
-                    StartHere(path: listing.path, name: name)
+                    if let onPick {
+                        Button {
+                            onPick(listing.path)
+                            dismiss()
+                        } label: {
+                            Text("\(pickTitle) \(name)")
+                                .font(.headline)
+                                .lineLimit(1)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 6)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .accessibilityIdentifier("pick-folder")
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Palette.panel)
+                    } else {
+                        StartHere(path: listing.path, name: name)
+                    }
                 }
             }
-            .onAppear { if model.listing == nil { model.browse(nil) } }
+            .onAppear {
+                if onPick != nil { model.browse(start) } else if model.listing == nil { model.browse(nil) }
+            }
+            // Where a folder was picked for something else is not where
+            // "Open Another Folder" should open next.
+            .onDisappear { if onPick != nil { model.forgetListing() } }
             // The alert on the main screen cannot appear over this sheet, so
             // a folder that cannot be opened is reported here.
             .alert("AgentTerm", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {

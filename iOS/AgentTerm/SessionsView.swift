@@ -1,6 +1,7 @@
 import AgentTermProtocol
 import AgentTermTerminal
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The paired Mac's folders and the sessions running in them.
 struct SessionsView: View {
@@ -158,6 +159,76 @@ private struct StatusCard: View {
 private struct FolderSection: View {
     @EnvironmentObject private var model: PhoneModel
     let group: FolderGroup
+    /// The folder a dragged folder is over.
+    @State private var folderDropTarget: String?
+    /// What a dragged session is over: a session's or a group's id.
+    @State private var dropTarget: String?
+    @State private var renaming: TabGroup?
+    @State private var newName = ""
+
+    @ViewBuilder
+    private func arrangeMenu(_ session: SessionInfo) -> some View {
+        let id = session.layoutID
+        let layout = model.sessionLayout
+        Button { withAnimation { model.sessionLayout.setPinned(id, !layout.isPinned(id)) } } label: {
+            Label(layout.isPinned(id) ? "Unpin" : "Pin", systemImage: layout.isPinned(id) ? "pin.slash" : "pin")
+        }
+        Button { withAnimation { _ = model.sessionLayout.newGroup(with: id) } } label: { Label("Add to New Group", systemImage: "plus.rectangle.on.rectangle") }
+        let others = layout.groups.filter { $0.id != layout.group(of: id)?.id }
+        if !others.isEmpty {
+            Menu {
+                ForEach(others) { other in
+                    Button(other.name.isEmpty ? "Group" : other.name) { withAnimation { model.sessionLayout.add(id, toGroup: other.id) } }
+                }
+            } label: { Label("Add to Group", systemImage: "rectangle.stack") }
+        }
+        if layout.group(of: id) != nil {
+            Button { withAnimation { model.sessionLayout.removeFromGroup(id) } } label: { Label("Remove from Group", systemImage: "rectangle.stack.badge.minus") }
+        }
+        Button { withAnimation { model.move(session, by: -1, in: group) } } label: { Label("Move Up", systemImage: "arrow.up") }
+            .disabled(!model.canMove(session, by: -1, in: group))
+        Button { withAnimation { model.move(session, by: 1, in: group) } } label: { Label("Move Down", systemImage: "arrow.down") }
+            .disabled(!model.canMove(session, by: 1, in: group))
+    }
+
+    private func groupLabel(_ tabGroup: TabGroup, count: Int) -> some View {
+        let color = GroupColor.color(tabGroup.color)
+        return Button { withAnimation { model.sessionLayout.toggleCollapsed(tabGroup.id) } } label: {
+            HStack(spacing: 8) {
+                Image(systemName: tabGroup.isCollapsed ? "chevron.right" : "chevron.down")
+                    .font(.system(size: 10, weight: .bold))
+                    .frame(width: 18)
+                Text(tabGroup.name.isEmpty ? "Group" : tabGroup.name)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                Text("\(count)").font(.system(size: 12, design: .monospaced)).opacity(0.7)
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(color)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(color.opacity(dropTarget == tabGroup.id ? 0.3 : 0.12))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Group \(tabGroup.name), \(count) sessions" + (tabGroup.isCollapsed ? ", collapsed" : ""))
+        .accessibilityIdentifier("session-group")
+        .contextMenu {
+            Button {
+                newName = tabGroup.name
+                renaming = tabGroup
+            } label: { Label("Rename Group…", systemImage: "pencil") }
+            // A picker, so the menu ticks the color in use. The dots are
+            // images with their own color; a menu tints symbols otherwise.
+            Picker(selection: Binding(get: { tabGroup.color }, set: { model.sessionLayout.setColor($0, of: tabGroup.id) })) {
+                ForEach(TabLayout.colors, id: \.self) { name in
+                    Label { Text(name.capitalized) } icon: { Image(uiImage: GroupColor.swatch(name)) }.tag(name)
+                }
+            } label: { Label("Color", systemImage: "paintpalette") }
+            .pickerStyle(.menu)
+            Button { withAnimation { model.sessionLayout.ungroup(tabGroup.id) } } label: { Label("Ungroup", systemImage: "rectangle.stack.badge.minus") }
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -168,6 +239,7 @@ private struct FolderSection: View {
                 Text(group.name)
                     .font(.system(size: 17, weight: .semibold))
                     .lineLimit(1)
+                    .accessibilityIdentifier("folder-name")
                 Spacer(minLength: 0)
                 if let path = group.path {
                     // The folder's git changes and conversations, as in the
@@ -183,24 +255,56 @@ private struct FolderSection: View {
                 }
             }
             .padding(.horizontal, 4)
+            .padding(.vertical, 2)
+            .contentShape(Rectangle())
+            .overlay(alignment: .top) {
+                // Where a dragged folder will land.
+                if let path = group.path, folderDropTarget == path { Palette.tint.frame(height: 2.5).offset(y: -6) }
+            }
+            .modifier(FolderArranging(path: group.path, dropTarget: $folderDropTarget))
 
             VStack(spacing: 0) {
-                ForEach(group.sessions) { session in
+                ForEach(model.items(for: group)) { item in
+                  switch item {
+                  case .label(let tabGroup, let count):
+                    groupLabel(tabGroup, count: count)
+                        .onDrop(of: [.text], delegate: SessionDropDelegate(place: .group(tabGroup.id), model: model, dropTarget: $dropTarget))
+                    Palette.hairline.frame(height: 1)
+                  case .session(let session):
                     NavigationLink(value: Route.session(session.id)) {
                         SessionRow(session: session)
                     }
                     .buttonStyle(.plain)
+                    .overlay(alignment: .top) {
+                        // Where a dragged session will land.
+                        if dropTarget == session.layoutID { Palette.tint.frame(height: 2.5) }
+                    }
+                    .onDrag {
+                        model.draggedFolder = nil
+                        model.draggedSession = session.layoutID
+                        return NSItemProvider(object: session.layoutID as NSString)
+                    }
+                    .onDrop(of: [.text], delegate: SessionDropDelegate(place: .before(session.layoutID), model: model, dropTarget: $dropTarget))
                     .contextMenu {
+                        arrangeMenu(session)
+                        Divider()
                         if model.canHandOff(session) {
                             Button { model.requestHandoff(session: session) } label: { Label("Hand Off…", systemImage: "arrowshape.turn.up.right") }
                         }
                         Button(role: .destructive) { model.end(session.id) } label: { Label("End Session", systemImage: "xmark.circle") }
                     }
                     Palette.hairline.frame(height: 1).padding(.leading, 38)
+                  }
                 }
                 LaunchRow(folder: group.path)
             }
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .alert("Rename Group", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+                TextField("Name", text: $newName)
+                Button("Rename") { if let renaming { model.sessionLayout.rename(renaming.id, to: newName) } }
+                Button("Cancel", role: .cancel) {}
+            }
         }
     }
 }
@@ -215,6 +319,12 @@ private struct SessionRow: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(AgentStyle.accent(for: model.agentID(for: session)))
                 .frame(width: 18)
+            if model.sessionLayout.isPinned(session.layoutID) {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Pinned")
+            }
             // The conversation's title once the agent has saved one, the
             // agent's name until then.
             Text(session.displayName)
@@ -231,6 +341,130 @@ private struct SessionRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 14)
         .contentShape(Rectangle())
+        .overlay(alignment: .leading) {
+            // The color of the group the session is in.
+            if let tabGroup = model.sessionLayout.group(of: session.layoutID) {
+                GroupColor.color(tabGroup.color).frame(width: 3)
+            }
+        }
+    }
+}
+
+/// A listed folder's heading can be dragged onto another's, to go before
+/// it, and has a menu to move it a place up or down or take it off the list.
+private struct FolderArranging: ViewModifier {
+    @EnvironmentObject private var model: PhoneModel
+    let path: String?
+    @Binding var dropTarget: String?
+
+    func body(content: Content) -> some View {
+        if let path, model.folders.contains(path) {
+            content
+                .onDrag {
+                    model.draggedSession = nil
+                    model.draggedFolder = path
+                    return NSItemProvider(object: path as NSString)
+                }
+                .onDrop(of: [.text], delegate: FolderDropDelegate(before: path, model: model, dropTarget: $dropTarget))
+                .contextMenu {
+                    Button { model.moveFolder(path, by: -1) } label: { Label("Move Up", systemImage: "arrow.up") }
+                        .disabled(!model.canMoveFolder(path, by: -1))
+                    Button { model.moveFolder(path, by: 1) } label: { Label("Move Down", systemImage: "arrow.down") }
+                        .disabled(!model.canMoveFolder(path, by: 1))
+                    Button(role: .destructive) { model.removeFolder(path) } label: { Label("Remove from List", systemImage: "minus.circle") }
+                }
+        } else {
+            content
+        }
+    }
+}
+
+private struct FolderDropDelegate: DropDelegate {
+    let before: String
+    let model: PhoneModel
+    @Binding var dropTarget: String?
+
+    func validateDrop(info: DropInfo) -> Bool { model.draggedFolder != nil }
+
+    func dropEntered(info: DropInfo) {
+        if model.draggedFolder != before { dropTarget = before }
+    }
+
+    func dropExited(info: DropInfo) {
+        if dropTarget == before { dropTarget = nil }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dropTarget = nil
+        guard let path = model.draggedFolder else { return false }
+        model.draggedFolder = nil
+        model.moveFolder(path, before: before)
+        return true
+    }
+}
+
+/// A session dragged in the list is dropped on another, to go before it and
+/// take on its place (pinned, or in its group), or on a group's label, to join it.
+private struct SessionDropDelegate: DropDelegate {
+    enum Place {
+        case before(String), group(String)
+
+        var key: String {
+            switch self {
+            case .before(let id), .group(let id): return id
+            }
+        }
+    }
+
+    let place: Place
+    let model: PhoneModel
+    @Binding var dropTarget: String?
+
+    func validateDrop(info: DropInfo) -> Bool { model.draggedSession != nil }
+
+    func dropEntered(info: DropInfo) {
+        if case .before(let id) = place, id == model.draggedSession { return }
+        dropTarget = place.key
+    }
+
+    func dropExited(info: DropInfo) {
+        if dropTarget == place.key { dropTarget = nil }
+    }
+
+    func dropUpdated(info: DropInfo) -> DropProposal? { DropProposal(operation: .move) }
+
+    func performDrop(info: DropInfo) -> Bool {
+        dropTarget = nil
+        guard let id = model.draggedSession else { return false }
+        model.draggedSession = nil
+        withAnimation {
+            switch place {
+            case .before(let target): model.sessionLayout.move(id, before: target)
+            case .group(let group): model.sessionLayout.add(id, toGroup: group)
+            }
+        }
+        return true
+    }
+}
+
+enum GroupColor {
+    static func swatch(_ name: String) -> UIImage {
+        (UIImage(systemName: "circle.fill") ?? UIImage()).withTintColor(UIColor(color(name)), renderingMode: .alwaysOriginal)
+    }
+
+    static func color(_ name: String) -> Color {
+        switch name {
+        case "blue": return Color(red: 0.36, green: 0.58, blue: 0.98)
+        case "green": return Color(red: 0.36, green: 0.78, blue: 0.50)
+        case "orange": return Color(red: 0.96, green: 0.62, blue: 0.30)
+        case "red": return Color(red: 0.94, green: 0.42, blue: 0.44)
+        case "purple": return Color(red: 0.68, green: 0.52, blue: 0.96)
+        case "teal": return Color(red: 0.30, green: 0.76, blue: 0.76)
+        case "pink": return Color(red: 0.95, green: 0.50, blue: 0.74)
+        default: return Color(white: 0.62)
+        }
     }
 }
 

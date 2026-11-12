@@ -56,6 +56,41 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var isPairing = false
     @Published private(set) var status: LinkStatus = .offline(nil)
     @Published private(set) var sessions: [SessionInfo] = []
+    /// How the sessions are arranged: order, pins and groups. The Mac keeps
+    /// it, and its window and every phone show the same.
+    @Published var sessionLayout = TabLayout() {
+        didSet {
+            guard sessionLayout != oldValue, layoutKnown, !applyingHostLayout else { return }
+            connection?.send(.setTabLayout(sessionLayout))
+        }
+    }
+    /// The session being dragged in the list, from when it is picked up.
+    var draggedSession: String?
+    /// The folder being dragged in the list.
+    var draggedFolder: String?
+
+    /// Puts a listed folder just before another, or last. The Mac keeps
+    /// the list, so its window shows the same order.
+    func moveFolder(_ path: String, before target: String?) {
+        guard path != target, folders.contains(path) else { return }
+        connection?.send(.moveFolder(path: path, before: target))
+    }
+
+    /// Moves a listed folder one place up (-1) or down (+1).
+    func moveFolder(_ path: String, by offset: Int) {
+        guard let index = folders.firstIndex(of: path), folders.indices.contains(index + offset) else { return }
+        moveFolder(path, before: offset < 0 ? folders[index - 1] : (folders.indices.contains(index + 2) ? folders[index + 2] : nil))
+    }
+
+    func canMoveFolder(_ path: String, by offset: Int) -> Bool {
+        guard let index = folders.firstIndex(of: path) else { return false }
+        return folders.indices.contains(index + offset)
+    }
+    /// True once the Mac on screen has listed its sessions.
+    private var sessionsKnown = false
+    /// True once it has sent the arrangement.
+    private var layoutKnown = false
+    private var applyingHostLayout = false
     @Published private(set) var folders: [String] = []
     @Published private(set) var agents: [AgentInfo] = []
     @Published private(set) var agentsLoaded = false
@@ -124,6 +159,81 @@ final class PhoneModel: ObservableObject {
 
     var installedAgents: [AgentInfo] { agents.filter(\.isInstalled) }
 
+    // MARK: Arranging sessions
+
+    /// What a folder's section lists: its sessions in the order chosen,
+    /// pinned ones first, and the label of each group before its sessions.
+    enum SessionItem: Identifiable {
+        case label(TabGroup, count: Int)
+        case session(SessionInfo)
+
+        var id: String {
+            switch self {
+            case .label(let group, _): return "g:" + group.id
+            case .session(let session): return session.layoutID
+            }
+        }
+    }
+
+    func items(for group: FolderGroup) -> [SessionItem] {
+        let own = Dictionary(group.sessions.map { ($0.layoutID, $0) }, uniquingKeysWith: { $1 })
+        var items: [SessionItem] = []
+        var announced: Set<String> = []
+        for id in sessionLayout.order {
+            guard let session = own[id] else { continue }
+            if let tabGroup = sessionLayout.group(of: id) {
+                if announced.insert(tabGroup.id).inserted {
+                    let count = sessionLayout.members(of: tabGroup.id).filter { own[$0] != nil }.count
+                    items.append(.label(tabGroup, count: count))
+                }
+                if tabGroup.isCollapsed { continue }
+            }
+            items.append(.session(session))
+        }
+        // Sessions the arrangement has not heard of yet.
+        let known = Set(sessionLayout.order)
+        items += group.sessions.filter { !known.contains($0.layoutID) }.map(SessionItem.session)
+        return items
+    }
+
+    /// Moves a session one place up (-1) or down (+1) among the sessions
+    /// its folder shows.
+    func move(_ session: SessionInfo, by offset: Int, in group: FolderGroup) {
+        let shown = items(for: group).compactMap { item -> String? in
+            if case .session(let info) = item { return info.layoutID } else { return nil }
+        }
+        guard let index = shown.firstIndex(of: session.layoutID), shown.indices.contains(index + offset) else { return }
+        if offset < 0 {
+            sessionLayout.move(session.layoutID, before: shown[index + offset])
+        } else {
+            sessionLayout.move(session.layoutID, after: shown[index + offset])
+        }
+    }
+
+    func canMove(_ session: SessionInfo, by offset: Int, in group: FolderGroup) -> Bool {
+        let shown = items(for: group).compactMap { item -> String? in
+            if case .session(let info) = item { return info.layoutID } else { return nil }
+        }
+        guard let index = shown.firstIndex(of: session.layoutID) else { return false }
+        return shown.indices.contains(index + offset)
+    }
+
+    /// The arrangement belongs to the Mac, which keeps it and sends it.
+    private func resetSessionLayout() {
+        sessionsKnown = false
+        layoutKnown = false
+        sessionLayout = TabLayout()
+    }
+
+    /// Brings the arrangement up to date with the sessions that run. Only
+    /// sessions: the Mac's window has tabs of its own in there, for files.
+    private func syncSessionLayout() {
+        guard sessionsKnown, layoutKnown else { return }
+        var layout = sessionLayout
+        layout.sync(with: sessions.map(\.layoutID), owns: SessionInfo.isLayoutID)
+        sessionLayout = layout
+    }
+
     var groups: [FolderGroup] {
         var result = folders.map { folder in
             FolderGroup(path: folder, sessions: sessions.filter { $0.cwd == folder })
@@ -147,8 +257,10 @@ final class PhoneModel: ObservableObject {
     static func patchKey(folder: String, file: String, staged: Bool) -> String { folder + "\n" + (staged ? "staged:" : "") + file }
 
     /// Agents a conversation of `agent` can be handed to.
-    func handoffTargets(from agent: String) -> [AgentInfo] {
-        installedAgents.filter { $0.id != agent }
+    /// The agents a conversation can be handed to. In its own folder that is
+    /// every other agent; in another folder the same agent can take it too.
+    func handoffTargets(from agent: String, sameFolder: Bool = true) -> [AgentInfo] {
+        sameFolder ? installedAgents.filter { $0.id != agent } : installedAgents
     }
 
     func agentID(for session: SessionInfo) -> String {
@@ -201,6 +313,7 @@ final class PhoneModel: ObservableObject {
 
     private func setCurrent(_ host: SavedHost?) {
         pairing = host
+        resetSessionLayout()
         UserDefaults.standard.set(host?.id, forKey: Self.currentHostKey)
     }
 
@@ -324,6 +437,8 @@ final class PhoneModel: ObservableObject {
             connection?.send(.agents(refresh: false))
         case .sessions(let list):
             sessions = list
+            sessionsKnown = true
+            syncSessionLayout()
             if let open = openSessionID, !list.contains(where: { $0.id == open }) {
                 // The session ended: back to the screen it was opened from.
                 path.removeLast()
@@ -341,6 +456,12 @@ final class PhoneModel: ObservableObject {
         case .agents(let list):
             agents = list
             agentsLoaded = true
+        case .tabLayout(let layout):
+            layoutKnown = true
+            applyingHostLayout = true
+            sessionLayout = layout
+            applyingHostLayout = false
+            syncSessionLayout()
         case .folders(let list):
             folders = list
         case .attached(let info):
@@ -354,6 +475,10 @@ final class PhoneModel: ObservableObject {
                 path.removeAll { if case .session = $0 { return true } else { return false } }
                 path.append(.session(info.id))
             }
+            // What follows is the session's earlier output, until `replayed`.
+            if controller?.session == info.id { controller?.beginReplay() }
+        case .replayed(let id):
+            if controller?.session == id { controller?.endReplay() }
         case .resized(let id, let size, let driver):
             if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].size = size }
             guard let controller, controller.session == id else { return }
@@ -575,17 +700,21 @@ final class PhoneModel: ObservableObject {
 
     /// Hands a conversation's work to another agent and shows its terminal.
     /// `prompt` is the plan's prompt as the user left it.
-    func handoff(_ conversation: Conversation, to target: AgentInfo, prompt: String, note: String) {
+    /// `folder` is where the receiving agent starts; nil is the conversation's own folder.
+    func handoff(_ conversation: Conversation, to target: AgentInfo, prompt: String, note: String, in folder: String? = nil) {
         guard status == .connected else { return }
         openCreatedSession = true
         let plan = handoffPlan
         let edited = plan.map { prompt != $0.prompt } ?? false
         connection?.send(.handoff(
             agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd,
-            target: target.id, plan: plan?.id, prompt: edited ? prompt : nil, note: note, size: startingSize
+            target: target.id, plan: plan?.id, prompt: edited ? prompt : nil, note: note, size: startingSize, folder: folder
         ))
         handoffPlan = nil
     }
+
+    /// Forgets the folder last looked at, so the next browse starts at home.
+    func forgetListing() { listing = nil }
 
     /// Shows the folders inside `path`, or inside the home folder.
     func browse(_ path: String?) {

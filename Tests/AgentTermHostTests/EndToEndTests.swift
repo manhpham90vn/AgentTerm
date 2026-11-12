@@ -210,7 +210,12 @@ final class EndToEndTests: XCTestCase {
             second.messages.contains { if case .sessions(let list) = $0 { return list.map(\.id) == [id] } else { return false } }
         }
         second.connection.send(.attach(session: id, size: .default))
-        waitUntil("replay") { second.text(id).contains("marker-42") }
+        // The end of the replay is marked, and the replay comes before the
+        // mark: a client tells by it which output not to answer.
+        waitUntil("replay marked") { second.messages.contains(.replayed(session: id)) }
+        XCTAssertTrue(second.text(id).contains("marker-42"), "the replay had not arrived when it was marked as over")
+        // The one that started the session is told too, with nothing to replay.
+        XCTAssertTrue(first.messages.contains(.replayed(session: id)))
         second.connection.send(.kill(session: id))
     }
 
@@ -245,6 +250,60 @@ final class EndToEndTests: XCTestCase {
         waitUntil("late client") { folders(late) == [path] }
         phone.connection.send(.removeFolder(path: path))
         waitUntil("removed everywhere") { folders(mac) == [] && folders(late) == [] }
+    }
+
+    func testTheArrangementOfTabsIsSharedAndSaved() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-tabs-\(UUID().uuidString)/folders.json")
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        func layouts(_ client: TestClient) -> [TabLayout] {
+            client.messages.compactMap { if case .tabLayout(let layout) = $0 { return layout } else { return nil } }
+        }
+        var layout = TabLayout()
+        layout.sync(with: ["s:1:10", "s:2:20", "f:/a.md"])
+        layout.setPinned("s:2:20", true)
+        layout.newGroup(with: "s:1:10", name: "api")
+        do {
+            let host = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false, foldersFile: file))
+            let hostPort = try host.start()
+            defer { host.stop() }
+            let mac = TestClient(port: hostPort, token: token, name: "mac")
+            let phone = TestClient(port: hostPort, token: token, name: "phone")
+            waitUntil("both get the empty arrangement") { layouts(mac) == [TabLayout()] && layouts(phone) == [TabLayout()] }
+            mac.connection.send(.setTabLayout(layout))
+            waitUntil("the phone gets the Mac's") { layouts(phone).last == layout }
+            XCTAssertEqual(layouts(mac).count, 1, "it is not sent back to the one who set it")
+        }
+        // The host was stopped and started again.
+        let again = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false, foldersFile: file))
+        let againPort = try again.start()
+        defer { again.stop() }
+        let late = TestClient(port: againPort, token: token, name: "late")
+        waitUntil("kept") { layouts(late).last == layout }
+    }
+
+    func testFoldersCanBePutInAnotherOrder() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-order-\(UUID().uuidString)").standardizedFileURL
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = ["a", "b", "c"].map { root.appendingPathComponent($0).path }
+        for path in paths { try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true) }
+        func folders(_ client: TestClient) -> [String]? {
+            client.messages.compactMap { if case .folders(let list) = $0 { return list } else { return nil } }.last
+        }
+        let mac = connect("mac")
+        let phone = connect("phone")
+        for path in paths { mac.connection.send(.addFolder(path: path)) }
+        waitUntil("listed") { folders(phone) == paths }
+        // Dropped before another, by either client; everyone sees the order.
+        phone.connection.send(.moveFolder(path: paths[2], before: paths[0]))
+        waitUntil("c first") { folders(mac) == [paths[2], paths[0], paths[1]] }
+        mac.connection.send(.moveFolder(path: paths[2], before: nil))
+        waitUntil("c last again") { folders(phone) == paths }
+        // Nothing happens for a folder that is not listed, or one moved before itself.
+        mac.connection.send(.moveFolder(path: root.path, before: paths[0]))
+        mac.connection.send(.moveFolder(path: paths[0], before: paths[0]))
+        mac.connection.send(.moveFolder(path: paths[0], before: paths[1]))
+        mac.connection.send(.moveFolder(path: paths[1], before: paths[0]))
+        waitUntil("b first") { folders(phone) == [paths[1], paths[0], paths[2]] }
     }
 
     func testFolderListIsSavedToDisk() throws {
@@ -564,7 +623,7 @@ final class EndToEndTests: XCTestCase {
         XCTAssertTrue(plan!.prompt.hasPrefix("You are taking over a task from Claude Code in this folder. Read .agentterm/handoffs/"))
         XCTAssertTrue(plan!.prompt.contains("-from-claude.md first"))
 
-        phone.connection.send(.handoff(agent: "claude", sessionID: "no-such", cwd: project, target: "codex", plan: plan!.id, prompt: nil, note: "", size: .default))
+        phone.connection.send(.handoff(agent: "claude", sessionID: "no-such", cwd: project, target: "codex", plan: plan!.id, prompt: nil, note: "", size: .default, folder: nil))
         waitUntil("unknown conversation") { phone.messages.contains(.error("That conversation is no longer on this Mac.")) }
         XCTAssertEqual(withHome.sessionCount, 0)
     }

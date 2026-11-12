@@ -82,6 +82,27 @@ final class AppModel: ObservableObject {
         DaemonLauncher.stop(pid)
     }
 
+    /// How the tabs of the middle pane are arranged: order, pins and groups.
+    /// The host keeps it, so the phones show the same pins and groups.
+    @Published var tabLayout = AppModel.savedTabLayout() {
+        didSet {
+            guard tabLayout != oldValue else { return }
+            saveTabLayout()
+            if tabLayoutKnown, !applyingHostLayout { connection?.send(.setTabLayout(tabLayout)) }
+        }
+    }
+    /// True once the host has sent the arrangement it keeps.
+    var tabLayoutKnown = false
+    private var applyingHostLayout = false
+
+    /// True once the host has listed its sessions.
+    var sessionsKnown = false
+
+    /// The tab being dragged in the strip, from the moment it is picked up.
+    var draggedTab: String?
+    /// The folder being dragged in the list.
+    var draggedFolder: String?
+
     /// A request to close many tabs that would end running sessions, and so
     /// waits to be confirmed.
     @Published var pendingCloseRequest: CloseRequest?
@@ -168,6 +189,11 @@ final class AppModel: ObservableObject {
         files.$active.sink { [weak self] active in
             if active != nil { self?.diffInFront = false }
         }.store(in: &observers)
+        // The arrangement of the tabs follows the tabs that exist.
+        $sessions.combineLatest(files.$documents, $selectedDiffFile, $diff)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.syncTabs() }
+            .store(in: &observers)
         diffTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.showDiff, NSApp.isActive else { return }
@@ -182,7 +208,17 @@ final class AppModel: ObservableObject {
 
     var currentController: TerminalController? { selectedSession.flatMap { controllers[$0] } }
 
-    func sessions(in folder: Folder) -> [SessionInfo] { sessions.filter { $0.cwd == folder.path } }
+    /// A folder's sessions in the order of the tabs, so the list on the
+    /// left and the strip of tabs agree, and arranging one arranges both.
+    func sessions(in folder: Folder) -> [SessionInfo] { inTabOrder(sessions.filter { $0.cwd == folder.path }) }
+
+    func inTabOrder(_ list: [SessionInfo]) -> [SessionInfo] {
+        let place = Dictionary(tabLayout.order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        return list.enumerated().sorted { a, b in
+            let pa = place[TabID.session(a.element)] ?? Int.max, pb = place[TabID.session(b.element)] ?? Int.max
+            return pa != pb ? pa < pb : a.offset < b.offset
+        }.map(\.element)
+    }
 
     /// Sessions started somewhere that is not one of the listed folders.
     var looseSessions: [SessionInfo] {
@@ -228,6 +264,8 @@ final class AppModel: ObservableObject {
         case .closed(let reason):
             connection = nil
             controllers.removeAll()
+            sessionsKnown = false
+            tabLayoutKnown = false
             sessions = []
             foreignSizes = [:]
             selectedSession = nil
@@ -266,6 +304,7 @@ final class AppModel: ObservableObject {
         case .welcome:
             break
         case .sessions(let list):
+            sessionsKnown = true
             sessions = list
             // Pick up sessions that were already running before this window opened.
             for info in list where controllers[info.id] == nil {
@@ -274,12 +313,27 @@ final class AppModel: ObservableObject {
         case .agents(let list):
             agents = list
             agentsLoaded = true
+        case .tabLayout(let layout):
+            let first = !tabLayoutKnown
+            tabLayoutKnown = true
+            if first, layout.order.isEmpty, !tabLayout.order.isEmpty {
+                // A host that has none yet takes the one saved here.
+                connection?.send(.setTabLayout(tabLayout))
+            } else {
+                applyingHostLayout = true
+                tabLayout = layout
+                applyingHostLayout = false
+            }
+            // Outside the guard: what this window adds or drops is sent on.
+            syncTabs()
         case .folders(let list):
             folders = list.map(Folder.init)
             if selectedFolder == nil || !list.contains(selectedFolder ?? "") { selectedFolder = list.first }
             migrateLocalFolders(known: list)
         case .attached(let info):
             if controllers[info.id] == nil { controllers[info.id] = makeController(for: info.id) }
+            // What follows is the session's earlier output, until `replayed`.
+            controllers[info.id]?.beginReplay()
             if !sessions.contains(where: { $0.id == info.id }) { sessions.append(info) }
             if selectNextAttached || selectedSession == nil {
                 // A session that was just started comes to the front, also
@@ -291,6 +345,8 @@ final class AppModel: ObservableObject {
                 selectNextAttached = false
                 selectedSession = info.id
             }
+        case .replayed(let id):
+            controllers[id]?.endReplay()
         case .resized(let id, let size, let driver):
             if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].size = size }
             guard let controller = controllers[id] else { return }
@@ -389,6 +445,28 @@ final class AppModel: ObservableObject {
         connection?.send(.removeFolder(path: folder.path))
     }
 
+    /// Adds folders dropped on the list, from the Finder for one.
+    func addFolders(_ urls: [URL]) {
+        let folders = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
+        for url in folders { connection?.send(.addFolder(path: url.path)) }
+        if let first = folders.first { pendingFolderSelection = first.standardizedFileURL.path }
+    }
+
+    /// Puts a folder just before another in the list, or last. The host
+    /// owns the list, so the phones show the same order.
+    func moveFolder(_ path: String, before target: String?) {
+        guard path != target else { return }
+        connection?.send(.moveFolder(path: path, before: target))
+    }
+
+    /// Moves a folder one place up (-1) or down (+1).
+    func moveFolder(_ folder: Folder, by offset: Int) {
+        guard let index = folders.firstIndex(of: folder), folders.indices.contains(index + offset) else { return }
+        // Down: before the one after the next, or last.
+        let target = offset < 0 ? folders[index - 1].path : (folders.indices.contains(index + 2) ? folders[index + 2].path : nil)
+        moveFolder(folder.path, before: target)
+    }
+
     /// Earlier builds kept the folder list in this app's preferences. Hand
     /// those folders to the host once.
     private func migrateLocalFolders(known: [String]) {
@@ -418,53 +496,44 @@ final class AppModel: ObservableObject {
     // MARK: Handoff
 
     /// Agents a conversation of `agent` can be handed to.
-    func handoffTargets(from agent: String) -> [AgentInfo] {
-        installedAgents.filter { $0.id != agent }
+    /// The agents a conversation can be handed to. In its own folder that is
+    /// every other agent; in another folder the same agent can take it too.
+    func handoffTargets(from agent: String, sameFolder: Bool = true) -> [AgentInfo] {
+        sameFolder ? installedAgents.filter { $0.id != agent } : installedAgents
     }
 
     func agentID(of session: SessionInfo) -> String? {
         session.agent
     }
 
-    /// How many tabs the middle pane has: the sessions, then the open files.
-    var tabCount: Int { sessions.count + files.documents.count + (diffTabFile == nil ? 0 : 1) }
-
-    /// The place of the tab in front, counted from 0, if there is one.
-    private var frontTab: Int? {
-        if diffInFront, diffTabFile != nil { return tabCount - 1 }
-        if let path = files.active, let index = files.documents.firstIndex(where: { $0.path == path }) { return sessions.count + index }
-        return sessions.firstIndex { $0.id == selectedSession }
-    }
+    /// How many tabs the strip shows.
+    var tabCount: Int { visibleTabs.count }
 
     /// Shows the tab in the given place of the strip, counted from 1.
     func selectTab(number: Int) {
-        let index = number - 1
-        if sessions.indices.contains(index) {
-            select(session: sessions[index])
-        } else if files.documents.indices.contains(index - sessions.count) {
-            files.active = files.documents[index - sessions.count].path
-        } else if index == tabCount - 1 {
-            showDiffTab()
-        }
+        let tabs = visibleTabs
+        if tabs.indices.contains(number - 1) { selectTab(id: tabs[number - 1]) }
     }
 
     /// Shows the tab `offset` places after the one in front, wrapping.
     func selectTab(offset: Int) {
-        guard tabCount > 0 else { return }
-        let current = frontTab ?? (offset > 0 ? -1 : 0)
-        selectTab(number: (current + offset + tabCount) % tabCount + 1)
+        let tabs = visibleTabs
+        guard !tabs.isEmpty else { return }
+        let current = frontTabID.flatMap { tabs.firstIndex(of: $0) } ?? (offset > 0 ? -1 : 0)
+        selectTab(id: tabs[(current + offset + tabs.count) % tabs.count])
     }
 
     /// Closes the tabs of files and the diff, leaving the terminals. A file
     /// given as `kept` stays open too; `keepDiff` leaves the diff tab.
+    /// Pinned tabs are closed one at a time only, never with the rest.
     func closeFileTabs(except kept: String? = nil, keepDiff: Bool = false) {
-        if !keepDiff { closeDiffTab() }
-        files.closeAll(except: kept)
+        if !keepDiff, !tabLayout.isPinned(TabID.diff) { closeDiffTab() }
+        files.closeAll(except: kept, keeping: pinnedFilePaths)
     }
 
     /// The sessions a request would end.
     func sessionsEnded(by request: CloseRequest) -> [SessionInfo] {
-        sessions.filter { $0.id != request.keepSession }
+        sessions.filter { $0.id != request.keepSession && !tabLayout.isPinned(TabID.session($0)) }
     }
 
     /// Closes every tab but the one the request keeps. Sessions are running
@@ -534,17 +603,28 @@ final class AppModel: ObservableObject {
     /// `note` is what the user wants the receiving agent to know.
     /// `plan` and `prompt` are what the handoff sheet showed, the prompt
     /// possibly edited there.
-    func handoff(_ conversation: Conversation, to target: AgentInfo, plan: Handoff.Plan, prompt: String, note: String) {
+    /// `folder` is where the receiving agent starts: the conversation's own
+    /// folder, or another one to carry the work over to.
+    func handoff(_ conversation: Conversation, to target: AgentInfo, plan: Handoff.Plan, prompt: String, note: String, in folder: String? = nil) {
         guard status == .connected else { return }
         let size = startingSize
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let result = Result { try Handoff.prepare(conversation, to: target.id, plan: plan, prompt: prompt, note: note) }
+            let result = Result { try Handoff.prepare(conversation, to: target.id, plan: plan, prompt: prompt, note: note, in: folder) }
             DispatchQueue.main.async {
                 guard let self else { return }
                 switch result {
                 case .success(let prepared):
                     self.selectNextAttached = true
-                    self.connection?.send(.create(CreateRequest(command: prepared.command, cwd: conversation.cwd, title: target.name, size: size)))
+                    self.connection?.send(.create(CreateRequest(command: prepared.command, cwd: prepared.directory, title: target.name, size: size)))
+                    // The new session lives in the folder it was handed to:
+                    // that folder is shown, and added to the list if it is
+                    // new, so its changes and files are what the side panel has.
+                    if self.folders.contains(where: { $0.path == prepared.directory }) {
+                        self.selectedFolder = prepared.directory
+                    } else {
+                        self.pendingFolderSelection = prepared.directory
+                        self.connection?.send(.addFolder(path: prepared.directory))
+                    }
                 case .failure(let error):
                     self.notice = "\(error)"
                 }

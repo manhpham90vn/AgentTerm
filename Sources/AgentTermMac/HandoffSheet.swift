@@ -1,3 +1,4 @@
+import AppKit
 import AgentTermHost
 import AgentTermProtocol
 import SwiftUI
@@ -20,7 +21,54 @@ struct HandoffSheet: View {
 
     private var promptIsEdited: Bool { plan.map { prompt != $0.prompt } ?? false }
 
-    private var targets: [AgentInfo] { model.handoffTargets(from: conversation.agent) }
+    /// Where the receiving agent starts. Empty means the conversation's folder.
+    @State private var folder = ""
+
+    private var destination: String { folder.isEmpty ? conversation.cwd : folder }
+    /// The conversation's own folder first, then the other listed ones.
+    /// Repositories directly inside the conversation's folder. An agent that
+    /// was started in a folder of projects usually worked in one of them,
+    /// and that is where it is most useful to carry on.
+    @State private var nested: [String] = []
+    /// A folder picked with "Choose…".
+    @State private var chosen: String?
+
+    /// The conversation's own folder first, then the repositories inside it,
+    /// the other listed folders, and one picked by hand.
+    private var folderChoices: [String] {
+        var paths = [conversation.cwd]
+        for path in nested + model.folders.map(\.path) + [chosen].compactMap({ $0 }) where !paths.contains(path) { paths.append(path) }
+        return paths
+    }
+
+    private func label(for path: String) -> String {
+        if path == conversation.cwd { return (path as NSString).lastPathComponent + " (this conversation's folder)" }
+        if path.hasPrefix(conversation.cwd + "/") { return (conversation.cwd as NSString).lastPathComponent + "/" + path.dropFirst(conversation.cwd.count + 1) }
+        return (path as NSString).abbreviatingWithTildeInPath
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.directoryURL = URL(fileURLWithPath: destination)
+        panel.prompt = "Choose"
+        panel.message = "Choose the folder the agent continues in"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let path = url.standardizedFileURL.path
+        chosen = path == conversation.cwd ? nil : path
+        folder = path == conversation.cwd ? "" : path
+    }
+
+    /// The folders right under `directory` that are git repositories, by name.
+    private static func repositories(in directory: String) -> [String] {
+        let fm = FileManager.default
+        let names = ((try? fm.contentsOfDirectory(atPath: directory)) ?? []).prefix(400)
+        return names.filter { !$0.hasPrefix(".") }.map { directory + "/" + $0 }
+            .filter { fm.fileExists(atPath: $0 + "/.git") }
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+    }
+    private var targets: [AgentInfo] { model.handoffTargets(from: conversation.agent, sameFolder: destination == conversation.cwd) }
     private var target: AgentInfo? { targets.first { $0.id == targetID } ?? targets.first }
     private var sourceName: String { model.agents.first { $0.id == conversation.agent }?.name ?? conversation.agent }
 
@@ -35,6 +83,31 @@ struct HandoffSheet: View {
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text("Continue in")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 8) {
+                    Picker("Folder", selection: $folder) {
+                        ForEach(folderChoices, id: \.self) { path in
+                            Text(label(for: path)).tag(path == conversation.cwd ? "" : path)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .help("The folder the receiving agent starts in")
+                    Button("Choose…") { chooseFolder() }
+                        .controlSize(.small)
+                        .help("Start it in any other folder")
+                }
+                if destination != conversation.cwd {
+                    Text("The agent starts in \((destination as NSString).abbreviatingWithTildeInPath), with the conversation so far. The folder is added to the list.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -97,6 +170,7 @@ struct HandoffSheet: View {
         .frame(width: 500)
         .onAppear {
             targetID = targets.contains { $0.id == rememberedTarget } ? rememberedTarget : (targets.first?.id ?? "")
+            nested = Self.repositories(in: conversation.cwd)
             let made = Handoff.plan(for: conversation)
             plan = made
             prompt = made.prompt
@@ -128,7 +202,7 @@ struct HandoffSheet: View {
     private func submit() {
         guard let target, let plan else { return }
         rememberedTarget = target.id
-        model.handoff(conversation, to: target, plan: plan, prompt: prompt, note: note)
+        model.handoff(conversation, to: target, plan: plan, prompt: prompt, note: note, in: folder.isEmpty ? nil : folder)
         dismiss()
     }
 }

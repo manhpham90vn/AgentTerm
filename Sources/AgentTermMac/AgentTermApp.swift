@@ -60,10 +60,7 @@ struct AgentTermApp: App {
         }
 
         Settings {
-            TabView {
-                SettingsView().tabItem { Label("General", systemImage: "gearshape") }
-                PermissionsView().tabItem { Label("Permissions", systemImage: "lock.shield") }
-            }
+            SettingsTabs()
         }
     }
 }
@@ -111,7 +108,7 @@ private struct MenuBarMenu: View {
             showWindow()
             model.showPairing = true
         }
-        SettingsLink { Text("Settings…") }
+        SettingsLink { Text("Settings and Permissions…") }
         Divider()
         Button("Quit \(AppChannel.current.appName)") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
@@ -125,21 +122,81 @@ private struct MenuBarMenu: View {
     }
 }
 
+/// The panes of the Settings window. The one last looked at comes back.
+private struct SettingsTabs: View {
+    @AppStorage("settingsTab") private var tab = "general"
+
+    var body: some View {
+        TabView(selection: $tab) {
+            SettingsView().tabItem { Label("General", systemImage: "gearshape") }.tag("general")
+            PermissionsView().tabItem { Label("Permissions", systemImage: "lock.shield") }.tag("permissions")
+        }
+    }
+}
+
 private struct SettingsView: View {
     @AppStorage(MenuBarMode.key) private var staysInMenuBar = MenuBarMode.defaultValue
 
     var body: some View {
-        Form {
-            Toggle("Keep AgentTerm in the menu bar when its window is closed", isOn: $staysInMenuBar)
-            Text(staysInMenuBar
-                ? "Closing the window leaves AgentTerm running, with an icon in the menu bar to open it again. Quit it from that menu or with ⌘Q."
-                : "Closing the window quits AgentTerm. Sessions keep running either way: the host that holds them is a separate program.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsHeader(symbol: "gearshape.fill", tint: .gray, title: "General", subtitle: "How \(AppChannel.current.appName) behaves on this Mac.")
+            SettingsCard {
+                Toggle(isOn: $staysInMenuBar) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Stay in the menu bar when the window is closed")
+                            .font(.system(size: 13, weight: .medium))
+                        Text(staysInMenuBar
+                            ? "Closing the window leaves the app running, with an icon in the menu bar to open it again. Quit from that menu or with ⌘Q."
+                            : "Closing the window quits the app. Sessions keep running either way: the host that holds them is a separate program.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+            }
         }
-        .padding(22)
-        .frame(width: 460)
+        .padding(24)
+        .frame(width: 600, alignment: .top)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Title of a settings pane: a tinted tile, a name and a line about it.
+struct SettingsHeader: View {
+    let symbol: String
+    let tint: Color
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 38, height: 38)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(tint.gradient))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 17, weight: .semibold))
+                Text(subtitle)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
+/// A rounded panel that groups related settings.
+struct SettingsCard<Content: View>: View {
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) { content }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous).strokeBorder(Color.primary.opacity(0.08)))
     }
 }
 
@@ -186,10 +243,7 @@ private struct TabCommands: View {
     @ObservedObject var model: AppModel
     @ObservedObject var files: FilesModel
 
-    private var names: [String] {
-        model.sessions.map(\.displayName) + files.documents.map(\.name)
-            + (model.diffTabFile.map { ["Diff of " + ($0.path as NSString).lastPathComponent] } ?? [])
-    }
+    private var names: [String] { model.visibleTabs.map(model.tabName) }
 
     var body: some View {
         // Command and a number shows the tab in that place.
@@ -205,6 +259,20 @@ private struct TabCommands: View {
             .keyboardShortcut("[", modifiers: [.command, .shift])
             .disabled(model.tabCount < 2)
         Divider()
+        let front = model.frontTabID
+        Button(front.map(model.tabLayout.isPinned) == true ? "Unpin Tab" : "Pin Tab") {
+            if let front { model.setTabPinned(front, !model.tabLayout.isPinned(front)) }
+        }
+        .disabled(front == nil)
+        Button("Add Tab to New Group") { if let front { model.newTabGroup(with: front) } }
+            .disabled(front == nil)
+        Button("Move Tab Left") { if let front { model.moveTab(front, by: -1) } }
+            .keyboardShortcut("[", modifiers: [.command, .control, .shift])
+            .disabled(model.tabCount < 2)
+        Button("Move Tab Right") { if let front { model.moveTab(front, by: 1) } }
+            .keyboardShortcut("]", modifiers: [.command, .control, .shift])
+            .disabled(model.tabCount < 2)
+        Divider()
         Button(model.diffInFront ? "Close Diff" : (files.active != nil ? "Close File" : "End Session")) { model.closeFrontTab() }
             .keyboardShortcut("w")
             .disabled(!model.diffInFront && files.active == nil && model.selectedSession == nil)
@@ -214,14 +282,14 @@ private struct TabCommands: View {
         Button("Close All Files") { model.closeFileTabs() }
             .keyboardShortcut("w", modifiers: [.command, .shift])
             .disabled(files.documents.isEmpty && model.diffTabFile == nil)
-        Button("Close Everything Else…") {
+        Button("Close Other Tabs…") {
             model.closeTabs(.init(
                 keepSession: model.diffInFront || files.active != nil ? nil : model.selectedSession,
                 keepFile: model.diffInFront ? nil : files.active, keepDiff: model.diffInFront
             ))
         }
         .disabled(model.tabCount < 2)
-        Button(model.sessions.isEmpty ? "Close All" : "Close All and End Sessions…") { model.closeTabs() }
+        Button(model.sessions.isEmpty ? "Close All Tabs" : "Close All Tabs…") { model.closeTabs() }
             .disabled(model.tabCount == 0)
     }
 }

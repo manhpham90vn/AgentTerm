@@ -139,6 +139,16 @@ public final class HostServer {
            let saved = try? JSONDecoder().decode([String].self, from: data) {
             folders = saved
         }
+        if let file = tabLayoutFile, let data = try? Data(contentsOf: file),
+           let saved = try? JSONDecoder().decode(TabLayout.self, from: data) {
+            tabLayout = saved
+        }
+    }
+
+    /// How the tabs are arranged, for every client. Kept next to the folders.
+    private var tabLayout = TabLayout()
+    private var tabLayoutFile: URL? {
+        configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("tabs.json")
     }
 
     // MARK: Lifecycle
@@ -404,6 +414,25 @@ public final class HostServer {
             guard let session = sessions[id] else { return }
             session.process.hangUp()
             queue.asyncAfter(deadline: .now() + 3) { [weak session] in session?.process.forceKill() }
+        case .setTabLayout(let layout):
+            guard layout != tabLayout else { return }
+            tabLayout = layout
+            if let file = tabLayoutFile, let data = try? JSONEncoder().encode(layout) {
+                try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? data.write(to: file, options: .atomic)
+            }
+            // The sender has it already.
+            for other in clients.values where other.authenticated && other !== client {
+                send(.tabLayout(layout), to: other)
+            }
+        case .moveFolder(let path, let before):
+            guard path != before, let from = folders.firstIndex(of: path) else { return }
+            var moved = folders
+            moved.remove(at: from)
+            moved.insert(path, at: before.flatMap { moved.firstIndex(of: $0) } ?? moved.count)
+            guard moved != folders else { return }
+            folders = moved
+            foldersChanged()
         case .addFolder(let path):
             let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
             var isDirectory: ObjCBool = false
@@ -494,7 +523,7 @@ public final class HostServer {
             let id = UUID().uuidString
             handoffPlans[id] = (plan, Date())
             send(.handoffPlan(id: id, prompt: plan.prompt), to: client)
-        case .handoff(let agent, let sessionID, let cwd, let target, let planID, let prompt, let note, let size):
+        case .handoff(let agent, let sessionID, let cwd, let target, let planID, let prompt, let note, let size, let folder):
             let home = configuration.home
             // Only a plan this host made is honored, so a client names a
             // plan and never a path to write to.
@@ -505,7 +534,10 @@ public final class HostServer {
                 let found = AgentHistory.conversations(in: cwd, home: home).first { $0.agent == agent && $0.sessionID == sessionID }
                     ?? AgentHistory.allConversations(home: home).first { $0.agent == agent && $0.sessionID == sessionID }
                 guard let found else { return .failure(HandoffRequestError.notFound) }
-                return Result { (try Handoff.prepare(found, to: target, plan: plan, prompt: prompt, note: note), found.cwd) }
+                return Result {
+                    let prepared = try Handoff.prepare(found, to: target, plan: plan, prompt: prompt, note: note, in: folder)
+                    return (prepared, prepared.directory)
+                }
             }) { server, client, result in
                 switch result {
                 case .success(let (prepared, directory)):
@@ -723,6 +755,7 @@ public final class HostServer {
         send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
         if !accountUsage.isEmpty { send(.accountUsage(accountUsageList()), to: client) }
         send(.folders(folders), to: client)
+        send(.tabLayout(tabLayout), to: client)
         if client.isAdmin {
             send(.devices(deviceList()), to: client)
         } else {
@@ -862,6 +895,11 @@ public final class HostServer {
         if !session.scrollback.isEmpty {
             send(DataFrame(kind: .output, session: session.info.id, payload: session.scrollback), to: client)
         }
+        // The replay holds the questions the program once asked its terminal
+        // (which terminal are you, where is the cursor). The client must not
+        // answer those again: the answers would reach the program as if they
+        // were typed. This marks where the replay ends.
+        send(.replayed(session: session.info.id), to: client)
         announceSize(of: session)
     }
 

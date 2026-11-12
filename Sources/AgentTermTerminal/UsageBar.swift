@@ -132,7 +132,11 @@ public struct UsageBar: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: compact ? 40 : 42)
+        // Two lines of a cell and the room around them. On the Mac the
+        // second line carries text (about 14 + 5 + 12 points, and 7 above
+        // and below); on a phone it is only the 3 point bar (13 + 4 + 3,
+        // and 9 above and below, which also keeps it easy to tap).
+        .frame(height: compact ? 38 : 46)
         .contentShape(Rectangle())
         .onTapGesture { action?() }
         .accessibilityElement(children: .combine)

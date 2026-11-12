@@ -24,6 +24,16 @@ final class FileBrowserTests: XCTestCase {
         XCTAssertTrue(FileBrowser.list("/nonexistent/place").isEmpty)
     }
 
+    func testAFolderThatIsARepositoryOfItsOwnIsMarked() throws {
+        for folder in ["web/.git", "docs", "tool"] { try FileManager.default.createDirectory(atPath: path(folder), withIntermediateDirectories: true) }
+        // A worktree or submodule has a file named .git, not a folder.
+        FileManager.default.createFile(atPath: path("tool/.git"), contents: Data("gitdir: ../.git/modules/tool".utf8))
+        FileManager.default.createFile(atPath: path("a.txt"), contents: Data())
+        let entries = FileBrowser.list(root.path)
+        XCTAssertEqual(entries.map(\.name), ["docs", "tool", "web", "a.txt"])
+        XCTAssertEqual(entries.map(\.isRepository), [nil, true, true, nil])
+    }
+
     func testCreateWriteReadRoundTrip() throws {
         let file = try FileBrowser.createFile(named: " ghi chú.md ", in: root.path)
         XCTAssertEqual(file, path("ghi chú.md"))

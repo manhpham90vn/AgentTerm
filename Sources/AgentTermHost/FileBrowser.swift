@@ -44,7 +44,8 @@ public enum FileBrowser {
             let name = item.lastPathComponent
             guard !skipped.contains(name) else { return nil }
             let isDirectory = (try? item.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
-            return FileEntry(path: item.path, name: name, isDirectory: isDirectory)
+            let isRepository = isDirectory && FileManager.default.fileExists(atPath: item.appendingPathComponent(".git").path)
+            return FileEntry(path: item.path, name: name, isDirectory: isDirectory, isRepository: isRepository ? true : nil)
         }
         .sorted { a, b in
             a.isDirectory != b.isDirectory ? a.isDirectory : a.name.localizedStandardCompare(b.name) == .orderedAscending

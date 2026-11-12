@@ -55,6 +55,9 @@ printf 'first line\nsecond line\n' > "$PROJECT/notes.txt"
 HISTORY="$FAKE_HOME/.claude/projects/$(printf '%s' "$PROJECT" | sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$HISTORY"
 printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"write tests for the parser"}}\n' "$PROJECT" > "$HISTORY/c-1.jsonl"
+# A repository of its own inside the project, which the project's git does not see.
+git init -q -b main "$PROJECT/web"
+printf 'web\n' >> "$PROJECT/.git/info/exclude"
 printf '["%s"]' "$PROJECT" > "$STATE/folders.json"
 
 # Two hosts with their own state, standing in for two Macs.
@@ -90,6 +93,8 @@ export TEST_RUNNER_AGENTTERM_TEST_PROJECT=1
 if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export TEST_RUNNER_AGENTTERM_SHOT_DIR="$SHOTS"; fi
 
 if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
+    # The test arranged the sessions; the host has to have kept that.
+    grep -q '"Group 1 api"' "$STATE/tabs.json" || { echo "test-ios.sh: the host did not save the arrangement of the sessions" >&2; exit 1; }
     grep -E "Test Case .* (passed|failed)|Executed [0-9]+ test" "$LOG" | tail -3
     echo "iOS UI test passed."
     rm -f "$LOG"

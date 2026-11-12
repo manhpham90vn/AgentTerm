@@ -36,6 +36,13 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         view.nativeBackgroundColor = TerminalStyle.background
         view.nativeForegroundColor = TerminalStyle.foreground
         view.terminalDelegate = self
+        #if os(iOS)
+        // The emulator brings a key bar of its own above the keyboard, which
+        // appears when the terminal is tapped. The app has its own key bar
+        // under the terminal, so that one would be a second, different row
+        // of keys that comes and goes.
+        view.inputAccessoryView = nil
+        #endif
     }
 
     /// The exact size in points of the grid the emulator currently draws,
@@ -62,6 +69,55 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
 
     public func feed(_ data: Data) {
         view.feed(byteArray: ArraySlice([UInt8](data)))
+    }
+
+    /// True while the emulator may still be answering what the host
+    /// replayed: the session's output from before this client attached.
+    private var isReplaying = false
+    private var replayTimeout: DispatchWorkItem?
+
+    /// A mode nothing uses. The emulator is asked about it after a replay,
+    /// and its answer marks the end of the answers that belong to the replay.
+    private static let replayMarkMode = 27717
+
+    /// The session's earlier output is about to arrive. It holds the
+    /// questions the program once asked its terminal (which terminal are
+    /// you, where is the cursor), and the emulator answers them again. Sent
+    /// on, those answers would land in the program's input as stray text.
+    public func beginReplay() {
+        isReplaying = true
+        armReplayTimeout(seconds: 5)
+    }
+
+    /// The replay has been fed. The emulator works through what it is fed
+    /// in order and answers later, on its own time, so "the replay is over"
+    /// cannot be read off the clock. Instead it is asked one more question;
+    /// every answer that comes before the answer to that one is the replay's.
+    public func endReplay() {
+        guard isReplaying else { return }
+        view.feed(text: "\u{1b}[?\(Self.replayMarkMode)$p")
+        armReplayTimeout(seconds: 3)
+    }
+
+    /// An emulator that never answers the mark must not leave the program
+    /// without answers for good.
+    private func armReplayTimeout(seconds: TimeInterval) {
+        replayTimeout?.cancel()
+        let timeout = DispatchWorkItem { [weak self] in self?.isReplaying = false }
+        replayTimeout = timeout
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: timeout)
+    }
+
+    /// Whether bytes the emulator wants sent belong to a replay. The answer
+    /// to the mark ends the replay and is itself not sent.
+    private func isReplayAnswer(_ bytes: Data) -> Bool {
+        guard isReplaying else { return false }
+        if String(decoding: bytes, as: UTF8.self).contains("?\(Self.replayMarkMode);") {
+            replayTimeout?.cancel()
+            replayTimeout = nil
+            isReplaying = false
+        }
+        return true
     }
 
     /// Sends bytes as if they were typed in the terminal.
@@ -161,7 +217,10 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
 
     public nonisolated func send(source: TerminalView, data: ArraySlice<UInt8>) {
         let bytes = Data(data)
-        MainActor.assumeIsolated { onInput?(bytes) }
+        MainActor.assumeIsolated {
+            guard !isReplayAnswer(bytes) else { return }
+            onInput?(bytes)
+        }
     }
 
     public nonisolated func setTerminalTitle(source: TerminalView, title: String) {}

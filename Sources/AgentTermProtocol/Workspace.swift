@@ -141,13 +141,16 @@ public struct FileEntry: Codable, Identifiable, Equatable, Sendable {
     public var path: String
     public var name: String
     public var isDirectory: Bool
+    /// True for a folder that is a git repository of its own.
+    public var isRepository: Bool?
 
     public var id: String { path }
 
-    public init(path: String, name: String, isDirectory: Bool) {
+    public init(path: String, name: String, isDirectory: Bool, isRepository: Bool? = nil) {
         self.path = path
         self.name = name
         self.isDirectory = isDirectory
+        self.isRepository = isRepository
     }
 }
 

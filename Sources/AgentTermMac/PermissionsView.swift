@@ -1,3 +1,5 @@
+import Combine
+import AgentTermProtocol
 import AVFoundation
 import AppKit
 import ApplicationServices
@@ -121,24 +123,46 @@ enum Permission: String, CaseIterable, Identifiable {
     }
 }
 
+extension Permission {
+    /// The color of its tile, as System Settings colors the same panes.
+    var tint: Color {
+        switch self {
+        case .accessibility: return .blue
+        case .screenRecording: return .red
+        case .automation: return .gray
+        case .fullDiskAccess: return .indigo
+        case .microphone: return .orange
+        case .camera: return .green
+        }
+    }
+}
+
 struct PermissionsView: View {
     /// Bumped to read every status again.
     @State private var refresh = 0
     private let poll = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("macOS treats what an agent does as done by AgentTerm, so these are AgentTerm's permissions. Turn on what your agents need. Changes to Accessibility and Screen Recording take effect for sessions started after AgentTerm is reopened.")
-                .font(.callout)
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsHeader(
+                symbol: "lock.shield.fill", tint: .blue, title: "Permissions",
+                subtitle: "macOS treats what an agent does as done by \(AppChannel.current.appName). Allow what your agents need."
+            )
+            SettingsCard {
+                ForEach(Permission.allCases) { permission in
+                    PermissionRow(permission: permission, refresh: refresh) { refresh += 1 }
+                        .padding(.vertical, 9)
+                    if permission != Permission.allCases.last { Divider() }
+                }
+            }
+            Label("Accessibility and Screen Recording apply to sessions started after the app is reopened.", systemImage: "info.circle")
+                .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            ForEach(Permission.allCases) { permission in
-                PermissionRow(permission: permission, refresh: refresh) { refresh += 1 }
-                if permission != Permission.allCases.last { Divider() }
-            }
         }
-        .padding(22)
-        .frame(width: 560)
+        .padding(24)
+        .frame(width: 600, alignment: .top)
+        .fixedSize(horizontal: false, vertical: true)
         // The answer changes in System Settings, outside this app.
         .onReceive(poll) { _ in refresh += 1 }
     }
@@ -151,38 +175,58 @@ private struct PermissionRow: View {
 
     var body: some View {
         let status = permission.status
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .center, spacing: 12) {
             Image(systemName: permission.symbol)
-                .font(.system(size: 16))
-                .foregroundStyle(.secondary)
-                .frame(width: 24)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 30, height: 30)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(permission.tint.gradient))
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 8) {
                     Text(permission.title).font(.system(size: 13, weight: .medium))
-                    switch status {
-                    case .granted:
-                        Label("Allowed", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                    case .notGranted:
-                        Label("Not allowed", systemImage: "xmark.circle").foregroundStyle(.secondary)
-                    case .unknown:
-                        Label("Asked per app", systemImage: "questionmark.circle").foregroundStyle(.secondary)
-                    }
+                    StatusPill(status: status)
                 }
-                .font(.system(size: 11.5))
-                .labelStyle(.titleAndIcon)
                 Text(permission.purpose)
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer(minLength: 8)
-            if status == .granted {
-                Button("Open Settings") { permission.openSettings() }.controlSize(.small)
-            } else {
-                Button(status == .unknown ? "Open Settings" : "Allow…") { permission.request(then: changed) }
-                    .controlSize(.small)
+            Spacer(minLength: 10)
+            switch status {
+            case .granted:
+                Button("Settings") { permission.openSettings() }
+                    .controlSize(.regular)
+            case .notGranted:
+                Button("Allow") { permission.request(then: changed) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.regular)
+            case .unknown:
+                Button("Settings") { permission.request(then: changed) }
+                    .controlSize(.regular)
             }
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct StatusPill: View {
+    let status: Permission.Status
+
+    var body: some View {
+        let (text, color): (String, Color) = {
+            switch status {
+            case .granted: return ("Allowed", .green)
+            case .notGranted: return ("Not allowed", .secondary)
+            case .unknown: return ("Asked per app", .secondary)
+            }
+        }()
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text(text).font(.system(size: 10.5, weight: .medium))
+        }
+        .foregroundStyle(color)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(color.opacity(0.14)))
     }
 }

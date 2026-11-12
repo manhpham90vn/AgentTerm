@@ -192,6 +192,19 @@ final class FlowTests: XCTestCase {
             XCTAssertTrue(prompt.waitForExistence(timeout: 10), "the handoff prompt is not shown")
             XCTAssertTrue((prompt.value as? String)?.contains("You are taking over a task from Claude Code") == true, "\(String(describing: prompt.value))")
             capture("7d-conversation")
+            // The agent can be sent on in another folder: a repository
+            // inside the conversation's folder is offered, and any folder
+            // on the Mac can be picked.
+            app.buttons["choose-folder"].tap()
+            XCTAssertTrue(app.buttons["web"].waitForExistence(timeout: 10), "the folder picker does not open at the conversation's folder")
+            capture("7d2-choose-folder")
+            app.buttons["web"].tap()
+            let pick = app.buttons["pick-folder"]
+            XCTAssertTrue(pick.waitForExistence(timeout: 10))
+            XCTAssertEqual(pick.label, "Continue in web")
+            pick.tap()
+            XCTAssertTrue(app.buttons.matching(NSPredicate(format: "label CONTAINS 'project/web'")).firstMatch.waitForExistence(timeout: 5), "the picked folder is not the one chosen")
+            capture("7d3-folder-chosen")
             app.buttons["Close"].tap()
             app.navigationBars.buttons.firstMatch.tap()
 
@@ -258,5 +271,92 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["First Mac"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["zsh"].firstMatch.waitForExistence(timeout: 10), "the first Mac's session is back")
         capture("10-back-on-first")
+
+        // Sessions can be arranged: grouped, pinned, dragged. Three in the
+        // project now, under one more in another folder.
+        guard environment["AGENTTERM_TEST_PROJECT"] != nil else { return }
+        for _ in 0..<2 {
+            app.buttons[launchButton].firstMatch.tap()
+            XCTAssertTrue(compose.waitForExistence(timeout: 10))
+            app.navigationBars.buttons.firstMatch.tap()
+            XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 10))
+        }
+        let rows = app.staticTexts.matching(identifier: "zsh")
+        XCTAssertEqual(rows.count, 4)
+        let group = app.buttons["session-group"].firstMatch
+        func groupSays(_ text: String) -> Bool {
+            let wanted = NSPredicate(format: "label CONTAINS %@", text)
+            return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: wanted, object: group)], timeout: 6) == .completed
+        }
+        rows.element(boundBy: 0).press(forDuration: 1.2)
+        app.buttons["Add to New Group"].tap()
+        XCTAssertTrue(group.waitForExistence(timeout: 5), "no group was made")
+        XCTAssertTrue(groupSays("1 sessions"), group.label)
+        // Dropped on the group's label, a session joins it. Dropped on a
+        // session of the group, it joins too.
+        rows.element(boundBy: 2).press(forDuration: 0.7, thenDragTo: group, withVelocity: .slow, thenHoldForDuration: 0.6)
+        XCTAssertTrue(groupSays("2 sessions"), "dropping on the label did not add the session: \(group.label)")
+        rows.element(boundBy: 2).press(forDuration: 0.7, thenDragTo: rows.element(boundBy: 0), withVelocity: .slow, thenHoldForDuration: 0.6)
+        XCTAssertTrue(groupSays("3 sessions"), "dropping on a grouped session did not add the session: \(group.label)")
+        capture("11-grouped")
+        // A pinned session leaves its group and goes first.
+        rows.element(boundBy: 1).press(forDuration: 1.2)
+        app.buttons["Pin"].tap()
+        XCTAssertTrue(groupSays("2 sessions"), "pinning did not take the session out of the group: \(group.label)")
+        // The group is renamed, recolored and folded away.
+        group.press(forDuration: 1.2)
+        app.buttons["Rename Group…"].tap()
+        let name = app.alerts.textFields.firstMatch
+        XCTAssertTrue(name.waitForExistence(timeout: 5))
+        name.typeText(" api")
+        app.alerts.buttons["Rename"].tap()
+        XCTAssertTrue(groupSays("Group 1 api"), group.label)
+        group.press(forDuration: 1.2)
+        app.buttons["Color"].tap()
+        XCTAssertTrue(app.buttons["Orange"].waitForExistence(timeout: 5), "the colors are not offered")
+        capture("12-colors")
+        app.buttons["Orange"].tap()
+        capture("13-arranged")
+        group.tap()
+        XCTAssertTrue(groupSays("collapsed"), group.label)
+        XCTAssertEqual(rows.count, 2, "a collapsed group still shows its sessions")
+        capture("14-collapsed")
+
+        // The Mac keeps the arrangement: it is there again after looking at
+        // another Mac, which has none of it.
+        app.buttons["mac-menu"].tap()
+        app.buttons["Second Mac"].tap()
+        XCTAssertTrue(app.staticTexts["Second Mac"].waitForExistence(timeout: 10))
+        XCTAssertFalse(group.exists, "the first Mac's group must not show under the second")
+        app.buttons["mac-menu"].tap()
+        app.buttons["First Mac"].tap()
+        XCTAssertTrue(group.waitForExistence(timeout: 10), "the arrangement did not come back from the Mac")
+        XCTAssertTrue(groupSays("Group 1 api, 2 sessions, collapsed"), group.label)
+
+        // Listed folders can be put in another order, from the menu of a
+        // folder's name and by dragging one onto another. A second folder
+        // is listed first.
+        app.buttons["Open Another Folder…"].tap()
+        let add = app.buttons["Add to Folders"]
+        XCTAssertTrue(add.waitForExistence(timeout: 10), "the folder being looked at cannot be added to the list")
+        add.tap()
+        app.buttons["Cancel"].tap()
+        let names = app.staticTexts.matching(identifier: "folder-name")
+        func order() -> [String] { (0..<names.count).map { names.element(boundBy: $0).label } }
+        func orderBecomes(_ wanted: [String]) -> Bool {
+            let deadline = Date().addingTimeInterval(8)
+            while Date() < deadline { if order() == wanted { return true }; usleep(300_000) }
+            return false
+        }
+        // The project, the folder just added, then the unlisted one a session runs in.
+        XCTAssertTrue(orderBecomes(["project", "home", "demo"]), "\(order())")
+        names.element(boundBy: 0).press(forDuration: 1.2)
+        XCTAssertTrue(app.buttons["Move Down"].waitForExistence(timeout: 5), "a folder's name has no menu")
+        capture("15-folder-menu")
+        app.buttons["Move Down"].tap()
+        XCTAssertTrue(orderBecomes(["home", "project", "demo"]), "Move Down did not move the folder: \(order())")
+        names.element(boundBy: 1).press(forDuration: 0.7, thenDragTo: names.element(boundBy: 0), withVelocity: .slow, thenHoldForDuration: 0.6)
+        XCTAssertTrue(orderBecomes(["project", "home", "demo"]), "dragging a folder onto another did not move it: \(order())")
+        capture("16-folders-reordered")
     }
 }

@@ -195,6 +195,23 @@ final class HandoffTests: XCTestCase {
         XCTAssertEqual(git("status", "--short", in: root).trimmingCharacters(in: .whitespacesAndNewlines), "M app.txt")
         XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".gitignore").path))
 
+        // Handed to another folder: the file goes there, where the agent
+        // starts, and says which folder the work came from.
+        let other = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-handoff-other-\(UUID().uuidString)").standardizedFileURL
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: other) }
+        let moved = try Handoff.prepare(conversation("claude", source: source), to: "claude", in: other.path, now: now.addingTimeInterval(2))
+        XCTAssertEqual(moved.directory, other.path)
+        XCTAssertTrue(moved.file.hasPrefix(other.path + "/.agentterm/handoffs/"), moved.file)
+        XCTAssertTrue(moved.command.hasPrefix("claude '"), "the same agent can take it over in another folder")
+        let movedText = try String(contentsOfFile: moved.file, encoding: .utf8)
+        XCTAssertTrue(movedText.contains("- Folder: \(root.path)"))
+        XCTAssertTrue(movedText.contains("- Continue in: \(other.path)"))
+        XCTAssertTrue(movedText.contains(" M app.txt"), "the state of the folder the work happened in")
+        XCTAssertEqual(prepared.directory, root.path)
+        XCTAssertFalse(text.contains("Continue in:"))
+        XCTAssertThrowsError(try Handoff.prepare(conversation("claude", source: source), to: "codex", in: "/nonexistent/folder"))
+
         // A second handoff does not add the exclude line again.
         _ = try Handoff.prepare(conversation("claude", source: source), to: "agy", now: now.addingTimeInterval(1))
         let exclude = try String(contentsOf: root.appendingPathComponent(".git/info/exclude"), encoding: .utf8)

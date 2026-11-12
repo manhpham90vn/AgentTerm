@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 4
+public let agenttermProtocolVersion = 5
 
 /// Default TCP port the host daemon listens on.
 public var agenttermDefaultPort: UInt16 { AppChannel.current.defaultPort }
@@ -152,6 +152,8 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Adds a project folder to the list every client shares.
     case addFolder(path: String)
     case removeFolder(path: String)
+    /// Puts a listed folder just before another, or last when `before` is nil.
+    case moveFolder(path: String, before: String?)
     /// Asks for a folder's uncommitted git changes, without the diffs.
     case diff(path: String)
     /// Asks for the diff of one changed file: the staged part of it, or
@@ -167,6 +169,9 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Asks for what the agents' accounts have used and have left. With
     /// `refresh`, the agents' services are asked again first.
     case accountUsage(refresh: Bool)
+    /// Replaces how the tabs are arranged: order, pins and groups. The host
+    /// keeps it and passes it on, so the Mac and the phones show the same.
+    case setTabLayout(TabLayout)
     /// Asks for the files and folders in a folder. Answered with `files`.
     case files(path: String)
     /// Asks for what a file holds. Answered with `file`.
@@ -192,7 +197,9 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Hands a conversation's work to `target`, in a new session the sender
     /// is attached to. `plan` is the id of a plan that was shown; `prompt`
     /// replaces that plan's prompt when the user edited it.
-    case handoff(agent: String, sessionID: String, cwd: String, target: String, plan: String?, prompt: String?, note: String, size: TermSize)
+    /// `folder` is where the receiving agent starts. Nil means the folder
+    /// the conversation happened in.
+    case handoff(agent: String, sessionID: String, cwd: String, target: String, plan: String?, prompt: String?, note: String, size: TermSize, folder: String?)
     /// Asks which folders are inside a folder, or inside home when `path` is nil.
     case listDirectory(path: String?)
 }
@@ -205,6 +212,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// Project folders on the host, in the order they were added.
     case folders([String])
     case attached(SessionInfo)
+    /// Sent after `attached` and the session's earlier output that follows
+    /// it: everything before this was a replay of what already happened.
+    case replayed(session: SessionID)
     /// The PTY now has this size. `driver` is true when the receiving client
     /// is the one whose size was chosen.
     case resized(session: SessionID, size: TermSize, driver: Bool)
@@ -226,6 +236,8 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// What the accounts of the agents in use have used and have left. Sent
     /// when asked for and whenever it changes.
     case accountUsage([AccountUsage])
+    /// How the tabs are arranged. Sent on connecting and when a client changes it.
+    case tabLayout(TabLayout)
     /// The files and folders in a folder.
     case files(path: String, entries: [FileEntry])
     /// What a file holds. `data` carries the bytes of an image.

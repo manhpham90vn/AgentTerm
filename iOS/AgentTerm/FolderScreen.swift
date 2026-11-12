@@ -538,7 +538,30 @@ struct ConversationSheet: View {
     @State private var prompt = ""
 
     private var promptIsEdited: Bool { model.handoffPlan.map { prompt != $0.prompt } ?? false }
-    private var targets: [AgentInfo] { model.handoffTargets(from: conversation.agent) }
+    /// Where the receiving agent starts. Empty means the conversation's folder.
+    @State private var folder = ""
+
+    private var destination: String { folder.isEmpty ? conversation.cwd : folder }
+    /// The conversation's own folder, the repositories inside it (an agent
+    /// started in a folder of projects usually worked in one of them), the
+    /// other listed folders, and one picked by hand.
+    private var folderChoices: [String] {
+        let nested = (model.fileListings[conversation.cwd] ?? []).filter { $0.isRepository == true }.map(\.path)
+        var paths = [conversation.cwd]
+        for path in nested + model.folders + [chosen].compactMap({ $0 }) where !paths.contains(path) { paths.append(path) }
+        return paths
+    }
+
+    /// A folder picked with "Choose…".
+    @State private var chosen: String?
+    @State private var choosingFolder = false
+
+    private func label(for path: String) -> String {
+        if path == conversation.cwd { return (path as NSString).lastPathComponent + " (same)" }
+        if path.hasPrefix(conversation.cwd + "/") { return (conversation.cwd as NSString).lastPathComponent + "/" + path.dropFirst(conversation.cwd.count + 1) }
+        return (path as NSString).lastPathComponent
+    }
+    private var targets: [AgentInfo] { model.handoffTargets(from: conversation.agent, sameFolder: destination == conversation.cwd) }
     private var target: AgentInfo? { targets.first { $0.id == targetID } ?? targets.first }
     private var sourceName: String { model.agents.first { $0.id == conversation.agent }?.name ?? conversation.agent }
 
@@ -592,6 +615,23 @@ struct ConversationSheet: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
+                            Group {
+                                HStack {
+                                    Text("Continue in").font(.subheadline).foregroundStyle(.secondary).lineLimit(1)
+                                    Spacer(minLength: 4)
+                                    Button("Choose…") { choosingFolder = true }
+                                        .font(.subheadline)
+                                        .accessibilityIdentifier("choose-folder")
+                                    Picker("Folder", selection: $folder) {
+                                        ForEach(folderChoices, id: \.self) { path in
+                                            Text(label(for: path)).tag(path == conversation.cwd ? "" : path)
+                                        }
+                                    }
+                                    .pickerStyle(.menu)
+                                    // On one line: a folder's name is not broken in two.
+                                    .fixedSize()
+                                }
+                            }
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 8) {
                                     ForEach(targets) { agent in
@@ -655,7 +695,7 @@ struct ConversationSheet: View {
                             Button {
                                 guard let target else { return }
                                 rememberedTarget = target.id
-                                model.handoff(conversation, to: target, prompt: prompt, note: note)
+                                model.handoff(conversation, to: target, prompt: prompt, note: note, in: folder.isEmpty ? nil : folder)
                                 dismiss()
                             } label: {
                                 Label("Hand Off to \(target?.name ?? "Agent")", systemImage: "arrowshape.turn.up.right.fill")
@@ -678,8 +718,18 @@ struct ConversationSheet: View {
                     Button("Close") { dismiss() }
                 }
             }
+            .sheet(isPresented: $choosingFolder) {
+                BrowseSheet(start: destination, pickTitle: "Continue in") { path in
+                    chosen = path == conversation.cwd ? nil : path
+                    folder = path == conversation.cwd ? "" : path
+                }
+                .environmentObject(model)
+                .preferredColorScheme(.dark)
+            }
             .onAppear {
                 targetID = targets.contains { $0.id == rememberedTarget } ? rememberedTarget : (targets.first?.id ?? "")
+                // The repositories inside the conversation's folder, to continue in one.
+                model.loadFiles(conversation.cwd)
                 if !targets.isEmpty { model.requestHandoffPlan(for: conversation) }
             }
             .onChange(of: model.handoffPlan) { _, plan in

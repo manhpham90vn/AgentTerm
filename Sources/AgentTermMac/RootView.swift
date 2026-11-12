@@ -265,7 +265,13 @@ struct CenterView: View {
                             // is centered, so it gets no one-sided padding.
                             .padding(.leading, foreign == nil ? 10 : 0)
                             .padding(.top, foreign == nil ? 6 : 0)
-                            .background(TerminalAreaReader(insets: foreign == nil ? .zero : CGSize(width: 10, height: 6)))
+                            // Room under the last row. The rows fill the
+                            // pane from the top, so what is left over under
+                            // them is anything from nothing to almost a
+                            // row: without this, the last line (an agent's
+                            // status line) can sit right on the edge.
+                            .padding(.bottom, foreign == nil ? 6 : 0)
+                            .background(TerminalAreaReader(insets: foreign == nil ? .zero : CGSize(width: 10, height: 12)))
                         if let info, let agent = info.agent {
                             // What the agent's session has used, under its terminal.
                             Theme.hairline.frame(height: 1)
