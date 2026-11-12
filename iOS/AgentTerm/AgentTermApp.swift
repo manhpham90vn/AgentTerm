@@ -22,8 +22,11 @@ struct AgentTermApp: App {
             Group {
                 if model.hosts.isEmpty {
                     PairView()
+                } else if model.entered {
+                    RootTabs()
                 } else {
-                    SessionsView()
+                    // First the Mac, then what is on it.
+                    MacsScreen()
                 }
             }
             .environmentObject(model)
@@ -35,7 +38,7 @@ struct AgentTermApp: App {
                 Button("Send Crash Reports") { privacy.answer(sendCrashReports: true) }
                 Button("Don't Send", role: .cancel) { privacy.answer(sendCrashReports: false) }
             } message: {
-                Text(TelemetryPreferences.Wording.questionDetail + "\n\nYou can change this, and usage statistics, under Privacy in the menu.")
+                Text(TelemetryPreferences.Wording.questionDetail + "\n\nYou can change this, and usage statistics, in the Settings tab.")
             }
             .onOpenURL { model.pair(with: $0) }
             .onChange(of: scenePhase) { _, phase in

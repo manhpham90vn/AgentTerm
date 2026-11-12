@@ -38,6 +38,12 @@ brew install xcodegen
 ./scripts/pair-ios.sh "iPhone 17" # pair it with the app running on this Mac
 ```
 
+All three in one go, the Mac app, the iPhone app and the pairing:
+
+```sh
+./scripts/run-all.sh "iPhone 17"  # or: make run-all SIM="iPhone 17"
+```
+
 The simulator has no camera, so `pair-ios.sh` pairs with a link instead of the
 QR code. On a real iPhone, run `xcodegen` in `iOS/`, open
 `iOS/AgentTerm.xcodeproj`, pick your team under Signing and run.

@@ -289,6 +289,7 @@ struct DocumentScreen: View {
         .background(Palette.canvas.ignoresSafeArea())
         .navigationTitle((path as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
         // Leaving with unsaved changes asks first, so the system's own back
         // button, which would not, is replaced while there are any.
         .navigationBarBackButtonHidden(isDirty)

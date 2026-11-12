@@ -41,7 +41,56 @@ public enum GitDiff {
             file.status = .added
             files.append(file)
         }
-        return DiffSnapshot(isRepository: true, branch: branch?.isEmpty == false ? branch : nil, files: files)
+        var snapshot = DiffSnapshot(isRepository: true, branch: branch?.isEmpty == false ? branch : nil, files: files)
+        if let branch = snapshot.branch {
+            let followed = tracking(of: branch, in: directory)
+            snapshot.upstream = followed.upstream
+            snapshot.ahead = followed.ahead
+            snapshot.behind = followed.behind
+            if followed.upstream == nil { snapshot.pushRemote = pushRemote(in: directory) }
+        }
+        return snapshot
+    }
+
+    /// The branch a local branch follows, and how far the two are apart as
+    /// of the last fetch. Nothing is asked of the remote here.
+    static func tracking(of branch: String, in directory: String) -> (upstream: String?, ahead: Int?, behind: Int?) {
+        let format = "--format=%(upstream:short)%09%(upstream:track,nobracket)"
+        guard
+            let line = run(["for-each-ref", format, "refs/heads/\(branch)"], in: directory)?
+                .split(whereSeparator: \.isNewline).first
+        else {
+            // A branch without a commit yet, in a clone of an empty
+            // repository for one, is no ref, but may be set up to follow one.
+            func setting(_ name: String) -> String? {
+                let value = run(["config", "--get", "branch.\(branch).\(name)"], in: directory)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return value?.isEmpty == false ? value : nil
+            }
+            guard let remote = setting("remote"), let merge = setting("merge"), merge.hasPrefix("refs/heads/") else { return (nil, nil, nil) }
+            return (remote + "/" + merge.dropFirst("refs/heads/".count), nil, nil)
+        }
+        let parts = line.split(separator: "\t", maxSplits: 1, omittingEmptySubsequences: false)
+        guard let upstream = parts.first, !upstream.isEmpty else { return (nil, nil, nil) }
+        let track = parts.count > 1 ? String(parts[1]) : ""
+        // A branch whose upstream was deleted on the remote has no counts.
+        guard track != "gone" else { return (String(upstream), nil, nil) }
+        return (String(upstream), count("ahead", in: track), count("behind", in: track))
+    }
+
+    /// The number after a word in "ahead 2, behind 1". Zero when the word is not there.
+    static func count(_ word: String, in track: String) -> Int {
+        for part in track.split(separator: ",") {
+            let words = part.split(separator: " ")
+            if words.count == 2, words[0] == word, let number = Int(words[1]) { return number }
+        }
+        return 0
+    }
+
+    /// The remote a branch without an upstream would be pushed to: "origin"
+    /// when there is one, else the only or first remote.
+    static func pushRemote(in directory: String) -> String? {
+        let remotes = (run(["remote"], in: directory) ?? "").split(whereSeparator: \.isNewline).map(String.init)
+        return remotes.contains("origin") ? "origin" : remotes.first
     }
 
     private static func name(_ text: Substring) -> String {
@@ -143,9 +192,74 @@ public enum GitActions {
         return run(["commit", "--quiet", "--message", trimmed], in: directory, timeout: 120)
     }
 
-    private static func run(_ arguments: [String], in directory: String, timeout: TimeInterval = 30) -> String? {
-        // File names are taken as they are, not as patterns.
-        guard let result = Subprocess.run(git, ["-C", directory, "--literal-pathspecs"] + arguments, timeout: timeout, mergeErrors: true) else {
+    /// Pushes the checked out branch to its upstream. A branch without one
+    /// goes to the remote `GitDiff.pushRemote` names, under its own name,
+    /// and follows it from then on.
+    public static func push(in directory: String) -> String? {
+        guard let branch = currentBranch(in: directory) else { return "Check out a branch to push: this is a detached HEAD." }
+        if GitDiff.tracking(of: branch, in: directory).upstream != nil {
+            return run(["push"], in: directory, timeout: remoteTimeout, environment: remoteEnvironment)
+        }
+        guard let remote = GitDiff.pushRemote(in: directory) else { return "This repository has no remote to push to." }
+        return run(["push", "--set-upstream", remote, branch], in: directory, timeout: remoteTimeout, environment: remoteEnvironment)
+    }
+
+    /// Brings in what the upstream has, the way the repository is set up to
+    /// (merge or rebase). A pull that stops on a conflict is undone, since
+    /// there is nowhere here to resolve it.
+    public static func pull(in directory: String) -> String? {
+        guard let branch = currentBranch(in: directory) else { return "Check out a branch to pull: this is a detached HEAD." }
+        guard GitDiff.tracking(of: branch, in: directory).upstream != nil else {
+            return "\(branch) does not follow a branch on a remote yet. Push it first."
+        }
+        // A merge or rebase the user left unfinished is theirs, not this pull's.
+        let before = unfinished(in: directory)
+        guard let problem = run(["pull", "--no-edit"], in: directory, timeout: remoteTimeout, environment: remoteEnvironment) else { return nil }
+        guard before == nil, let left = unfinished(in: directory) else { return problem }
+        _ = run([left, "--abort"], in: directory)
+        return "The pull ran into conflicts and was undone. Pull in a terminal to resolve them.\n\n\(problem)"
+    }
+
+    private static let remoteTimeout: TimeInterval = 120
+
+    /// git must never wait for a password or a passphrase: there is no
+    /// terminal to type it in. Credential helpers and the SSH agent still
+    /// answer; anything that would ask fails with git's own message.
+    static var remoteEnvironment: [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["GIT_TERMINAL_PROMPT"] = "0"
+        environment["GIT_ASKPASS"] = nil
+        environment["SSH_ASKPASS"] = nil
+        environment["SSH_ASKPASS_REQUIRE"] = "never"
+        environment["GIT_EDITOR"] = "true"
+        return environment
+    }
+
+    private static func currentBranch(in directory: String) -> String? {
+        guard let result = Subprocess.run(git, ["-C", directory, "branch", "--show-current"], timeout: 15), result.status == 0 else { return nil }
+        let name = String(decoding: result.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? nil : name
+    }
+
+    /// "merge" or "rebase" when one is under way in the repository.
+    private static func unfinished(in directory: String) -> String? {
+        guard let result = Subprocess.run(git, ["-C", directory, "rev-parse", "--absolute-git-dir"], timeout: 15), result.status == 0 else { return nil }
+        let gitDirectory = URL(fileURLWithPath: String(decoding: result.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
+        func exists(_ name: String) -> Bool { FileManager.default.fileExists(atPath: gitDirectory.appendingPathComponent(name).path) }
+        if exists("rebase-merge") || exists("rebase-apply") { return "rebase" }
+        return exists("MERGE_HEAD") ? "merge" : nil
+    }
+
+    private static func run(
+        _ arguments: [String], in directory: String, timeout: TimeInterval = 30, environment: [String: String]? = nil
+    ) -> String? {
+        // File names are taken as they are, not as patterns. No program is
+        // asked for a password either: see `remoteEnvironment`.
+        guard
+            let result = Subprocess.run(
+                git, ["-C", directory, "--literal-pathspecs", "-c", "core.askPass="] + arguments, timeout: timeout, mergeErrors: true,
+                environment: environment)
+        else {
             return "git could not be started."
         }
         guard result.status != 0 else { return nil }

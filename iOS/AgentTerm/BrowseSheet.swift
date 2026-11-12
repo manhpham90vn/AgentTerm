@@ -134,36 +134,12 @@ private struct StartHere: View {
                     .font(.footnote.weight(.semibold))
                     .disabled(isListed)
             }
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(model.installedAgents) { agent in
-                        chip(agent.name, id: agent.id) { model.launch(agent, in: path) }
-                    }
-                    chip("Shell", id: "shell") { model.launch(nil, in: path) }
-                }
-            }
+            LaunchGrid(folder: path, labelSuffix: " here", showsSSH: false)
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
         .padding(.bottom, 10)
         .background(Palette.panel)
         .overlay(alignment: .top) { Palette.hairline.frame(height: 1) }
-    }
-
-    private func chip(_ title: String, id: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: AgentStyle.symbol(for: id))
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(AgentStyle.accent(for: id))
-                Text(title).font(.system(size: 14, weight: .medium))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Capsule().fill(Palette.raised))
-            .overlay(Capsule().strokeBorder(Palette.hairline))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Start \(title) here")
     }
 }

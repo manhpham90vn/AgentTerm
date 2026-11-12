@@ -53,6 +53,7 @@ struct SessionTabs: View {
                         // the strip scrolls sideways only, and with nothing
                         // taller than it there is nothing to move up or down.
                         .frame(height: Self.stripHeight)
+                        .background(WheelScrollsSideways())
                     }
                     .frame(height: Self.stripHeight)
                     .scrollBounceBehavior(.basedOnSize, axes: .vertical)
@@ -487,5 +488,51 @@ struct TabArrangeMenu: View {
         Divider()
         Button("Move Left") { model.moveTab(id, by: -1) }.disabled(index == nil || index == 0)
         Button("Move Right") { model.moveTab(id, by: 1) }.disabled(index == nil || index == visible.count - 1)
+    }
+}
+
+/// Lets a mouse wheel move the strip of tabs sideways.
+///
+/// The strip scrolls sideways only, and a wheel turns up and down: with a
+/// mouse there was no way to reach the tabs past the edge. A turn of the
+/// wheel over the strip now moves it sideways, as in a browser. A trackpad's
+/// own sideways swipe is left to the scroll view.
+private struct WheelScrollsSideways: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ view: NSView, context: Context) {}
+
+    private final class Probe: NSView {
+        private var monitor: Any?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let monitor { NSEvent.removeMonitor(monitor) }
+            monitor = nil
+            guard window != nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+                self?.handle(event) ?? event
+            }
+        }
+
+        deinit { if let monitor { NSEvent.removeMonitor(monitor) } }
+
+        /// Returns nil for an event that was used here.
+        private func handle(_ event: NSEvent) -> NSEvent? {
+            guard let scrollView = enclosingScrollView, event.window === window, let document = scrollView.documentView else { return event }
+            let place = scrollView.convert(event.locationInWindow, from: nil)
+            guard scrollView.bounds.contains(place) else { return event }
+            // Mostly up and down: that is a wheel, or a swipe that was not
+            // meant sideways. Sideways motion is the scroll view's own.
+            let vertical = event.scrollingDeltaY
+            guard abs(vertical) > abs(event.scrollingDeltaX), vertical != 0 else { return event }
+            let step = event.hasPreciseScrollingDeltas ? vertical : vertical * 12
+            let clip = scrollView.contentView
+            let furthest = max(0, document.frame.width - clip.bounds.width)
+            var origin = clip.bounds.origin
+            origin.x = min(max(0, origin.x - step), furthest)
+            clip.scroll(to: origin)
+            scrollView.reflectScrolledClipView(clip)
+            return nil
+        }
     }
 }

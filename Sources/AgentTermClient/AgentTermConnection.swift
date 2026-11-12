@@ -3,7 +3,7 @@ import Foundation
 import Network
 
 /// A WebSocket connection to an AgentTerm host. Works on macOS and iOS.
-///111
+///
 /// Built on Network.framework rather than URLSession: the host speaks plain
 /// `ws://` inside loopback or a Tailscale tunnel, which App Transport Security
 /// would refuse for URLSession on iOS.
@@ -34,6 +34,22 @@ public final class AgentTermConnection: @unchecked Sendable {
     private let queue = DispatchQueue(label: "agentterm.client")
     /// Touched on the main queue only.
     private var closed = false
+
+    // A connection that died without a word is the common case on a phone:
+    // the network changed, the tunnel dropped, the app was asleep. Nothing
+    // says so; what is sent simply goes nowhere, and TCP takes minutes to
+    // give up. So the host is asked for a sign of life whenever it has been
+    // quiet, and a connection that does not answer is closed here, which is
+    // what lets the app connect again. All of this is on `queue`.
+    private var heartbeat: DispatchSourceTimer?
+    private var lastHeard = DispatchTime.now()
+    private var lastTick = DispatchTime.now()
+    private var pingSentAt: DispatchTime?
+    /// How often the connection is looked at, how long a quiet host is left
+    /// alone, and how long it has to answer.
+    private static let heartbeatInterval: TimeInterval = 2
+    private static let quietBeforePing: TimeInterval = 4
+    private static let pongTimeout: TimeInterval = 6
 
     public convenience init(host: String, port: UInt16, token: String, clientName: String) {
         self.init(host: host, port: port, credential: .token(token), clientName: clientName)
@@ -75,6 +91,7 @@ public final class AgentTermConnection: @unchecked Sendable {
                 }
                 self.deliver { if !self.closed { self.onState?(.connected) } }
                 self.receive()
+                self.startHeartbeat()
             case .waiting(let error), .failed(let error):
                 // `.waiting` covers "connection refused" and "no route". The
                 // caller decides when to retry, so do not linger here.
@@ -100,6 +117,65 @@ public final class AgentTermConnection: @unchecked Sendable {
         finish(reason: nil)
     }
 
+    /// Asks the host for a sign of life now. For when the app comes back to
+    /// the front: the connection it left may no longer be one.
+    public func check() {
+        queue.async { [weak self] in
+            guard let self, self.heartbeat != nil else { return }
+            self.pingSentAt = nil
+            self.ping()
+        }
+    }
+
+    private func startHeartbeat() {
+        lastHeard = .now()
+        lastTick = .now()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + Self.heartbeatInterval, repeating: Self.heartbeatInterval)
+        timer.setEventHandler { [weak self] in self?.beat() }
+        heartbeat = timer
+        timer.resume()
+    }
+
+    private func beat() {
+        let now = DispatchTime.now()
+        let sinceTick = Self.seconds(from: lastTick, to: now)
+        lastTick = now
+        if sinceTick > Self.heartbeatInterval * 3 {
+            // The app was suspended in between. How long the host has been
+            // quiet says nothing then: ask afresh and give it its time.
+            pingSentAt = nil
+            ping()
+            return
+        }
+        if let sent = pingSentAt {
+            if Self.seconds(from: sent, to: now) > Self.pongTimeout { finish(reason: "The connection to the Mac was lost.") }
+        } else if Self.seconds(from: lastHeard, to: now) > Self.quietBeforePing {
+            ping()
+        }
+    }
+
+    private func ping() {
+        pingSentAt = .now()
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .ping)
+        metadata.setPongHandler(queue) { [weak self] error in
+            guard let self, error == nil else { return }
+            self.heard()
+        }
+        let context = NWConnection.ContentContext(identifier: "ping", metadata: [metadata])
+        connection.send(content: Data(), contentContext: context, completion: .idempotent)
+    }
+
+    /// Anything from the host is a sign of life.
+    private func heard() {
+        lastHeard = .now()
+        pingSentAt = nil
+    }
+
+    private static func seconds(from start: DispatchTime, to end: DispatchTime) -> TimeInterval {
+        end.uptimeNanoseconds > start.uptimeNanoseconds ? TimeInterval(end.uptimeNanoseconds - start.uptimeNanoseconds) / 1_000_000_000 : 0
+    }
+
     private func send(_ data: Data, opcode: NWProtocolWebSocket.Opcode) {
         let metadata = NWProtocolWebSocket.Metadata(opcode: opcode)
         let context = NWConnection.ContentContext(identifier: "message", metadata: [metadata])
@@ -114,6 +190,7 @@ public final class AgentTermConnection: @unchecked Sendable {
                 return
             }
             let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition) as? NWProtocolWebSocket.Metadata
+            self.heard()
             switch metadata?.opcode {
             case .text:
                 if let data, let message = MessageCoding.decode(ServerMessage.self, from: data) {
@@ -138,6 +215,10 @@ public final class AgentTermConnection: @unchecked Sendable {
     }
 
     private func finish(reason: String?) {
+        queue.async { [weak self] in
+            self?.heartbeat?.cancel()
+            self?.heartbeat = nil
+        }
         deliver {
             guard !self.closed else { return }
             self.closed = true

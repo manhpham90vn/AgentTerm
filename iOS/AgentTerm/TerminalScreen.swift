@@ -15,6 +15,23 @@ struct TerminalScreen: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if model.status != .connected {
+                // The session is still running on the Mac. The app is
+                // getting back to it by itself; nothing to do but wait.
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("Reconnecting to \(model.pairing?.name ?? "the Mac")…")
+                        .font(.footnote)
+                        .lineLimit(1)
+                    Spacer()
+                    Button("Try Now") { model.retry() }
+                        .font(.footnote.weight(.semibold))
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(Palette.panel)
+                .accessibilityIdentifier("reconnecting")
+            }
             if let size = model.foreignSize {
                 ForeignSizeBanner(size: size)
             }
@@ -27,16 +44,20 @@ struct TerminalScreen: View {
                     // right on the edge of what is below.
                     .padding(.bottom, model.foreignSize == nil ? 4 : 0)
                 if let info = model.session(session), let agent = info.agent {
-                    UsageBar(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent], compact: true) { showingUsage = true }
-                        .background(Palette.panel)
-                        .sheet(isPresented: $showingUsage) {
-                            ScrollView {
-                                UsageDetails(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent]) { model.refreshAccountUsage() }
+                    UsageBar(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent], compact: true) {
+                        showingUsage = true
+                    }
+                    .background(Palette.panel)
+                    .sheet(isPresented: $showingUsage) {
+                        ScrollView {
+                            UsageDetails(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent]) {
+                                model.refreshAccountUsage()
                             }
-                            .background(Palette.canvas.ignoresSafeArea())
-                            .presentationDetents([.medium, .large])
-                            .preferredColorScheme(.dark)
                         }
+                        .background(Palette.canvas.ignoresSafeArea())
+                        .presentationDetents([.medium, .large])
+                        .preferredColorScheme(.dark)
+                    }
                 }
                 KeyBar(controller: controller)
                 ComposeBar(controller: controller)
@@ -48,6 +69,8 @@ struct TerminalScreen: View {
         }
         .background(Palette.canvas.ignoresSafeArea())
         .navigationTitle(model.session(session)?.displayName ?? "Session")
+        // The terminal needs the room, and its own bars are under it.
+        .toolbar(.hidden, for: .tabBar)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {

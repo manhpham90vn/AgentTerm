@@ -36,6 +36,13 @@ struct AgentTermApp: App {
                     Button("New \(agent.name)") { model.launch(agent) }
                         .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: [.command, .shift])
                 }
+                if !model.sshHosts.isEmpty {
+                    Menu("New SSH Session") {
+                        ForEach(model.sshHosts, id: \.self) { host in
+                            Button(host) { model.connectSSH(host) }
+                        }
+                    }
+                }
                 Divider()
                 Button("Add Folder…") { model.addFolder() }
                     .keyboardShortcut("o")
@@ -114,6 +121,23 @@ private struct MenuBarMenu: View {
             showWindow()
             model.launch(nil)
         }
+        if !model.sshHosts.isEmpty {
+            Menu("New SSH Session") {
+                ForEach(model.sshHosts, id: \.self) { host in
+                    Button(host) {
+                        showWindow()
+                        model.connectSSH(host)
+                    }
+                }
+            }
+        }
+        if let keepAwake = model.keepAwake {
+            Divider()
+            Toggle("Keep Mac Awake", isOn: Binding(get: { keepAwake }, set: { model.setKeepAwake($0) }))
+            if keepAwake, let until = model.keepAwakeOptions.until {
+                Text("Until \(until.formatted(date: .omitted, time: .shortened))")
+            }
+        }
         Divider()
         Button("Pair iPhone…") {
             showWindow()
@@ -155,6 +179,7 @@ private struct SettingsTabs: View {
     var body: some View {
         TabView(selection: $tab) {
             SettingsView().tabItem { Label("General", systemImage: "gearshape") }.tag("general")
+            GitSettingsView().tabItem { Label("Git", systemImage: "arrow.triangle.branch") }.tag("git")
             PermissionsView().tabItem { Label("Permissions", systemImage: "lock.shield") }.tag("permissions")
             PrivacySettingsView().tabItem { Label("Privacy", systemImage: "hand.raised") }.tag("privacy")
         }
@@ -164,6 +189,7 @@ private struct SettingsTabs: View {
 private struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage(MenuBarMode.key) private var staysInMenuBar = MenuBarMode.defaultValue
+    @AppStorage(SystemStats.temperatureUnitKey) private var temperatureUnit = SystemStats.celsius
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -192,7 +218,7 @@ private struct SettingsView: View {
                             Text("Keep the Mac awake while sessions are running")
                                 .font(.system(size: 13, weight: .medium))
                             Text(
-                                "The Mac does not go to sleep by itself while a session is open, so agents keep working and your iPhone can still reach them. The display may still turn off, and closing the lid still puts the Mac to sleep. With no session open the Mac sleeps as usual."
+                                "The Mac does not go to sleep by itself while a session is open, so agents keep working and your iPhone can still reach them. Closing the lid still puts the Mac to sleep. With no session open the Mac sleeps as usual."
                             )
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
@@ -200,6 +226,24 @@ private struct SettingsView: View {
                         }
                     }
                     .toggleStyle(.switch)
+                    KeepAwakeOptionsView(isOn: keepAwake)
+                }
+            }
+            SettingsCard {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Temperature").font(.system(size: 13, weight: .medium))
+                        Text("The unit of the Mac's temperature in the line under the launch buttons. The iPhone app follows.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer(minLength: 12)
+                    Picker("Temperature", selection: Binding(get: { temperatureUnit }, set: { unit in model.setDisplay { $0.temperatureUnit = unit } })) {
+                        Text("Celsius (°C)").tag(SystemStats.celsius)
+                        Text("Fahrenheit (°F)").tag(SystemStats.fahrenheit)
+                    }
+                    .labelsHidden()
+                    .fixedSize()
                 }
             }
             SettingsCard {
@@ -212,11 +256,225 @@ private struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
+                Divider().padding(.vertical, 10)
+                HStack(spacing: 16) {
+                    Text("About").font(.system(size: 13, weight: .medium))
+                    Spacer()
+                    Link(destination: ProjectLinks.page) { Label("Project page", systemImage: "globe") }
+                        .help(ProjectLinks.page.absoluteString)
+                    Link(destination: ProjectLinks.source) { Label("Source on GitHub", systemImage: "chevron.left.forwardslash.chevron.right") }
+                        .help(ProjectLinks.source.absoluteString)
+                }
+                .font(.system(size: 12.5))
             }
         }
         .padding(24)
         .frame(width: 600, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// How the Mac is kept awake: for how long, the display too, only on
+/// power. The host keeps these, so the iPhone shows the same.
+private struct KeepAwakeOptionsView: View {
+    @EnvironmentObject private var model: AppModel
+    let isOn: Bool
+
+    private func binding<Value>(_ keyPath: WritableKeyPath<KeepAwakeOptions, Value>) -> Binding<Value> {
+        Binding(
+            get: { model.keepAwakeOptions[keyPath: keyPath] },
+            set: {
+                var options = model.keepAwakeOptions
+                options[keyPath: keyPath] = $0
+                model.setKeepAwakeOptions(options)
+            })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Divider().padding(.vertical, 4)
+            HStack {
+                Text("Turn off by itself").font(.system(size: 12.5))
+                Spacer()
+                if isOn, let until = model.keepAwakeOptions.until {
+                    Text("Ends at \(until.formatted(date: .omitted, time: .shortened))")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                }
+                Picker("Turn off by itself", selection: binding(\.minutes)) {
+                    ForEach(KeepAwakeOptions.durations, id: \.self) { minutes in
+                        Text(minutes == nil ? "Never" : "After \(KeepAwakeOptions.label(minutes: minutes))").tag(minutes)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+            }
+            Toggle(isOn: binding(\.display)) {
+                Text("Keep the display on too").font(.system(size: 12.5))
+            }
+            Toggle(isOn: binding(\.onlyOnPower)) {
+                Text("Only while the Mac is plugged in").font(.system(size: 12.5))
+            }
+        }
+        .toggleStyle(.checkbox)
+    }
+}
+
+/// Which agent writes commit messages in the Git tab, and how it is asked.
+/// The host keeps these, so the iPhone's Write button does the same.
+private struct GitSettingsView: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var modelName = ""
+    @State private var prompt = ""
+    /// The same choice the button in a diff's header makes.
+    @AppStorage("diffLayout") private var diffLayout = "unified"
+    /// The same choice the button above the list of changes makes.
+    @AppStorage(DisplaySettings.changesViewKey) private var changesView = "list"
+
+    private var agent: Binding<String> {
+        Binding(
+            get: { model.commitWriter.agent ?? "" },
+            set: {
+                var settings = model.commitWriter
+                settings.agent = $0.isEmpty ? nil : $0
+                // A model belongs to an agent: another agent starts on its own.
+                settings.model = nil
+                model.setCommitWriter(settings)
+            })
+    }
+
+    /// The agent that writes when none is chosen.
+    private var firstInstalled: AgentInfo? { model.installedAgents.first }
+    private var writerID: String? { model.commitWriter.agent ?? firstInstalled?.id }
+    private var isChanged: Bool {
+        modelName.trimmingCharacters(in: .whitespaces) != (model.commitWriter.model ?? "") || prompt != model.commitWriter.effectivePrompt
+    }
+
+    private func load() {
+        modelName = model.commitWriter.model ?? ""
+        prompt = model.commitWriter.effectivePrompt
+    }
+
+    private func save() {
+        var settings = model.commitWriter
+        let name = modelName.trimmingCharacters(in: .whitespaces)
+        settings.model = name.isEmpty ? nil : name
+        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        settings.prompt = text.isEmpty || text == CommitWriterSettings.defaultPrompt ? nil : text
+        model.setCommitWriter(settings)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsHeader(
+                symbol: "sparkles", tint: .purple, title: "Commit Messages",
+                subtitle: "The Write button of the Git tab asks an agent for the message of what is staged. It never commits by itself.")
+            SettingsCard {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("Agent").font(.system(size: 13, weight: .medium))
+                        Spacer()
+                        Picker("Agent", selection: agent) {
+                            Text(firstInstalled.map { "First installed (\($0.name))" } ?? "First installed").tag("")
+                            ForEach(model.installedAgents) { agent in
+                                Text(agent.name).tag(agent.id)
+                            }
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                    HStack {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Model").font(.system(size: 13, weight: .medium))
+                            Text("As the agent's --model option takes it. Empty uses a cheap model where one is known, else the agent's own.")
+                                .font(.system(size: 11.5))
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 12)
+                        TextField(writerID.flatMap(CommitWriterSettings.defaultModel) ?? "Agent's default", text: $modelName)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 190)
+                            .onSubmit(save)
+                            .accessibilityLabel("Model")
+                    }
+                }
+            }
+            SettingsCard {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Prompt").font(.system(size: 13, weight: .medium))
+                    Text("What the agent is told. The staged changes follow it. Say here which style and language you want.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                    TextEditor(text: $prompt)
+                        .font(.system(size: 12))
+                        .scrollContentBackground(.hidden)
+                        .padding(6)
+                        .frame(height: 150)
+                        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.primary.opacity(0.06)))
+                        .accessibilityLabel("Prompt")
+                    HStack {
+                        Button("Reset to Default") {
+                            prompt = CommitWriterSettings.defaultPrompt
+                            save()
+                        }
+                        .disabled(prompt == CommitWriterSettings.defaultPrompt && model.commitWriter.prompt == nil)
+                        Spacer()
+                        Button("Save", action: save)
+                            .keyboardShortcut("s")
+                            .disabled(!isChanged)
+                    }
+                    .controlSize(.small)
+                }
+            }
+            SettingsCard {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Show diffs as").font(.system(size: 13, weight: .medium))
+                        Text("How a diff opens. The button in a diff's header switches for that moment and is remembered too.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 12)
+                    Picker("Show diffs as", selection: Binding(get: { diffLayout }, set: { layout in model.setDisplay { $0.diffLayout = layout } })) {
+                        Text("One panel").tag("unified")
+                        Text("Two panels, side by side").tag("split")
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                Divider().padding(.vertical, 10)
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Show changes as").font(.system(size: 13, weight: .medium))
+                        Text("The changed files of the Git tab: one flat list, or grouped by folder. The button above the list switches too.")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 12)
+                    Picker("Show changes as", selection: Binding(get: { changesView }, set: { view in model.setDisplay { $0.changesView = view } })) {
+                        Text("Flat list").tag("list")
+                        Text("By folder").tag("tree")
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                }
+            }
+            Label(
+                "The agent runs once, without a terminal and with no way to change your files, in a folder of AgentTerm's own, so it leaves no conversation in your project. Large changes are cut down before they are sent.",
+                systemImage: "info.circle"
+            )
+            .font(.system(size: 11.5))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(24)
+        .frame(width: 600, alignment: .top)
+        .fixedSize(horizontal: false, vertical: true)
+        .onAppear(perform: load)
+        .onChange(of: model.commitWriter) { _, _ in load() }
     }
 }
 

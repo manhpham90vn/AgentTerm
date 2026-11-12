@@ -1,6 +1,7 @@
 import AgentTermClient
 import AgentTermHost
 import AgentTermProtocol
+import Network
 import XCTest
 
 /// Drives a real server over a real WebSocket on the loopback interface.
@@ -218,6 +219,77 @@ final class EndToEndTests: XCTestCase {
         // The one that started the session is told too, with nothing to replay.
         XCTAssertTrue(first.messages.contains(.replayed(session: id)))
         second.connection.send(.kill(session: id))
+    }
+
+    func testALongReplayArrivesWholeInPiecesAndStartsOnALine() throws {
+        // A small limit, so the oldest output is dropped the way megabytes
+        // of it would be with the real one.
+        let host = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false, scrollbackLimit: 600_000))
+        let hostPort = try host.start()
+        defer { host.stop() }
+        let first = TestClient(port: hostPort, token: token, name: "first")
+        waitUntil("welcome") { first.welcomed }
+        // 20,000 numbered lines of 60 characters: 1.2 MB, twice the limit.
+        first.connection.send(.create(CreateRequest(command: "seq -f 'line-%06g-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' 1 20000; echo the-end; exec cat")))
+        waitUntil("attached") { first.attached != nil }
+        let id = try XCTUnwrap(first.attached?.id)
+        waitUntil("all written", timeout: 30) { first.text(id).contains("the-end") }
+
+        let late = TestClient(port: hostPort, token: token, name: "late")
+        waitUntil("welcome") { late.welcomed }
+        var pieces = 0
+        late.connection.onOutput = { [weak late] session, data in
+            pieces += 1
+            late?.output[session, default: Data()].append(data)
+        }
+        late.connection.send(.attach(session: id, size: .default))
+        waitUntil("replay marked", timeout: 30) { late.messages.contains(.replayed(session: id)) }
+        let replay = late.text(id)
+        XCTAssertGreaterThan(pieces, 1, "more than one message's worth came in one piece")
+        XCTAssertGreaterThanOrEqual(replay.utf8.count, 500_000, "most of what is kept was not replayed")
+        XCTAssertTrue(replay.hasSuffix("the-end\r\n"), "the newest output is the end of the replay")
+        XCTAssertTrue(replay.hasPrefix("line-0"), "the replay starts in the middle of a line: \(replay.prefix(40))")
+        XCTAssertFalse(replay.contains("line-000001-"), "the oldest output should have been dropped")
+        // No line is lost or torn where two pieces meet.
+        let numbers = replay.split(separator: "\r\n").compactMap { $0.hasPrefix("line-") ? Int($0.dropFirst(5).prefix(6)) : nil }
+        XCTAssertEqual(numbers.last, 20000)
+        XCTAssertEqual(numbers, Array((numbers.first ?? 0)...20000))
+        first.connection.send(.kill(session: id))
+    }
+
+    func testAConnectionThatWentDeadIsNoticedAndALiveOneIsKept() throws {
+        // A host that takes the connection and then says nothing more, not
+        // even an answer to a ping: what a phone has after its network changed.
+        let options = NWProtocolWebSocket.Options()
+        options.autoReplyPing = false
+        let parameters = NWParameters.tcp
+        parameters.defaultProtocolStack.applicationProtocols.insert(options, at: 0)
+        let silent = try NWListener(using: parameters, on: .any)
+        var held: [NWConnection] = []
+        silent.newConnectionHandler = { connection in
+            held.append(connection)
+            connection.start(queue: .main)
+        }
+        silent.start(queue: .main)
+        defer {
+            silent.cancel()
+            held.forEach { $0.cancel() }
+        }
+        waitUntil("listening") { (silent.port?.rawValue ?? 0) != 0 }
+
+        let dead = TestClient(port: try XCTUnwrap(silent.port?.rawValue), token: token, name: "dead")
+        let alive = connect("alive")
+        waitUntil("connected to the silent host") { dead.state == .connected }
+        let started = Date()
+        waitUntil("given up on", timeout: 25) { dead.isClosed }
+        XCTAssertEqual(dead.state, .closed(reason: "The connection to the Mac was lost."))
+        XCTAssertGreaterThan(Date().timeIntervalSince(started), 5, "a quiet host is asked before it is given up on")
+        // The real host, which answers, was asked the same and is still there.
+        XCTAssertFalse(alive.isClosed)
+        alive.connection.check()
+        alive.connection.send(.list)
+        let before = alive.messages.count
+        waitUntil("still answering") { alive.messages.count > before }
     }
 
     func testAgentListReportsWhatIsInstalled() {
@@ -659,6 +731,313 @@ final class EndToEndTests: XCTestCase {
         phone.connection.send(.handoff(agent: "claude", sessionID: "no-such", cwd: project, target: "codex", plan: plan!.id, prompt: nil, note: "", size: .default, folder: nil))
         waitUntil("unknown conversation") { phone.messages.contains(.error("That conversation is no longer on this Mac.")) }
         XCTAssertEqual(withHome.sessionCount, 0)
+    }
+
+    // MARK: 0.4.0: push and pull, commit messages, resources, keep awake options, SSH hosts
+
+    private func state(_ name: String) -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-\(name)-\(UUID().uuidString)").standardizedFileURL
+    }
+
+    func testPushingAndPullingFromAClient() throws {
+        let root = state("e2e-sync")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let remote = root.appendingPathComponent("remote.git"), mine = root.appendingPathComponent("mine"), theirs = root.appendingPathComponent("theirs")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        git("init", "-q", "--bare", "-b", "main", remote.path, in: root)
+        for clone in [mine, theirs] {
+            git("clone", "-q", remote.path, clone.path, in: root)
+            git("config", "user.name", "Test", in: clone)
+            git("config", "user.email", "test@example.com", in: clone)
+            git("config", "commit.gpgsign", "false", in: clone)
+            git("config", "pull.rebase", "false", in: clone)
+            git("checkout", "-q", "-B", "main", in: clone)
+        }
+        try "one\n".write(to: mine.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: mine)
+        git("commit", "-q", "-m", "init", in: mine)
+        git("push", "-q", "-u", "origin", "main", in: mine)
+        git("checkout", "-q", "-b", "work", in: mine)
+        try "work\n".write(to: mine.appendingPathComponent("w.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: mine)
+        git("commit", "-q", "-m", "work", in: mine)
+
+        let phone = connect("phone")
+        func latest(_ folder: URL) -> DiffSnapshot? {
+            phone.messages.compactMap { if case .diff(folder.path, let snapshot) = $0 { return snapshot } else { return nil } }.last
+        }
+        // The first push of a branch: the changes say where it would go.
+        phone.connection.send(.diff(path: mine.path))
+        waitUntil("no upstream yet") { latest(mine)?.pushRemote == "origin" && latest(mine)?.upstream == nil }
+        phone.connection.send(.gitPush(path: mine.path))
+        waitUntil("pushed, and following") { latest(mine)?.upstream == "origin/work" && latest(mine)?.ahead == 0 && latest(mine)?.pushRemote == nil }
+
+        // The other clone had nothing; pulling brings the first commit in.
+        phone.connection.send(.gitPull(path: theirs.path))
+        waitUntil("pulled") { FileManager.default.fileExists(atPath: theirs.appendingPathComponent("a.txt").path) && latest(theirs)?.behind == 0 }
+
+        // A push git refuses is answered with git's words, then the changes.
+        try "two\n".write(to: theirs.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: theirs)
+        git("commit", "-q", "-m", "theirs", in: theirs)
+        git("push", "-q", in: theirs)
+        git("checkout", "-q", "main", in: mine)
+        try "mine\n".write(to: mine.appendingPathComponent("c.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: mine)
+        git("commit", "-q", "-m", "mine", in: mine)
+        phone.connection.send(.gitPush(path: mine.path))
+        waitUntil("refused") {
+            phone.messages.contains { if case .error(let text) = $0 { return text.contains("rejected") || text.contains("fetch first") } else { return false } }
+        }
+        waitUntil("still ahead") { latest(mine)?.upstream == "origin/main" && latest(mine)?.ahead == 1 }
+    }
+
+    func testAnAgentWritesTheCommitMessageAndTheSettingsAreSharedAndSaved() throws {
+        let root = state("e2e-writer")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let project = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        git("init", "-q", "-b", "main", in: project)
+        try "one\n".write(to: project.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: project)
+
+        // Stand-ins for two agents: one answers, one never does.
+        let received = root.appendingPathComponent("received.txt")
+        func fake(_ name: String, _ script: String) throws -> String {
+            let file = root.appendingPathComponent(name)
+            try ("#!/bin/sh\n" + script + "\n").write(to: file, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+            return file.path
+        }
+        let quick = try fake("fake-claude", "cat > '\(received.path)'\necho 'feat: add a file'")
+        let slow = try fake("fake-codex", "exec sleep 60")
+        let file = root.appendingPathComponent("state/folders.json")
+        let configuration = HostServer.Configuration(
+            port: 0, token: token, listenOnTailscale: false,
+            detectAgents: { [AgentInfo(id: "claude", name: "Claude Code", path: quick), AgentInfo(id: "codex", name: "Codex", path: slow)] },
+            foldersFile: file)
+        func settings(_ client: TestClient) -> CommitWriterSettings? {
+            client.messages.compactMap { if case .commitWriter(let settings) = $0 { return settings } else { return nil } }.last
+        }
+        func answers(_ client: TestClient) -> [String?] {
+            client.messages.compactMap { if case .commitMessage(project.path, let message) = $0 { return .some(message) } else { return nil } }
+        }
+        do {
+            let host = HostServer(configuration: configuration)
+            let hostPort = try host.start()
+            defer { host.stop() }
+            let mac = TestClient(port: hostPort, token: token, name: "mac")
+            let phone = TestClient(port: hostPort, token: token, name: "phone")
+            waitUntil("defaults") { settings(mac) == CommitWriterSettings() && settings(phone) == CommitWriterSettings() }
+
+            phone.connection.send(.writeCommitMessage(path: project.path))
+            waitUntil("written", timeout: 30) { answers(phone) == ["feat: add a file"] }
+            XCTAssertEqual(answers(mac), [], "only the one who asked is answered")
+            XCTAssertTrue(try String(contentsOf: received, encoding: .utf8).hasPrefix("Write a git commit message"))
+
+            // Changed on the Mac: the phone hears of it. An agent the host
+            // does not know, and blank fields, are not kept.
+            mac.connection.send(.setCommitWriter(CommitWriterSettings(agent: "codex", model: "  ", prompt: "Viết bằng tiếng Việt.")))
+            let wanted = CommitWriterSettings(agent: "codex", model: nil, prompt: "Viết bằng tiếng Việt.")
+            waitUntil("shared") { settings(phone) == wanted }
+
+            // The agent that never answers is stopped on request, without an error.
+            phone.connection.send(.writeCommitMessage(path: project.path))
+            RunLoop.main.run(until: Date().addingTimeInterval(1.5))
+            phone.connection.send(.cancelCommitMessage(path: project.path))
+            waitUntil("stopped", timeout: 30) { answers(phone) == ["feat: add a file", nil] }
+            XCTAssertFalse(phone.messages.contains { if case .error = $0 { return true } else { return false } })
+
+            // Nothing staged: said in words, and answered with no message.
+            git("commit", "-q", "-m", "init", in: project)
+            mac.connection.send(.setCommitWriter(CommitWriterSettings(agent: "nonsense")))
+            waitUntil("unknown agent dropped") { settings(phone) == CommitWriterSettings() }
+            phone.connection.send(.writeCommitMessage(path: project.path))
+            waitUntil("nothing staged", timeout: 30) {
+                phone.messages.contains { if case .error(let text) = $0 { return text.contains("Stage the changes") } else { return false } }
+                    && answers(phone).count == 3
+            }
+            mac.connection.send(.setCommitWriter(wanted))
+            waitUntil("set again") { settings(phone) == wanted }
+        }
+        let again = HostServer(configuration: configuration)
+        let againPort = try again.start()
+        defer { again.stop() }
+        let late = TestClient(port: againPort, token: token, name: "late")
+        waitUntil("kept") { settings(late) == CommitWriterSettings(agent: "codex", model: nil, prompt: "Viết bằng tiếng Việt.") }
+    }
+
+    func testEveryClientIsToldHowTheMacIsDoing() throws {
+        var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false)
+        configuration.refreshInterval = 0.4
+        let host = HostServer(configuration: configuration)
+        let hostPort = try host.start()
+        defer { host.stop() }
+        let phone = TestClient(port: hostPort, token: token, name: "phone")
+        func stats(_ client: TestClient) -> [SystemStats] {
+            client.messages.compactMap { if case .systemStats(let stats) = $0 { return stats } else { return nil } }
+        }
+        // No session is needed: it is the Mac that is measured.
+        waitUntil("measured") { (stats(phone).last?.memoryTotal ?? 0) > 0 }
+        XCTAssertLessThanOrEqual(stats(phone).last?.cpuPercent ?? 101, 100)
+        // A client that connects later is told at once what is known.
+        let late = TestClient(port: hostPort, token: token, name: "mac")
+        waitUntil("told on connecting") { !stats(late).isEmpty }
+    }
+
+    func testHowThingsAreShownIsTheSameOnEveryDevice() throws {
+        let file = state("display").appendingPathComponent("folders.json")
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        let configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, foldersFile: file)
+        func display(_ client: TestClient) -> [DisplaySettings?] {
+            client.messages.compactMap { if case .displaySettings(let settings) = $0 { return .some(settings) } else { return nil } }
+        }
+        let fahrenheit = DisplaySettings(temperatureUnit: SystemStats.fahrenheit, diffLayout: "split", changesView: "tree")
+        do {
+            let host = HostServer(configuration: configuration)
+            let hostPort = try host.start()
+            defer { host.stop() }
+            // A host that keeps none yet says so, and takes the first client's.
+            let mac = TestClient(port: hostPort, token: token, name: "mac")
+            waitUntil("none yet") { display(mac) == [nil] }
+            mac.connection.send(.setDisplaySettings(DisplaySettings()))
+            let phone = TestClient(port: hostPort, token: token, name: "phone")
+            waitUntil("the phone gets the Mac's") { display(phone) == [DisplaySettings()] }
+            // Changed on the phone: the Mac follows. The sender is not told again.
+            phone.connection.send(.setDisplaySettings(fahrenheit))
+            waitUntil("the Mac follows") { display(mac).last == .some(fahrenheit) }
+            XCTAssertEqual(display(phone).count, 1)
+            // And the other way round. A value nobody knows is not kept.
+            mac.connection.send(.setDisplaySettings(DisplaySettings(temperatureUnit: "kelvin", diffLayout: "split", changesView: "list")))
+            waitUntil("the phone follows") {
+                display(phone).last == .some(DisplaySettings(temperatureUnit: SystemStats.celsius, diffLayout: "split", changesView: "list"))
+            }
+            mac.connection.send(.setDisplaySettings(fahrenheit))
+            waitUntil("set again") { display(phone).last == .some(fahrenheit) }
+        }
+        let again = HostServer(configuration: configuration)
+        let againPort = try again.start()
+        defer { again.stop() }
+        let late = TestClient(port: againPort, token: token, name: "late")
+        waitUntil("kept") { display(late) == [fahrenheit] }
+    }
+
+    func testKeepAwakeOptionsAreSharedSavedAndFollowed() throws {
+        let file = state("awake-options").appendingPathComponent("folders.json")
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        var onPower = false
+        var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, foldersFile: file)
+        configuration.isOnPower = { onPower }
+        configuration.refreshInterval = 0.3
+        func options(_ client: TestClient) -> KeepAwakeOptions? {
+            client.messages.compactMap { if case .keepAwakeOptions(let options) = $0 { return options } else { return nil } }.last
+        }
+        func awake(_ client: TestClient) -> Bool? {
+            client.messages.compactMap { if case .keepAwake(let on) = $0 { return on } else { return nil } }.last
+        }
+        do {
+            let host = HostServer(configuration: configuration)
+            let hostPort = try host.start()
+            defer { host.stop() }
+            let mac = TestClient(port: hostPort, token: token, name: "mac")
+            let phone = TestClient(port: hostPort, token: token, name: "phone")
+            waitUntil("defaults") { options(mac) == KeepAwakeOptions() && options(phone) == KeepAwakeOptions() }
+            mac.connection.send(.create(CreateRequest(command: "sleep 60", cwd: nil, title: nil, size: .default)))
+            waitUntil("a session") { mac.attached != nil }
+
+            // Only on power, and the Mac is on battery: no hold.
+            phone.connection.send(.setKeepAwakeOptions(KeepAwakeOptions(display: true, onlyOnPower: true, until: Date.distantFuture)))
+            waitUntil("shared, and when it ends is the host's to say") { options(mac) == KeepAwakeOptions(display: true, onlyOnPower: true) }
+            mac.connection.send(.setKeepAwake(true))
+            waitUntil("on") { awake(phone) == true }
+            RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+            XCTAssertFalse(host.isKeepingAwake, "on battery")
+            // Plugged in: noticed by itself, and the display is kept on too.
+            onPower = true
+            waitUntil("held on power") { host.isKeepingAwake && host.isKeepingDisplayAwake }
+            mac.connection.send(.setKeepAwakeOptions(KeepAwakeOptions(display: false, onlyOnPower: true)))
+            waitUntil("the display may sleep again") { host.isKeepingAwake && !host.isKeepingDisplayAwake }
+
+            // A length given while it is on counts from now.
+            let before = Date()
+            phone.connection.send(.setKeepAwakeOptions(KeepAwakeOptions(onlyOnPower: false, minutes: 60)))
+            waitUntil("timed") { options(mac)?.until != nil }
+            let until = try XCTUnwrap(options(mac)?.until)
+            XCTAssertEqual(until.timeIntervalSince(before), 3600, accuracy: 30)
+            // Switched off: the time goes with it. Switched on: it starts over.
+            mac.connection.send(.setKeepAwake(false))
+            waitUntil("off") { awake(phone) == false && options(phone)?.until == nil && !host.isKeepingAwake }
+            XCTAssertEqual(options(phone)?.minutes, 60)
+            mac.connection.send(.setKeepAwake(true))
+            waitUntil("on for an hour") { awake(phone) == true && options(phone)?.until != nil && host.isKeepingAwake }
+        }
+        // Kept across a restart, the time it ends included.
+        do {
+            let again = HostServer(configuration: configuration)
+            let againPort = try again.start()
+            defer { again.stop() }
+            let late = TestClient(port: againPort, token: token, name: "late")
+            waitUntil("kept") { awake(late) == true && options(late)?.minutes == 60 && options(late)?.until != nil }
+        }
+        // A hold whose time is up lets go by itself and says so.
+        let settings = file.deletingLastPathComponent().appendingPathComponent("settings.json")
+        let soon = Date().addingTimeInterval(2).timeIntervalSince1970
+        try #"{"keepAwake":true,"keepAwakeOptions":{"display":false,"onlyOnPower":false,"minutes":60,"until":\#(soon)}}"#
+            .write(to: settings, atomically: true, encoding: .utf8)
+        let timed = HostServer(configuration: configuration)
+        let timedPort = try timed.start()
+        defer { timed.stop() }
+        let watcher = TestClient(port: timedPort, token: token, name: "watcher")
+        waitUntil("on") { awake(watcher) == true }
+        watcher.connection.send(.create(CreateRequest(command: "sleep 60", cwd: nil, title: nil, size: .default)))
+        waitUntil("held") { timed.isKeepingAwake }
+        waitUntil("time is up") { awake(watcher) == false && !timed.isKeepingAwake && options(watcher)?.until == nil }
+    }
+
+    func testSettingsOfAnEarlierVersionStillRead() throws {
+        let file = state("awake-old").appendingPathComponent("folders.json")
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try #"{"keepAwake":true}"#.write(to: file.deletingLastPathComponent().appendingPathComponent("settings.json"), atomically: true, encoding: .utf8)
+        let host = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false, foldersFile: file))
+        let hostPort = try host.start()
+        defer { host.stop() }
+        let client = TestClient(port: hostPort, token: token, name: "mac")
+        waitUntil("on, with no options set") {
+            client.messages.contains(.keepAwake(true)) && client.messages.contains(.keepAwakeOptions(KeepAwakeOptions()))
+        }
+    }
+
+    func testSSHHostsAreListedAndOnlyThoseCanBeOpened() throws {
+        let home = state("e2e-ssh")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".ssh"), withIntermediateDirectories: true)
+        try "Host build\n  HostName 127.0.0.1\n  IdentityFile ~/.ssh/secret-key\nHost *.internal\nHost web-1\n"
+            .write(to: home.appendingPathComponent(".ssh/config"), atomically: true, encoding: .utf8)
+        var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false)
+        configuration.sshHome = home.path
+        let host = HostServer(configuration: configuration)
+        let hostPort = try host.start()
+        defer { host.stop() }
+        let phone = TestClient(port: hostPort, token: token, name: "phone")
+        waitUntil("welcome") { phone.welcomed }
+
+        phone.connection.send(.sshHosts)
+        waitUntil("only the names") { phone.messages.contains(.sshHosts(["build", "web-1"])) }
+
+        for name in ["elsewhere", "-oProxyCommand=touch${IFS}/tmp/pwned", "build; id"] {
+            phone.connection.send(.connectSSH(host: name, size: .default))
+        }
+        waitUntil("refused") {
+            phone.messages.filter { if case .error(let text) = $0 { return text.contains("is not a host in this Mac's SSH configuration") } else { return false } }.count == 3
+        }
+        XCTAssertEqual(host.sessionCount, 0)
+
+        phone.connection.send(.connectSSH(host: "web-1", size: TermSize(cols: 60, rows: 20)))
+        waitUntil("a session of its own") { phone.attached != nil }
+        XCTAssertEqual(phone.attached?.title, "web-1")
+        XCTAssertNil(phone.attached?.agent)
+        phone.connection.send(.kill(session: try XCTUnwrap(phone.attached?.id)))
     }
 
     func testInputToASessionTheClientIsNotAttachedToIsIgnored() {

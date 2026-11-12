@@ -51,6 +51,43 @@ if arguments.first == "pairing-link" {
     printPairingLink(port: port, host: host, name: name)
 }
 
+// `agenttermd take-control` plays a Mac that starts using a session: it
+// waits for the daemon's first session, types a command in it at a size of
+// its own, and stays attached for a while. For testing what a phone shows
+// while the Mac has a session. Not in the help.
+if arguments.first == "take-control" {
+    arguments.removeFirst()
+    var size = TermSize(cols: 150, rows: 45)
+    var hold: TimeInterval = 30
+    var wait: TimeInterval = 0
+    var typed = ""
+    while let argument = arguments.popFirst() {
+        switch argument {
+        case "--port":
+            guard let value = arguments.popFirst().flatMap(UInt16.init) else { fail("--port needs a number", status: 2) }
+            port = value
+        case "--cols":
+            guard let value = arguments.popFirst().flatMap(Int.init) else { fail("--cols needs a number", status: 2) }
+            size.cols = value
+        case "--rows":
+            guard let value = arguments.popFirst().flatMap(Int.init) else { fail("--rows needs a number", status: 2) }
+            size.rows = value
+        case "--hold":
+            guard let value = arguments.popFirst().flatMap(TimeInterval.init) else { fail("--hold needs seconds", status: 2) }
+            hold = value
+        case "--after":
+            guard let value = arguments.popFirst().flatMap(TimeInterval.init) else { fail("--after needs seconds", status: 2) }
+            wait = value
+        case "--type":
+            guard let value = arguments.popFirst() else { fail("--type needs text", status: 2) }
+            typed = value
+        default:
+            fail("unknown option \(argument)", status: 2)
+        }
+    }
+    takeControl(port: port, size: size, after: wait, typing: typed, hold: hold)
+}
+
 while let argument = arguments.popFirst() {
     switch argument {
     case "--port":
@@ -130,6 +167,37 @@ dispatchMain()
 func fail(_ message: String, status: Int32 = 1) -> Never {
     FileHandle.standardError.write(Data("agenttermd: \(message)\n".utf8))
     exit(status)
+}
+
+func takeControl(port: UInt16, size: TermSize, after wait: TimeInterval, typing typed: String, hold: TimeInterval) -> Never {
+    guard let token = try? HostEnvironment.loadOrCreateToken() else { fail("could not read this Mac's token") }
+    let connection = AgentTermConnection(host: "127.0.0.1", port: port, token: token, clientName: "Mac (test)")
+    var taken = false
+    connection.onMessage = { message in
+        switch message {
+        case .sessions(let list):
+            // The first session, once, some time after it appeared: a
+            // phone that opens it takes its size first.
+            guard !taken, let session = list.first else { return }
+            taken = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + wait) {
+                connection.send(.attach(session: session.id, size: size))
+                connection.send(.takeControl(session: session.id, size: size))
+                if !typed.isEmpty { connection.sendInput(Data((typed + "\r").utf8), to: session.id) }
+                print("took session \(session.id) at \(size.cols)x\(size.rows)")
+                DispatchQueue.main.asyncAfter(deadline: .now() + hold) { exit(0) }
+            }
+        case .error(let text):
+            fail(text)
+        default:
+            break
+        }
+    }
+    connection.onState = { state in
+        if case .closed(let reason) = state { fail("no daemon answered on port \(port)" + (reason.map { ": \($0)" } ?? "")) }
+    }
+    connection.connect()
+    dispatchMain()
 }
 
 func printPairingLink(port: UInt16, host: String?, name: String?) -> Never {

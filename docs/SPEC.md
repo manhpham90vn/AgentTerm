@@ -46,8 +46,10 @@ itself.
 - Sessions belong to the host daemon, not to a window. Closing the app or
   losing the phone's connection does not stop them.
 - Any number of clients can attach to a session and all see the same output.
-- A client that attaches gets the recent output replayed so it sees the
-  current screen.
+- A client that attaches gets the recent output replayed, the last 4 MB of
+  it, so it sees the current screen and can scroll back through what came
+  before. A terminal scrolls back 20,000 lines, on the Mac and on the
+  iPhone.
 
 ### Session names
 
@@ -106,6 +108,24 @@ These are the services' own endpoints for their own apps, not public APIs,
 and may change without notice. A figure that cannot be read is left out
 rather than guessed.
 
+### The Mac at a glance
+
+In a line under the Mac's launch buttons, and above the sessions on the
+iPhone, six figures say how the Mac itself is doing, the ones a system monitor shows:
+processor in use across all cores, memory in use (as a share, and as
+gigabytes of what is installed), network speed down and up, temperature,
+battery, and how long the Mac has been up. On the iPhone they are the
+figures of the Mac it is connected to, not the phone's own. They update
+every three seconds.
+
+The temperature is shown in Celsius or Fahrenheit, chosen in Settings >
+General on the Mac or in the iPhone's Settings tab. Like the other choices
+of how things are shown, it is the host's, so both apps show the same. It is the hottest processor sensor where the Mac reports one
+(Apple silicon); otherwise it is what macOS says about the Mac's heat:
+Normal, Warm, Hot, Very hot. A Mac without a battery shows "Plugged in".
+Memory turns amber at 75% and red at 90%, as the processor does; a battery
+under 20% that is not charging turns amber.
+
 ### Terminal size
 
 - The terminal resizes to fit the device being used. Opening a session on the
@@ -136,6 +156,13 @@ rather than guessed.
 - AgentTerm detects which CLIs are installed. A CLI that is not installed has no
   button. Detection uses the user's login shell so it matches what a terminal
   would find, and can be re-run without restarting.
+- An **SSH** menu lists the hosts of the Mac's `~/.ssh/config`, the files it
+  includes too, and opens `ssh <host>` as a session with one click. Entries
+  that are patterns (`*`, `?`, `!`) are not hosts and are left out. The menu
+  is not shown when the configuration names no host. From the iPhone the
+  session still runs on the Mac, which makes the Mac the way to that host.
+  The configuration is only read: creating keys or editing it is not part of
+  this, and only the names ever leave the Mac.
 
 ### Handoff
 
@@ -201,7 +228,17 @@ panel.
 - **Right: side panel**, with three tabs. The panel can be hidden.
   - **Git.** Uncommitted git changes of the selected folder: the changed files
     with added and removed line counts. Clicking a file shows its diff in the
-    middle pane, in one diff tab that follows the file picked. An
+    middle pane, in one diff tab that follows the file picked. A button in
+    the diff's header switches between one panel, removed and added lines
+    in turn, and two panels: the file as it was on the left, as it is now
+    on the right, with line numbers and changed lines facing each other.
+    The panels scroll down together and sideways each on its own. Which of
+    the two a diff opens in is set in Settings > Git on the Mac and in the
+    iPhone's Settings tab; the button is remembered too. This choice, and
+    the list being flat or a tree, are shared: made on one device they
+    show on the other. A
+    diff that changes while it is being read, as an agent keeps editing,
+    stays where it was scrolled to. An
     icon switches the file list between a flat list and a tree grouped by
     folder; folders in the tree can be collapsed and show the totals of what
     is inside. It refreshes on its own while the app is in front.
@@ -211,8 +248,25 @@ panel.
     own diff. Above the lists is the commit message and the **Commit**
     button, which commits what is staged, with the identity and the hooks
     the repository is set up with. What git says when it refuses is shown.
+    Next to it, **Write** asks an agent for the message of what is staged
+    and puts the answer in the field, to be read and changed; it never
+    commits, and the same button stops it. Which agent, which model and the
+    prompt (style, language) are set in Settings > Git on the Mac and under
+    Commit Messages in the iPhone's Settings tab; the default is the first agent
+    installed, on a cheap model where AgentTerm knows one (Claude Code:
+    Haiku).
+    Above the changes, **Pull** and **Push** act on the branch that is
+    checked out, each with the number of commits waiting, next to the name
+    of the branch it follows. A branch that follows none yet shows
+    **Publish Branch**, which says where the branch would go and, once
+    confirmed, pushes it there and follows it from then on. git never waits
+    for a password or a passphrase here: a remote that would ask fails with
+    git's message. A pull that stops on a conflict is undone, and says so.
+    The count of commits to pull is as of the last time the remote was
+    asked; pulling asks.
     Not part of it: staging part of a file, discarding changes, amending,
-    push and pull.
+    force push, choosing a remote or another branch, and resolving a pull
+    that conflicts.
   - **History.** The conversations each agent had in the selected folder, one
     section per agent, newest first, with a title and how
     long ago it was. A conversation can be resumed, which opens it in its
@@ -223,20 +277,33 @@ panel.
 
 ### Keeping the Mac awake
 
-A switch in the Mac's Settings, and in the iPhone app's menu, keeps the Mac
-from going to sleep by itself while a session is open, so agents keep
-working and the phone can still reach them. The host holds the hold on
-sleep, so it works with the window closed, and lets go when the last
-session ends. The display may still turn off, and closing the lid still
-puts the Mac to sleep. Off by default.
+A switch in the Mac's Settings, in its menu bar menu, and in the iPhone
+app's Settings tab, keeps the Mac from going to sleep by itself while a session is
+open, so agents keep working and the phone can still reach them. The host
+holds the hold on sleep, so it works with the window closed, and lets go
+when the last session ends. Closing the lid still puts the Mac to sleep.
+Off by default.
+
+Three options go with it, in the same places, and like the switch they are
+the host's, so both apps show the same:
+
+- **Turn off by itself** after 1, 2, 4 or 8 hours, counted from when it is
+  switched on. When the time is up the switch goes off, and both apps show
+  when that will be.
+- **Keep the display on too.** Without it the display may turn off.
+- **Only while the Mac is plugged in.** On battery the Mac sleeps as usual,
+  and is kept awake again once power is back.
 
 ### Menu bar (Mac)
 
 AgentTerm keeps an icon in the menu bar, and closing its window does not quit
 it: the window and the Dock icon go, the menu bar icon stays. Its menu opens
 the window again, lists the running sessions (picking one opens it), starts
-an agent or a shell, opens pairing and Settings, and quits. Quit is there
-and ⌘Q.
+an agent, a shell or an SSH session, switches Keep Mac Awake, opens pairing
+and Settings, and quits. Quit is there and ⌘Q.
+
+Settings > General also links to the project's page on manhdev.click and to
+the source on GitHub; the iPhone has the same two links in its Settings tab.
 
 The setting "Keep AgentTerm in the menu bar when its window is closed", in
 Settings (⌘,), is on by default. With it off there is no icon, and closing
@@ -289,9 +356,12 @@ The Mac and the iPhone offer the same things wherever the device allows:
 folders (add, remove, reorder), the arrangement of sessions (order, pins
 and groups, kept by the host so both show the same and a change on one
 appears on the other), sessions (start, end), the terminal with a text size
-setting, the Git view as a list or grouped by folder, History with both
-scopes, resume, copying the resume command, and handoff from a past
-conversation or a running session with the prompt shown.
+setting, the Git view as a list or grouped by folder with commit, push,
+pull and a commit message written by an agent, History with both scopes,
+resume, copying the resume command, handoff from a past conversation or a
+running session with the prompt shown, SSH hosts, how the Mac itself is
+doing, and keeping the Mac awake with
+its options.
 
 They differ where the device does:
 
@@ -371,23 +441,38 @@ edits here is not merged; saving overwrites it.
 
 ### iPhone app
 
-- The iPhone can be paired with several Macs. A menu lists them, switches
-  between them and pairs another one. It shows one Mac at a time, and opens
-  on the Mac it showed last. Forgetting a Mac leaves the others paired.
+The app opens on **Macs**, the list of the Macs it is paired with, each with
+whether it is connected and how many sessions it has. Picking one goes into
+that Mac; pairing another adds it to the list, and holding a Mac forgets it.
+
+Inside a Mac there are three tabs: **Sessions** (how the Mac is doing, then
+the folders and their sessions), **History** (every conversation on the
+Mac) and **Settings**, in the order of the Mac's Settings window: General
+(keeping the Mac awake with its options, the temperature's unit), Git
+(commit messages, diffs), Privacy, then the Mac itself (switching to
+another, forgetting this one) and About (the version and the links). The
+button at the top right of Sessions goes back to the list of Macs.
+
+- The iPhone can be paired with several Macs. The Macs screen lists them
+  and pairs another one. It shows one Mac at a time, the one picked there.
+  Forgetting a Mac leaves the others paired.
 - List of sessions on the Mac on screen, with the folder each runs in.
 - Full terminal for a session, sized to the screen.
 - A key bar above the keyboard for keys a phone keyboard lacks: Esc, Tab,
   Shift+Tab, Ctrl, arrows, and Enter.
 - A compose field for writing a prompt with the normal iOS keyboard,
   autocorrect and input methods, sent to the terminal in one go.
-- Quick launch for the installed agents, in any folder known to the Mac.
+- Quick launch for the installed agents, and for the hosts of the Mac's
+  SSH configuration, in any folder known to the Mac.
 - A folder picker browses the Mac's folders, starting at home, to start an
   agent or a shell in any of them. The folder can be added to the list the
   Mac and the iPhone share.
 - Each folder opens what the Mac's side panel shows. **Git**: the changed
   files with added and removed line counts, and the diff of a file, which
-  scrolls sideways; files can be staged, unstaged and committed as on the
-  Mac. **History**: the conversations each agent had in the
+  scrolls sideways and can be shown as two panels as on the Mac; files can
+  be staged, unstaged and committed as on the
+  Mac, the branch pushed and pulled, and the commit message written by an
+  agent. **History**: the conversations each agent had in the
   folder, with a switch to every conversation on the Mac. **Files**: see
   Files above.
 - A conversation can be resumed in its agent, or handed off to another

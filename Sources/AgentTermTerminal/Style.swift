@@ -38,6 +38,7 @@ public enum AgentStyle {
         case "codex": return "chevron.left.forwardslash.chevron.right"
         case "agy": return "arrow.up.forward.circle"
         case "copilot": return "airplane"
+        case "ssh": return "network"
         default: return "terminal"
         }
     }

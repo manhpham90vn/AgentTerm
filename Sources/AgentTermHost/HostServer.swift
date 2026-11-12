@@ -33,12 +33,20 @@ public final class HostServer {
         /// Asks the agents' services what their accounts have left. `nil`
         /// asks nobody, which is what tests want.
         public var fetchAccountUsage: ((String) -> AccountUsage?)?
+        /// Whether the Mac is plugged in. Tests say so themselves.
+        public var isOnPower: () -> Bool = { PowerSource.isOnPower }
+        /// Home folder whose SSH configuration names the hosts to offer.
+        /// Nil reads the one of `home`.
+        public var sshHome: String?
+        /// How often sessions are named and measured, in seconds. Tests
+        /// shorten it.
+        public var refreshInterval: TimeInterval = 6
 
         public init(
             port: UInt16 = agenttermDefaultPort,
             token: String,
             listenOnTailscale: Bool = true,
-            scrollbackLimit: Int = 512 * 1024,
+            scrollbackLimit: Int = 4 * 1024 * 1024,
             detectAgents: @escaping () -> [AgentInfo] = AgentDetector.detect,
             foldersFile: URL? = nil,
             devicesFile: URL? = nil,
@@ -95,6 +103,9 @@ public final class HostServer {
         let process: PTYProcess
         var arbiter: SizeArbiter
         var scrollback = Data()
+        /// True once the oldest output was dropped: what is kept then
+        /// starts somewhere in the middle of what the program wrote.
+        var scrollbackIsCut = false
 
         init(info: SessionInfo, process: PTYProcess) {
             self.info = info
@@ -144,9 +155,12 @@ public final class HostServer {
             folders = saved
         }
         if let file = settingsFile, let data = try? Data(contentsOf: file),
-            let saved = try? JSONDecoder().decode([String: Bool].self, from: data)
+            let saved = MessageCoding.decode(Settings.self, from: data)
         {
-            keepAwake = saved["keepAwake"] ?? false
+            keepAwake = saved.keepAwake ?? false
+            keepAwakeOptions = saved.keepAwakeOptions ?? KeepAwakeOptions()
+            commitWriter = saved.commitWriter ?? CommitWriterSettings()
+            displaySettings = saved.display
         }
         if let file = tabLayoutFile, let data = try? Data(contentsOf: file),
             let saved = try? JSONDecoder().decode(TabLayout.self, from: data)
@@ -162,14 +176,91 @@ public final class HostServer {
         configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("settings.json")
     }
 
+    /// The display too, only on power, and for how long.
+    private var keepAwakeOptions = KeepAwakeOptions()
+    /// Which agent writes commit messages, and how it is asked.
+    private var commitWriter = CommitWriterSettings()
+    /// How things are shown on every device. Nil until a client has said:
+    /// the first one to connect then brings what it had chosen.
+    private var displaySettings: DisplaySettings?
+    /// The agents writing a commit message now, by folder.
+    private var commitRuns: [String: CommitWriter.Run] = [:]
+    private let statsQueue = DispatchQueue(label: "agentterm.host.stats", qos: .utility)
+    /// Measures the Mac itself. Confined to `statsQueue`.
+    private let systemSampler = SystemSampler()
+    private var systemTimer: DispatchSourceTimer?
+    private var systemStats: SystemStats?
+    private var samplingSystem = false
+
+    /// Measures the Mac and tells the clients, while there is one to tell.
+    private func refreshSystemStats() {
+        guard !samplingSystem, clients.values.contains(where: \.authenticated) else { return }
+        samplingSystem = true
+        statsQueue.async { [weak self] in
+            guard let self else { return }
+            let stats = self.systemSampler.sample()
+            self.queue.async {
+                self.samplingSystem = false
+                guard stats != self.systemStats else { return }
+                self.systemStats = stats
+                for client in self.clients.values where client.authenticated { self.send(.systemStats(stats), to: client) }
+            }
+        }
+    }
+
+    /// What the host keeps in `settings.json`. Every field is optional, so
+    /// the file of an earlier version still reads.
+    private struct Settings: Codable {
+        var keepAwake: Bool?
+        var keepAwakeOptions: KeepAwakeOptions?
+        var commitWriter: CommitWriterSettings?
+        var display: DisplaySettings?
+    }
+
+    private func saveSettings() {
+        guard let file = settingsFile else { return }
+        let settings = Settings(keepAwake: keepAwake, keepAwakeOptions: keepAwakeOptions, commitWriter: commitWriter, display: displaySettings)
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? MessageCoding.encode(settings).write(to: file, options: .atomic)
+    }
+
     /// The hold on sleep follows the setting and whether anything runs:
-    /// with no session there is nothing to stay awake for.
+    /// with no session there is nothing to stay awake for. A hold that was
+    /// given a time ends when the time is up.
     private func updateSleepGuard() {
-        sleepGuard.set(held: keepAwake && !sessions.isEmpty)
+        if keepAwake, let until = keepAwakeOptions.until, until <= Date() {
+            keepAwake = false
+            keepAwakeOptions.until = nil
+            saveSettings()
+            broadcastKeepAwake()
+        }
+        let powered = !keepAwakeOptions.onlyOnPower || configuration.isOnPower()
+        sleepGuard.set(held: keepAwake && !sessions.isEmpty && powered, display: keepAwakeOptions.display)
+    }
+
+    private func broadcastKeepAwake() {
+        for client in clients.values where client.authenticated {
+            send(.keepAwake(keepAwake), to: client)
+            send(.keepAwakeOptions(keepAwakeOptions), to: client)
+        }
+    }
+
+    /// Looks again when a timed hold is due to end.
+    private func scheduleKeepAwakeEnd() {
+        guard keepAwake, let until = keepAwakeOptions.until else { return }
+        queue.asyncAfter(deadline: .now() + max(0, until.timeIntervalSinceNow) + 0.05) { [weak self] in self?.updateSleepGuard() }
     }
 
     /// True while the Mac is being kept awake. For tests.
     public var isKeepingAwake: Bool { queue.sync { sleepGuard.isHeld } }
+    /// True while the display is being kept on too. For tests.
+    public var isKeepingDisplayAwake: Bool { queue.sync { sleepGuard.holdsDisplay } }
+
+    /// Where an agent runs when it writes a commit message.
+    private var commitWriterDirectory: URL {
+        configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("commit-writer", isDirectory: true)
+            ?? FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-commit-writer", isDirectory: true)
+    }
 
     /// How the tabs are arranged, for every client. Kept next to the folders.
     private var tabLayout = TabLayout()
@@ -188,9 +279,24 @@ public final class HostServer {
 
         // Names sessions after the conversations their agents are having.
         let summaries = DispatchSource.makeTimerSource(queue: queue)
-        summaries.schedule(deadline: .now() + 3, repeating: 6)
-        summaries.setEventHandler { [weak self] in self?.refreshSummaries() }
-        queue.sync { summaryTimer = summaries }
+        summaries.schedule(deadline: .now() + min(3, configuration.refreshInterval), repeating: configuration.refreshInterval)
+        summaries.setEventHandler { [weak self] in
+            guard let self else { return }
+            // Power may have been plugged in or pulled since the last look.
+            self.updateSleepGuard()
+            self.refreshSummaries()
+        }
+        // The Mac itself is measured more often than its sessions: a
+        // network speed or a processor load that is seconds old says little.
+        let system = DispatchSource.makeTimerSource(queue: queue)
+        system.schedule(deadline: .now() + 0.2, repeating: min(3, configuration.refreshInterval))
+        system.setEventHandler { [weak self] in self?.refreshSystemStats() }
+        queue.sync {
+            summaryTimer = summaries
+            systemTimer = system
+            scheduleKeepAwakeEnd()
+        }
+        system.resume()
         summaries.resume()
         guard configuration.listenOnTailscale else { return port }
 
@@ -208,12 +314,17 @@ public final class HostServer {
             tailscaleTimer = nil
             summaryTimer?.cancel()
             summaryTimer = nil
+            systemTimer?.cancel()
+            systemTimer = nil
             listeners.values.forEach { $0.cancel() }
             listeners.removeAll()
             clients.values.forEach { $0.connection.cancel() }
             clients.removeAll()
             sessions.values.forEach { $0.process.hangUp() }
             sessions.removeAll()
+            commitRuns.values.forEach { $0.cancel() }
+            commitRuns.removeAll()
+            sleepGuard.set(held: false)
         }
     }
 
@@ -444,12 +555,62 @@ public final class HostServer {
         case .setKeepAwake(let wanted):
             guard wanted != keepAwake else { return }
             keepAwake = wanted
-            if let file = settingsFile, let data = try? JSONEncoder().encode(["keepAwake": wanted]) {
-                try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try? data.write(to: file, options: .atomic)
-            }
+            // A switch-on lasts as long as the options say.
+            keepAwakeOptions.until = wanted ? keepAwakeOptions.minutes.map { Date().addingTimeInterval(TimeInterval($0) * 60) } : nil
+            saveSettings()
             updateSleepGuard()
-            for other in clients.values where other.authenticated { send(.keepAwake(wanted), to: other) }
+            scheduleKeepAwakeEnd()
+            broadcastKeepAwake()
+        case .setKeepAwakeOptions(var options):
+            options.minutes = options.minutes.flatMap { $0 > 0 ? min($0, 7 * 24 * 60) : nil }
+            // When the hold ends is the host's to say: from now when the
+            // length changed, as it was otherwise.
+            if !keepAwake {
+                options.until = nil
+            } else if options.minutes != keepAwakeOptions.minutes {
+                options.until = options.minutes.map { Date().addingTimeInterval(TimeInterval($0) * 60) }
+            } else {
+                options.until = keepAwakeOptions.until
+            }
+            guard options != keepAwakeOptions else { return }
+            keepAwakeOptions = options
+            saveSettings()
+            updateSleepGuard()
+            scheduleKeepAwakeEnd()
+            broadcastKeepAwake()
+        case .setCommitWriter(var settings):
+            // An agent the host does not know cannot be run.
+            if let agent = settings.agent, !AgentDetector.known.contains(where: { $0.id == agent }) { settings.agent = nil }
+            if settings.model?.trimmingCharacters(in: .whitespaces).isEmpty == true { settings.model = nil }
+            if settings.prompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { settings.prompt = nil }
+            guard settings != commitWriter else { return }
+            commitWriter = settings
+            saveSettings()
+            for other in clients.values where other.authenticated { send(.commitWriter(settings), to: other) }
+        case .setDisplaySettings(let wanted):
+            let settings = wanted.checked
+            guard settings != displaySettings else { return }
+            displaySettings = settings
+            saveSettings()
+            // The sender has it already.
+            for other in clients.values where other.authenticated && other !== client { send(.displaySettings(settings), to: other) }
+        case .writeCommitMessage(let path):
+            writeCommitMessage(in: path, for: client)
+        case .cancelCommitMessage(let path):
+            commitRuns[path]?.cancel()
+        case .sshHosts:
+            let home = configuration.sshHome ?? configuration.home
+            work(for: client, { SSHConfig.hosts(home: home) }) { server, client, hosts in
+                server.send(.sshHosts(hosts), to: client)
+            }
+        case .connectSSH(let host, let size):
+            let home = configuration.sshHome ?? configuration.home
+            // The name goes on a command line, so only one the Mac's own
+            // configuration lists, and plain at that, is taken.
+            work(for: client, { SSHConfig.isSafeHost(host) && SSHConfig.hosts(home: home).contains(host) }) { server, client, known in
+                guard known else { return server.send(.error("\(host) is not a host in this Mac's SSH configuration."), to: client) }
+                server.create(CreateRequest(command: "ssh \(host)", cwd: server.configuration.home, title: host, size: size), for: client)
+            }
         case .setTabLayout(let layout):
             guard layout != tabLayout else { return }
             tabLayout = layout
@@ -544,6 +705,10 @@ public final class HostServer {
             git(for: client, in: path) { GitActions.unstage(files, in: path) }
         case .gitCommit(let path, let message):
             git(for: client, in: path) { GitActions.commit(message: message, in: path) }
+        case .gitPush(let path):
+            git(for: client, in: path) { GitActions.push(in: path) }
+        case .gitPull(let path):
+            git(for: client, in: path) { GitActions.pull(in: path) }
         case .history(let path):
             let home = configuration.home
             work(
@@ -641,6 +806,38 @@ public final class HostServer {
         ) { server, client, result in
             if let answer = result.0 { server.send(answer, to: client) }
             if let directory, let entries = result.1 { server.send(.files(path: directory, entries: entries), to: client) }
+        }
+    }
+
+    /// Has an agent write the commit message for what is staged in a
+    /// folder, and answers with it. One run per folder: asking again
+    /// replaces the run under way.
+    private func writeCommitMessage(in path: String, for client: Client) {
+        commitRuns.removeValue(forKey: path)?.cancel()
+        let run = CommitWriter.Run()
+        commitRuns[path] = run
+        let settings = commitWriter
+        let known = agents
+        let detect = configuration.detectAgents
+        let scratch = commitWriterDirectory
+        let id = client.id
+        workQueue.async { [weak self] in
+            let installed = known ?? detect()
+            let result = CommitWriter.write(in: path, settings: settings, agents: installed, scratch: scratch, run: run)
+            self?.queue.async {
+                guard let self else { return }
+                if self.agents == nil { self.agents = installed }
+                if self.commitRuns[path] === run { self.commitRuns[path] = nil }
+                guard let client = self.clients[id] else { return }
+                switch result {
+                case .success(let message):
+                    self.send(.commitMessage(path: path, message: message), to: client)
+                case .failure(let failure):
+                    // Stopping is what was asked for, not a problem to report.
+                    if failure != .cancelled { self.send(.error("\(failure)"), to: client) }
+                    self.send(.commitMessage(path: path, message: nil), to: client)
+                }
+            }
         }
     }
 
@@ -820,6 +1017,11 @@ public final class HostServer {
         send(.folders(folders), to: client)
         send(.tabLayout(tabLayout), to: client)
         send(.keepAwake(keepAwake), to: client)
+        send(.keepAwakeOptions(keepAwakeOptions), to: client)
+        send(.commitWriter(commitWriter), to: client)
+        // Without any yet, the client is sent none and hands over its own.
+        send(.displaySettings(displaySettings), to: client)
+        if let systemStats { send(.systemStats(systemStats), to: client) }
         if client.isAdmin {
             send(.devices(deviceList()), to: client)
         } else {
@@ -961,8 +1163,18 @@ public final class HostServer {
             session.process.resize(session.info.size)
         }
         send(.attached(session.info), to: client)
-        if !session.scrollback.isEmpty {
-            send(DataFrame(kind: .output, session: session.info.id, payload: session.scrollback), to: client)
+        // In pieces: the whole of it is larger than one message may be.
+        var replay = session.scrollback
+        if session.scrollbackIsCut, let newline = replay.prefix(16 * 1024).firstIndex(of: 0x0A) {
+            // What was cut starts in the middle of a line, perhaps of an
+            // escape sequence. Start at the next whole line instead.
+            replay = replay.suffix(from: replay.index(after: newline))
+        }
+        var start = replay.startIndex
+        while start < replay.endIndex {
+            let end = replay.index(start, offsetBy: Self.replayPiece, limitedBy: replay.endIndex) ?? replay.endIndex
+            send(DataFrame(kind: .output, session: session.info.id, payload: Data(replay[start..<end])), to: client)
+            start = end
         }
         // The replay holds the questions the program once asked its terminal
         // (which terminal are you, where is the cursor). The client must not
@@ -972,11 +1184,19 @@ public final class HostServer {
         announceSize(of: session)
     }
 
+    /// How much of a replay goes in one message. Well under what a message
+    /// may hold, and small enough that live output is not kept waiting.
+    private static let replayPiece = 256 * 1024
+
     private func record(_ data: Data, in session: Session) {
         session.scrollback.append(data)
-        let excess = session.scrollback.count - configuration.scrollbackLimit
-        if excess > 0 {
-            session.scrollback = Data(session.scrollback.dropFirst(excess))
+        // Cut back to the limit only once it is well past it: cutting
+        // copies what is kept, and doing that for every piece of output of
+        // a busy program would copy megabytes many times a second.
+        let limit = configuration.scrollbackLimit
+        if session.scrollback.count > limit + max(limit / 4, 64 * 1024) {
+            session.scrollback = Data(session.scrollback.suffix(limit))
+            session.scrollbackIsCut = true
         }
         let frame = DataFrame(kind: .output, session: session.info.id, payload: data)
         for id in session.arbiter.clients {

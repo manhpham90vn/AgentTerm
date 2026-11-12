@@ -33,6 +33,10 @@ public enum HostEnvironment {
     /// What Claude Code sessions report about their usage, one file each.
     public static var usageDirectory: URL { supportDirectory.appendingPathComponent("usage", isDirectory: true) }
 
+    /// Where an agent that writes a commit message runs: a folder of the
+    /// host's own, so the run leaves nothing in the project.
+    public static var commitWriterDirectory: URL { supportDirectory.appendingPathComponent("commit-writer", isDirectory: true) }
+
     public static var homeDirectory: String { NSHomeDirectory() }
 
     /// The user's login shell.
@@ -106,11 +110,13 @@ public enum HostEnvironment {
 enum Subprocess {
     /// - Parameter mergeErrors: also capture what the command writes to standard error.
     static func run(
-        _ executable: String, _ arguments: [String], cwd: String? = nil, timeout: TimeInterval = 10, mergeErrors: Bool = false
+        _ executable: String, _ arguments: [String], cwd: String? = nil, timeout: TimeInterval = 10, mergeErrors: Bool = false,
+        environment: [String: String]? = nil
     ) -> (status: Int32, output: Data)? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
+        if let environment { process.environment = environment }
         if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
         let pipe = Pipe()
         process.standardOutput = pipe

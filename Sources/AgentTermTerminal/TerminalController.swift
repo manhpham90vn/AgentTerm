@@ -21,6 +21,9 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     /// Set while another device's size is in effect.
     public private(set) var foreignSize: TermSize?
 
+    /// How far back a terminal scrolls, in lines.
+    public static let scrollbackLines = 20_000
+
     private var applyingRemoteSize = false
     private var hasLaidOut = false
     /// The emulator's current grid. SwiftTerm does not expose it.
@@ -36,6 +39,12 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         view.nativeBackgroundColor = TerminalStyle.background
         view.nativeForegroundColor = TerminalStyle.foreground
         view.terminalDelegate = self
+        // Lines kept to scroll back through. The host replays megabytes of
+        // a session's earlier output; without room for them here most of
+        // that would be thrown away as it arrives.
+        view.changeScrollback(Self.scrollbackLines)
+        // Full-width characters at the size of their two cells: see `WideGlyphs`.
+        view.glyphFallbackProvider = WideGlyphs.shared
         #if os(iOS)
         // The emulator brings a key bar of its own above the keyboard, which
         // appears when the terminal is tapped. The app has its own key bar
@@ -84,7 +93,14 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     /// questions the program once asked its terminal (which terminal are
     /// you, where is the cursor), and the emulator answers them again. Sent
     /// on, those answers would land in the program's input as stray text.
-    public func beginReplay() {
+    ///
+    /// `size` is the session's grid. The emulator takes it before the first
+    /// byte: what is replayed was drawn for that grid, and fed to an
+    /// emulator of another width its lines wrap in the wrong places. A
+    /// program that redraws in place, an agent for one, then shows a broken
+    /// screen, and nothing makes it draw again while its size stays as it is.
+    public func beginReplay(size: TermSize? = nil) {
+        if let size { setGrid(size) }
         isReplaying = true
         armReplayTimeout(seconds: 5)
     }
@@ -152,7 +168,10 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     /// grid as is rather than our own, so the content lines up.
     public func hostResized(to size: TermSize, driver: Bool) {
         foreignSize = driver ? nil : (size == naturalSize ? nil : size)
-        setGrid(driver ? naturalSize : size)
+        // Until this view has been laid out, the grid that fits it is not
+        // known: the session keeps its own rather than a made-up one. Once
+        // the view is on screen it reports what fits and the session follows.
+        setGrid(driver && hasLaidOut ? naturalSize : size)
     }
 
     private func setGrid(_ size: TermSize) {
@@ -161,6 +180,11 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         applyingRemoteSize = true
         view.resize(cols: size.cols, rows: size.rows)
         applyingRemoteSize = false
+        // A session that changes hands is drawn again for its new size.
+        // Whoever was reading further up is brought back to the screen as
+        // it is now, rather than left at a place in the old output that no
+        // longer lines up, with the prompt out of sight.
+        view.scroll(toPosition: 1)
         #if os(macOS)
         view.needsDisplay = true
         #else

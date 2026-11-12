@@ -7,8 +7,6 @@ import UniformTypeIdentifiers
 /// The paired Mac's folders and the sessions running in them.
 struct SessionsView: View {
     @EnvironmentObject private var model: PhoneModel
-    @State private var confirmingForget = false
-    @State private var showingPrivacy = false
 
     var body: some View {
         NavigationStack(path: $model.path) {
@@ -18,6 +16,16 @@ struct SessionsView: View {
                         StatusCard()
                     } else if model.hostMatch != .same {
                         VersionCard(match: model.hostMatch)
+                    }
+                    if model.status == .connected {
+                        // How the Mac is doing: the Mac this phone is
+                        // connected to, not the phone itself.
+                        SystemStatsPanel(store: model.system, large: true) { figures in
+                            figures
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 12)
+                                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
+                        }
                     }
                     ForEach(model.groups) { group in
                         FolderSection(group: group)
@@ -61,61 +69,15 @@ struct SessionsView: View {
             .navigationTitle(model.pairing?.name ?? "AgentTerm")
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Menu {
-                        // Every paired Mac, to switch between them.
-                        Section("Macs") {
-                            ForEach(model.hosts) { host in
-                                Button {
-                                    model.select(host)
-                                } label: {
-                                    Label(host.name, systemImage: host.id == model.pairing?.id ? "checkmark" : "desktopcomputer")
-                                }
-                            }
-                            Button {
-                                model.showPairSheet = true
-                            } label: {
-                                Label("Pair Another Mac…", systemImage: "plus")
-                            }
-                        }
-                        NavigationLink(value: Route.allHistory) { Label("All Conversations", systemImage: "clock.arrow.circlepath") }
-                        Button {
-                            model.refreshAgents()
-                        } label: {
-                            Label("Check Agents Again", systemImage: "arrow.clockwise")
-                        }
-                        if let keepAwake = model.keepAwake {
-                            // The same switch as in the Mac's Settings.
-                            Toggle(isOn: Binding(get: { keepAwake }, set: { model.setKeepAwake($0) })) {
-                                Label("Keep Mac Awake", systemImage: "cup.and.saucer")
-                            }
-                        }
-                        Button {
-                            showingPrivacy = true
-                        } label: {
-                            Label("Privacy…", systemImage: "hand.raised")
-                        }
-                        Button(role: .destructive) {
-                            confirmingForget = true
-                        } label: {
-                            Label("Forget This Mac", systemImage: "xmark.circle")
-                        }
+                    // Back to the list of Macs, to look at another one.
+                    Button {
+                        model.showMacs()
                     } label: {
-                        Image(systemName: "ellipsis.circle")
+                        Image(systemName: "desktopcomputer")
                     }
+                    .accessibilityLabel("Macs")
                     .accessibilityIdentifier("mac-menu")
                 }
-            }
-            .sheet(isPresented: $model.showPairSheet) {
-                NavigationStack {
-                    PairView(addingAnother: true)
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Cancel") { model.showPairSheet = false }
-                            }
-                        }
-                }
-                .environmentObject(model)
-                .preferredColorScheme(.dark)
             }
             .navigationDestination(for: Route.self) { route in
                 switch route {
@@ -134,18 +96,10 @@ struct SessionsView: View {
                         .navigationBarTitleDisplayMode(.inline)
                 }
             }
-            .sheet(isPresented: $showingPrivacy) {
-                PrivacySheet().preferredColorScheme(.dark)
-            }
             .sheet(isPresented: $model.showBrowser) {
                 BrowseSheet()
                     .environmentObject(model)
                     .preferredColorScheme(.dark)
-            }
-            .confirmationDialog("Forget this Mac?", isPresented: $confirmingForget, titleVisibility: .visible) {
-                Button("Forget", role: .destructive) { model.forgetMac() }
-            } message: {
-                Text("Sessions keep running on \(model.pairing?.name ?? "the Mac"). To connect again you pair with it once more.")
             }
         }
         // On the stack, not on the list inside it: a sheet or alert attached
@@ -195,31 +149,76 @@ private struct VersionCard: View {
 }
 
 /// What AgentTerm reports to its developer, and the switches for it.
-private struct PrivacySheet: View {
-    @EnvironmentObject private var preferences: TelemetryPreferences
+/// Which agent writes commit messages on the Mac, and how it is asked: the
+/// same settings as the Mac's Settings > Git, kept by the Mac.
+struct CommitWriterSheet: View {
+    @EnvironmentObject private var model: PhoneModel
     @Environment(\.dismiss) private var dismiss
+    @State private var agent = ""
+    @State private var modelName = ""
+    @State private var prompt = ""
+
+    private var writerID: String? { agent.isEmpty ? model.installedAgents.first?.id : agent }
+
+    private func save() {
+        let name = modelName.trimmingCharacters(in: .whitespaces)
+        let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        model.setCommitWriter(
+            CommitWriterSettings(
+                agent: agent.isEmpty ? nil : agent, model: name.isEmpty ? nil : name,
+                prompt: text.isEmpty || text == CommitWriterSettings.defaultPrompt ? nil : text))
+        dismiss()
+    }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Toggle("Send crash reports", isOn: $preferences.crashReports)
+                    Picker(
+                        "Agent",
+                        selection: Binding(
+                            get: { agent },
+                            set: {
+                                // A model belongs to an agent: another agent starts on its own.
+                                if $0 != agent { modelName = "" }
+                                agent = $0
+                            })
+                    ) {
+                        Text(model.installedAgents.first.map { "First installed (\($0.name))" } ?? "First installed").tag("")
+                        ForEach(model.installedAgents) { agent in
+                            Text(agent.name).tag(agent.id)
+                        }
+                    }
+                    TextField(writerID.flatMap(CommitWriterSettings.defaultModel) ?? "Agent's default model", text: $modelName)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("commit-writer-model")
                 } footer: {
-                    Text(TelemetryPreferences.Wording.questionDetail)
+                    Text("The Write button of a folder's Git tab asks this agent, on the Mac, for the message of what is staged. It never commits by itself.")
                 }
                 Section {
-                    Toggle("Share usage statistics", isOn: $preferences.usageStatistics)
+                    TextEditor(text: $prompt)
+                        .frame(minHeight: 180)
+                        .font(.callout)
+                        .accessibilityIdentifier("commit-writer-prompt")
+                    Button("Reset to Default") { prompt = CommitWriterSettings.defaultPrompt }
+                        .disabled(prompt == CommitWriterSettings.defaultPrompt)
+                } header: {
+                    Text("Prompt")
                 } footer: {
-                    Text(TelemetryPreferences.Wording.usageDetail)
-                }
-                if !preferences.isAvailable {
-                    Section { Text(TelemetryPreferences.Wording.unavailable).font(.footnote).foregroundStyle(.secondary) }
+                    Text("What the agent is told, before the staged changes. Say here which style and language you want.")
                 }
             }
-            .navigationTitle("Privacy")
+            .navigationTitle("Commit Messages")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("Save", action: save) }
+            }
+            .onAppear {
+                agent = model.commitWriter.agent ?? ""
+                modelName = model.commitWriter.model ?? ""
+                prompt = model.commitWriter.effectivePrompt
             }
         }
     }
@@ -376,18 +375,6 @@ private struct FolderSection: View {
                     .lineLimit(1)
                     .accessibilityIdentifier("folder-name")
                 Spacer(minLength: 0)
-                if let path = group.path {
-                    // The folder's git changes and conversations, as in the
-                    // Mac's side panel.
-                    NavigationLink(value: Route.folder(path)) {
-                        HStack(spacing: 4) {
-                            Text("Git, History, Files")
-                            Image(systemName: "chevron.right").font(.system(size: 11, weight: .semibold))
-                        }
-                        .font(.footnote.weight(.medium))
-                    }
-                    .accessibilityIdentifier("folder-details")
-                }
             }
             .padding(.horizontal, 4)
             .padding(.vertical, 2)
@@ -399,6 +386,38 @@ private struct FolderSection: View {
             .modifier(FolderArranging(path: group.path, dropTarget: $folderDropTarget))
 
             VStack(spacing: 0) {
+                if let path = group.path {
+                    // One way in to what the Mac's side panel holds for the
+                    // folder. Its screen has the tabs: Git, History, Files.
+                    NavigationLink(value: Route.folder(path)) {
+                        HStack(spacing: 12) {
+                            Image(systemName: "square.stack.3d.up")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(Palette.tint)
+                                .frame(width: 18)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Changes, History and Files")
+                                    .font(.body)
+                                    .lineLimit(1)
+                                Text("Commit and push, past conversations, edit files")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer(minLength: 8)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 12)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Changes, History and Files of \(group.name)")
+                    .accessibilityIdentifier("folder-details")
+                    Palette.hairline.frame(height: 1)
+                }
                 ForEach(model.items(for: group)) { item in
                     switch item {
                     case .label(let tabGroup, let count):
@@ -439,7 +458,10 @@ private struct FolderSection: View {
                         Palette.hairline.frame(height: 1).padding(.leading, 38)
                     }
                 }
-                LaunchRow(folder: group.path)
+                LaunchGrid(folder: group.path)
+                    .padding(.horizontal, 6)
+                    .padding(.top, 12)
+                    .padding(.bottom, 10)
             }
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -620,44 +642,5 @@ enum GroupColor {
         case "pink": return Color(red: 0.95, green: 0.50, blue: 0.74)
         default: return Color(white: 0.62)
         }
-    }
-}
-
-/// One tap starts an agent in this folder.
-private struct LaunchRow: View {
-    @EnvironmentObject private var model: PhoneModel
-    let folder: String?
-
-    var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                ForEach(model.installedAgents) { agent in
-                    chip(title: agent.name, id: agent.id) { model.launch(agent, in: folder) }
-                }
-                chip(title: "Shell", id: "shell") { model.launch(nil, in: folder) }
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 12)
-        }
-        .disabled(model.status != .connected)
-        .opacity(model.status == .connected ? 1 : 0.45)
-    }
-
-    private func chip(title: String, id: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: AgentStyle.symbol(for: id))
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(AgentStyle.accent(for: id))
-                Text(title)
-                    .font(.system(size: 14, weight: .medium))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Capsule().fill(Palette.raised))
-            .overlay(Capsule().strokeBorder(Palette.hairline))
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Start \(title)")
     }
 }
