@@ -55,9 +55,12 @@ env:
   FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
   FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "4"
 
+# One release at a time, whatever it was started from. Starting another
+# cancels the one that is running: the newer one is the one that is wanted,
+# and it does everything again, so nothing is left half done for long.
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
+  group: release
+  cancel-in-progress: true
 
 jobs:
   mac:

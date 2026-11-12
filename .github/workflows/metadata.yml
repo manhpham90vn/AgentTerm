@@ -21,9 +21,10 @@ env:
   FASTLANE_HIDE_CHANGELOG: "1"
   FASTLANE_OPT_OUT_USAGE: "1"
 
+# A newer run replaces one that is still going.
 concurrency:
   group: metadata
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   app-store:

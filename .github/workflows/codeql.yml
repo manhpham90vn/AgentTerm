@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The workflows and the fastlane lanes need no build.
+  # The workflows, the fastlane lanes and the small C target need no build.
   scripts:
     name: ${{ matrix.language }}
     runs-on: ubuntu-latest
@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [actions, ruby]
+        language: [actions, ruby, c-cpp]
     steps:
       - uses: actions/checkout@v7
       - uses: github/codeql-action/init@v4
@@ -45,9 +45,10 @@ jobs:
         with:
           category: /language:${{ matrix.language }}
 
-  # Swift and the small C target are analyzed while they are built.
+  # Swift is analyzed while it is built. On its own: with the C tracer
+  # switched on as well, SwiftPM could not start the package manifest.
   swift:
-    name: swift, c-cpp
+    name: swift
     runs-on: xcode-27
     timeout-minutes: 60
     steps:
@@ -57,7 +58,7 @@ jobs:
           xcode-version: ${{ env.XCODE_VERSION }}
       - uses: github/codeql-action/init@v4
         with:
-          languages: swift, c-cpp
+          languages: swift
           build-mode: manual
           config-file: .github/codeql/codeql-config.yml
       # The build folder is outside the checkout, so the dependencies'
