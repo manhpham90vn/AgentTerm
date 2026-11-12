@@ -1,5 +1,6 @@
 import AgentTermClient
 import AgentTermProtocol
+import AgentTermTelemetry
 import AgentTermTerminal
 import SwiftUI
 
@@ -436,6 +437,7 @@ final class PhoneModel: ObservableObject {
         switch message {
         case .welcome(let version, _):
             hostMatch = ProtocolMatch(host: version)
+            if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             status = .connected
             reattachAfterConnect = true
             connection?.send(.agents(refresh: false))
@@ -491,6 +493,7 @@ final class PhoneModel: ObservableObject {
         case .exited:
             break
         case .paired(_, let token):
+            Telemetry.shared.record(.devicePaired)
             guard let info = pendingPairing else { return }
             let saved = SavedHost(id: UUID().uuidString, host: info.host, port: info.port, name: info.name, token: token)
             // Pairing again with a Mac replaces what was saved for it.
@@ -602,6 +605,7 @@ final class PhoneModel: ObservableObject {
     func launch(_ agent: AgentInfo?, in folder: String?) {
         guard status == .connected else { return }
         openCreatedSession = true
+        Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
         connection?.send(.create(CreateRequest(command: agent?.id, cwd: folder, title: agent?.name, size: startingSize)))
     }
 
@@ -711,6 +715,8 @@ final class PhoneModel: ObservableObject {
         openCreatedSession = true
         let plan = handoffPlan
         let edited = plan.map { prompt != $0.prompt } ?? false
+        Telemetry.shared.record(
+            .handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: folder != nil && folder != conversation.cwd))
         connection?.send(
             .handoff(
                 agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd,

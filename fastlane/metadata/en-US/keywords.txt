@@ -1,0 +1,1 @@
+terminal,coding agent,ai,remote,shell,developer,git,cli,devtools,programming,pair,code,ssh

@@ -14,6 +14,7 @@
 #   MATCH_GIT_URL, MATCH_PASSWORD             fastlane match (iPhone)
 #   DEVELOPER_ID_P12, DEVELOPER_ID_P12_PASSWORD   Developer ID certificate (Mac)
 
+require "fileutils"
 require "tmpdir"
 
 APP_ID = "com.manhpham.agentterm".freeze
@@ -51,6 +52,11 @@ platform :ios do
     setup_ci
     key = asc_key
     team = ENV.fetch("APPLE_TEAM_ID")
+    # The Firebase config file goes into the app for this build only. Without
+    # one the app reports nothing.
+    firebase = File.join(ROOT, "iOS/AgentTerm/GoogleService-Info.plist")
+    FileUtils.rm_f(firebase)
+    FileUtils.cp(ENV["FIREBASE_CONFIG_IOS"], firebase) unless ENV["FIREBASE_CONFIG_IOS"].to_s.empty?
     Dir.chdir(File.join(ROOT, "iOS")) { sh("xcodegen", "generate") }
 
     # `create:true` lets match make the provisioning profile the first time.
@@ -99,6 +105,27 @@ platform :ios do
       overwrite_screenshots: true,
       skip_binary_upload: true,
       skip_metadata: true,
+      precheck_include_in_app_purchases: false,
+      run_precheck_before_submit: false,
+      submit_for_review: false,
+      force: true
+    )
+  end
+
+  desc "Send the App Store listing in fastlane/metadata to App Store Connect"
+  lane :metadata do
+    # Name, subtitle, description, keywords, URLs, categories and the notes
+    # for App Review. "What's New" is the version's release notes. Nothing is
+    # submitted for review; the screenshots have a lane of their own.
+    notes = File.join(ROOT, "packaging/release-notes/v#{app_version[/^[\d.]+/]}.md")
+    upload_to_app_store(
+      api_key: asc_key,
+      app_identifier: APP_ID,
+      app_version: app_version[/^[\d.]+/],
+      metadata_path: File.join(ROOT, "fastlane/metadata"),
+      release_notes: File.size?(notes) ? { "en-US" => what_to_test(File.read(notes)) } : nil,
+      skip_binary_upload: true,
+      skip_screenshots: true,
       precheck_include_in_app_purchases: false,
       run_precheck_before_submit: false,
       submit_for_review: false,

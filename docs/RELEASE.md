@@ -67,6 +67,24 @@ The bundle identifier is `com.manhpham.agentterm`. Before the first upload:
 `ios beta` gives the build the next number after the newest one TestFlight
 has for the version, and does not wait for Apple to finish processing it.
 
+### The App Store listing
+
+The listing is kept as text files in `fastlane/metadata`: the name,
+subtitle, description, keywords, promotional text and the three URLs under
+`en-US/`, the categories and copyright next to it, and the contact and notes
+for App Review under `review_information/`. Apple's limits: 30 characters
+for the name and the subtitle, 100 for the keywords, 170 for the promotional
+text, 4000 for the description.
+
+```sh
+make store-metadata      # send the listing; "What's New" is the version's release notes
+make store-screenshots   # send fastlane/screenshots/en-US
+```
+
+Neither submits anything for review. `review_information/phone_number.txt`
+is not in the repository; App Review asks for a phone number, which is set
+on App Store Connect.
+
 ## Mac
 
 `mac sign` builds a release `AgentTerm.app`, signs the daemon and then the
@@ -94,6 +112,24 @@ silicon Mac). There is no universal build yet.
   Apple has processed the build. `NOTES=0` skips the waiting and the notes.
 
 `make release V=0.3.0-beta.1` runs both checks and then starts the workflow.
+
+## Usage statistics and crash reports
+
+Released builds report through Firebase, within what the user allows (see
+`PRIVACY.md`). There is one Firebase project for each app, because both have
+the same bundle identifier. Their config files are in the dotfiles repo, at
+`projects/agentterm/firebase/{mac,ios}/GoogleService-Info.plist`:
+
+- `scripts/release.sh` hands them to the lanes as `FIREBASE_CONFIG_MAC` and
+  `FIREBASE_CONFIG_IOS`; the workflow gets them from secrets of the same
+  names (`scripts/sync-agentterm.sh` in dotfiles sets them).
+- `bundle-mac.sh` copies the Mac's into a release bundle; the iPhone lane
+  copies the other into the project for the build.
+- Without a file the app is built with no service and reports nothing. That
+  is what a build from source is, and a development build never uses one.
+
+Crashlytics is not given debug symbols yet, so stack traces in its console
+show addresses, not function names.
 
 ## Homebrew
 

@@ -9,6 +9,8 @@ let package = Package(
         .library(name: "AgentTermClient", targets: ["AgentTermClient"]),
         .library(name: "AgentTermTerminal", targets: ["AgentTermTerminal"]),
         .library(name: "AgentTermEditor", targets: ["AgentTermEditor"]),
+        .library(name: "AgentTermTelemetry", targets: ["AgentTermTelemetry"]),
+        .library(name: "AgentTermFirebase", targets: ["AgentTermFirebase"]),
         .library(name: "AgentTermHost", targets: ["AgentTermHost"]),
         .executable(name: "agenttermd", targets: ["agenttermd"]),
         .executable(name: "AgentTermMac", targets: ["AgentTermMac"]),
@@ -19,6 +21,9 @@ let package = Package(
         .package(url: "https://github.com/raspu/Highlightr.git", from: "2.2.0"),
         // Markdown preview.
         .package(url: "https://github.com/gonzalezreal/swift-markdown-ui.git", from: "2.4.0"),
+        // Usage statistics and crash reports, in released builds only, and
+        // only what the user allows. See Sources/AgentTermTelemetry.
+        .package(url: "https://github.com/firebase/firebase-ios-sdk.git", from: "13.1.0"),
     ],
     targets: [
         // Wire protocol shared by the host daemon and every client (macOS, iOS).
@@ -42,6 +47,20 @@ let package = Package(
             // Mermaid, to draw diagrams without a network.
             resources: [.copy("Resources/mermaid.min.js")]
         ),
+        // What the apps may report about their use, and the user's choices
+        // about it. No service is linked here; the apps plug one in.
+        .target(name: "AgentTermTelemetry"),
+        // Firebase behind it. "Core" is Analytics without the advertising
+        // identifier, which AgentTerm has no use for.
+        .target(
+            name: "AgentTermFirebase",
+            dependencies: [
+                "AgentTermProtocol",
+                "AgentTermTelemetry",
+                .product(name: "FirebaseAnalyticsCore", package: "firebase-ios-sdk"),
+                .product(name: "FirebaseCrashlytics", package: "firebase-ios-sdk"),
+            ]
+        ),
         // Starts a program on a pseudo terminal. C, because it needs fork().
         .target(name: "CAgentTermPTY"),
         // macOS only: PTY ownership, session management, WebSocket server.
@@ -52,12 +71,17 @@ let package = Package(
             dependencies: [
                 "AgentTermClient",
                 "AgentTermEditor",
+                "AgentTermFirebase",
                 "AgentTermHost",
+                "AgentTermTelemetry",
                 "AgentTermTerminal",
-            ]
+            ],
+            // Firebase's Objective-C categories are only found with this.
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-ObjC"])]
         ),
         .testTarget(name: "AgentTermProtocolTests", dependencies: ["AgentTermProtocol"]),
         .testTarget(name: "AgentTermEditorTests", dependencies: ["AgentTermEditor"]),
+        .testTarget(name: "AgentTermTelemetryTests", dependencies: ["AgentTermTelemetry"]),
         .testTarget(name: "AgentTermHostTests", dependencies: ["AgentTermHost", "AgentTermClient"]),
     ]
 )

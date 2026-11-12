@@ -1,6 +1,7 @@
 import AgentTermClient
 import AgentTermHost
 import AgentTermProtocol
+import AgentTermTelemetry
 import AgentTermTerminal
 import AppKit
 import Combine
@@ -66,6 +67,7 @@ final class AppModel: ObservableObject {
     /// Stops the host that is running and starts this app's own in its
     /// place. Its sessions end with it.
     func restartHost() {
+        stoppingHost = true
         let port = port
         hostMatch = .same
         otherHost = nil
@@ -99,6 +101,7 @@ final class AppModel: ObservableObject {
     /// The sessions the other host holds end with it.
     func replaceOtherHost() {
         guard let pid = otherHostPID else { return }
+        stoppingHost = true
         otherHost = nil
         otherHostPID = nil
         // The connection closes when the host goes; reconnecting then
@@ -123,6 +126,11 @@ final class AppModel: ObservableObject {
 
     /// True once the host has listed its sessions.
     var sessionsKnown = false
+
+    /// True between the host's welcome and the connection closing.
+    private var wasConnected = false
+    /// True while the host is being stopped on purpose.
+    private var stoppingHost = false
 
     /// The tab being dragged in the strip, from the moment it is picked up.
     var draggedTab: String?
@@ -288,6 +296,11 @@ final class AppModel: ObservableObject {
             connection?.send(.agents(refresh: false))
             checkWhoseHost()
         case .closed(let reason):
+            // The host went away under a working connection, and not because
+            // the user asked for it to be restarted: worth a report.
+            if wasConnected, !stoppingHost { Telemetry.shared.recordProblem(.hostExitedUnexpectedly) }
+            wasConnected = false
+            stoppingHost = false
             connection = nil
             controllers.removeAll()
             sessionsKnown = false
@@ -330,6 +343,8 @@ final class AppModel: ObservableObject {
         switch message {
         case .welcome(let version, _):
             hostMatch = ProtocolMatch(host: version)
+            if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
+            wasConnected = true
         case .sessions(let list):
             sessionsKnown = true
             sessions = list
@@ -424,6 +439,7 @@ final class AppModel: ObservableObject {
         lastError = nil
         selectNextAttached = true
         let size = startingSize
+        Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
         connection?.send(.create(CreateRequest(command: agent?.id, cwd: workingDirectory, title: agent?.name, size: size)))
     }
 
@@ -637,6 +653,8 @@ final class AppModel: ObservableObject {
     /// folder, or another one to carry the work over to.
     func handoff(_ conversation: Conversation, to target: AgentInfo, plan: Handoff.Plan, prompt: String, note: String, in folder: String? = nil) {
         guard status == .connected else { return }
+        Telemetry.shared.record(
+            .handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: folder != nil && folder != conversation.cwd))
         let size = startingSize
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Result { try Handoff.prepare(conversation, to: target.id, plan: plan, prompt: prompt, note: note, in: folder) }

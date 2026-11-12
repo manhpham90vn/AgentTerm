@@ -102,8 +102,12 @@ The daemon listens only on `127.0.0.1` and the Mac's Tailscale address. An
 iPhone pairs with a one-time code and gets a token of its own, which the Mac
 can revoke. To show account usage, AgentTerm reads each agent's sign-in on
 your Mac and sends it only to the service that issued it
-(`agenttermd --no-account-usage` turns that off). AgentTerm has no server of
-its own and collects nothing. Details
+(`agenttermd --no-account-usage` turns that off).
+
+The released apps can send crash reports (only if you say yes) and counts of
+which features are used (one switch turns it off) through Firebase; never
+terminal content, prompts, file names or folders. A build from source sends
+nothing. AgentTerm has no server of its own. Details
 in [SECURITY.md](SECURITY.md) and [PRIVACY.md](PRIVACY.md).
 
 ## Documentation

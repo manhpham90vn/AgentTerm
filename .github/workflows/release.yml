@@ -15,6 +15,9 @@ name: Release
 #   MATCH_GIT_URL                 the fastlane match repository, as an https address
 #   MATCH_PASSWORD                the passphrase match encrypts with
 #   MATCH_GIT_BASIC_AUTHORIZATION base64 of "user:token" with read access to that repository
+#   FIREBASE_CONFIG_MAC, FIREBASE_CONFIG_IOS
+#                                 base64 of each app's GoogleService-Info.plist; without one
+#                                 that app is built with no reporting service
 #   HOMEBREW_TAP_TOKEN            token with contents write access to manhpham90vn/homebrew-tap;
 #                                 without it the cask is not updated
 
@@ -87,6 +90,17 @@ jobs:
           printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc_key.p8"
           printf '%s' "$MACOS_CERTIFICATE_P12" | base64 --decode > "$RUNNER_TEMP/developer_id.p12"
 
+      # Without the secret the app is built with no reporting service and sends nothing.
+      - name: Write the Firebase config
+        env:
+          FIREBASE_CONFIG: ${{ secrets.FIREBASE_CONFIG_MAC }}
+        run: |
+          if [ -n "$FIREBASE_CONFIG" ]; then
+            umask 077
+            printf '%s' "$FIREBASE_CONFIG" | base64 --decode > "$RUNNER_TEMP/firebase.plist"
+            echo "FIREBASE_CONFIG_MAC=$RUNNER_TEMP/firebase.plist" >> "$GITHUB_ENV"
+          fi
+
       - name: Build, sign and notarize
         env:
           VERSION: ${{ steps.version.outputs.value }}
@@ -120,7 +134,7 @@ jobs:
 
       - name: Remove the signing files
         if: always()
-        run: rm -f "$RUNNER_TEMP/asc_key.p8" "$RUNNER_TEMP/developer_id.p12"
+        run: rm -f "$RUNNER_TEMP/asc_key.p8" "$RUNNER_TEMP/developer_id.p12" "$RUNNER_TEMP/firebase.plist"
 
   ios:
     name: iPhone app to TestFlight
@@ -160,6 +174,17 @@ jobs:
           umask 077
           printf '%s' "$ASC_KEY_P8" > "$RUNNER_TEMP/asc_key.p8"
 
+      # Without the secret the app is built with no reporting service and sends nothing.
+      - name: Write the Firebase config
+        env:
+          FIREBASE_CONFIG: ${{ secrets.FIREBASE_CONFIG_IOS }}
+        run: |
+          if [ -n "$FIREBASE_CONFIG" ]; then
+            umask 077
+            printf '%s' "$FIREBASE_CONFIG" | base64 --decode > "$RUNNER_TEMP/firebase.plist"
+            echo "FIREBASE_CONFIG_IOS=$RUNNER_TEMP/firebase.plist" >> "$GITHUB_ENV"
+          fi
+
       - name: Build and upload
         env:
           VERSION: ${{ steps.version.outputs.value }}
@@ -175,4 +200,4 @@ jobs:
 
       - name: Remove the key
         if: always()
-        run: rm -f "$RUNNER_TEMP/asc_key.p8"
+        run: rm -f "$RUNNER_TEMP/asc_key.p8" "$RUNNER_TEMP/firebase.plist"

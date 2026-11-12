@@ -8,7 +8,7 @@ SWIFT_PATHS := Package.swift Sources Tests iOS/AgentTerm iOS/AgentTermUITests
 
 .DEFAULT_GOAL := help
 .PHONY: help version bump build test test-ios test-all run run-ios pair-ios bundle format lint check reset-permissions \
-        release-check release-mac release-ios release cask clean
+        release-check release-mac release-ios release store-metadata store-screenshots cask clean
 
 help: ## List what can be made
 	@echo "AgentTerm $(VERSION)"
@@ -67,6 +67,12 @@ release: ## Release both apps from GitHub Actions: make release [V=0.3.0-beta.1]
 	./scripts/check-version.sh $(or $(V),$(VERSION))
 	@./scripts/check-release-notes.sh $(or $(V),$(VERSION))
 	gh workflow run release.yml -f version=$(or $(V),$(VERSION))
+
+store-metadata: ## Send the App Store listing (fastlane/metadata) to App Store Connect
+	./scripts/release.sh ios metadata
+
+store-screenshots: ## Send the iPhone screenshots (fastlane/screenshots) to App Store Connect
+	./scripts/release.sh ios screenshots
 
 cask: ## Point the Homebrew cask at a released version: make cask [V=0.3.0]
 	./scripts/publish-homebrew.sh $(or $(V),$(VERSION))

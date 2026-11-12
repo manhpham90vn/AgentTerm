@@ -44,6 +44,13 @@ export ASC_KEY_PATH=$key_file
 : "${ASC_KEY_ID:=$(basename "$key_file" .p8 | sed 's/^AuthKey_//')}"
 export ASC_KEY_ID
 export DEVELOPER_ID_P12=$APPLE_DIR/certs/developer_id_application.p12
+# The Firebase config files, one project for each app. A released build
+# given none reports nothing.
+for platform in MAC IOS; do
+    lower=$(printf '%s' "$platform" | tr '[:upper:]' '[:lower:]')
+    file=$DOTFILES/projects/agentterm/firebase/$lower/GoogleService-Info.plist
+    [ ! -f "$file" ] || export "FIREBASE_CONFIG_$platform=$file"
+done
 
 if [ "${1:-}" = "--check" ]; then
     # Names only: whether each is there, never what it is.

@@ -25,7 +25,7 @@ forward its port to the internet or to a network you do not control.**
 | Pairing an iPhone | The Mac shows a code that works once, for five minutes, and only while the pairing screen is open. The phone trades it for a token of its own. |
 | Taking a device off | Each paired device has its own token, which the Mac can revoke under **Pair iPhone**. |
 | The Mac's own token | It is kept in a file only you can read (mode 0600) and is accepted only on connections that arrive on the loopback interface, so it is no use from another machine. |
-| Your data | Nothing reaches the developer. AgentTerm has no server of its own, no account and no analytics. See [PRIVACY.md](PRIVACY.md). |
+| Your data | What your terminals show, your prompts, files and folders never leave your devices. The released apps can send crash reports (if you agree) and counts of which features are used (can be switched off) through Firebase; a build from source sends nothing. AgentTerm has no server of its own and no account. See [PRIVACY.md](PRIVACY.md). |
 | Files you preview | A Markdown preview runs nothing from the file: HTML in it is turned into Markdown, and scripts and styles are not interpreted. |
 
 ## What it does not protect against

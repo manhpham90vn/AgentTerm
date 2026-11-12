@@ -86,6 +86,8 @@ paired there has to pair again.
 | `Sources/AgentTermClient` | WebSocket client for macOS and iOS |
 | `Sources/AgentTermTerminal` | Terminal view bound to a session, shared by both apps ([SwiftTerm](https://github.com/migueldeicaza/SwiftTerm)) |
 | `Sources/AgentTermEditor` | Text editor and Markdown / Mermaid preview, shared by both apps |
+| `Sources/AgentTermTelemetry` | The closed list of events the apps may report, and the user's choices about it; links no service |
+| `Sources/AgentTermFirebase` | Firebase behind it, used only by a released build that was given a config file |
 | `Sources/AgentTermMac` | The macOS app (SwiftUI) |
 | `iOS/` | The iPhone app (SwiftUI) and its UI test; the Xcode project is generated from `project.yml` |
 | `scripts/` | Build, run, test and release scripts |

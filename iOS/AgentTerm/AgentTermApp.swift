@@ -1,3 +1,5 @@
+import AgentTermFirebase
+import AgentTermTelemetry
 import AgentTermTerminal
 import SwiftUI
 
@@ -5,6 +7,15 @@ import SwiftUI
 struct AgentTermApp: App {
     @StateObject private var model = PhoneModel()
     @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var privacy: TelemetryPreferences
+
+    init() {
+        // Before anything is shown: the question about crash reports
+        // depends on whether this build can report at all.
+        FirebaseSink.start()
+        Telemetry.shared.record(.appOpen)
+        _privacy = StateObject(wrappedValue: TelemetryPreferences())
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -18,6 +29,14 @@ struct AgentTermApp: App {
             .environmentObject(model)
             .preferredColorScheme(.dark)
             .tint(Palette.tint)
+            .environmentObject(privacy)
+            // Asked once, at the first launch of a build that can send them.
+            .alert(TelemetryPreferences.Wording.question, isPresented: $privacy.needsAsking) {
+                Button("Send Crash Reports") { privacy.answer(sendCrashReports: true) }
+                Button("Don't Send", role: .cancel) { privacy.answer(sendCrashReports: false) }
+            } message: {
+                Text(TelemetryPreferences.Wording.questionDetail + "\n\nYou can change this, and usage statistics, under Privacy in the menu.")
+            }
             .onOpenURL { model.pair(with: $0) }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { model.resume() }

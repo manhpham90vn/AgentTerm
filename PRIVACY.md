@@ -1,6 +1,6 @@
 # AgentTerm Privacy Policy
 
-_Effective date: November 11, 2026_
+_Effective date: November 12, 2026_
 
 ## 1. Introduction
 
@@ -18,10 +18,19 @@ The Software is developed and published by an individual developer:
 
 ## 2. The short version
 
-**The developer does not receive, collect or store any of your data.** AgentTerm has no server of its
-own, no account, no analytics and no advertising. What you type, what your terminals show, your files
-and your conversations with coding agents stay on your own devices. The Mac app is open source, so
-this can be checked.
+**What you type, what your terminals show, your files, your folders and your conversations with
+coding agents stay on your own devices.** AgentTerm has no server of its own, no account and no
+advertising.
+
+The released apps can send two things to the developer through Google's Firebase, and you control
+both:
+
+- **Crash reports**, only if you say yes when the app asks at its first launch.
+- **Usage statistics**, counts of which features are used. On by default; one switch turns it off.
+
+Neither ever contains what a terminal showed, a prompt, a file name or a folder. Section 6 lists
+exactly what is sent. Both apps are open source, so this can be checked, and an app you build from
+the source yourself sends nothing at all.
 
 ## 3. What stays on your devices
 
@@ -57,10 +66,42 @@ this can be checked.
 
 ## 6. Data the developer receives
 
-None through the Software. If you install the iPhone app from TestFlight or the App Store, Apple may
-share crash reports and usage statistics with the developer if you have agreed to that in your
-device's settings. If you write to the support address, your message and email address are used only
-to answer you.
+The apps released by the developer (the disk image, the Homebrew cask, TestFlight and the App Store)
+include Google's Firebase. Google processes the data below on the developer's behalf; see
+[Firebase's privacy information](https://firebase.google.com/support/privacy).
+
+**Usage statistics (Firebase Analytics).** On unless you switch it off.
+
+- The events, and all of them: the app was opened; a session was started, and with which agent
+  (Claude Code, Codex, Antigravity, Copilot CLI or a shell); a phone was paired; a conversation was
+  handed off, from which agent to which, and whether to another folder (yes or no); the Mac and the
+  iPhone were of different versions.
+- What Firebase records by itself once usage statistics are on: the first time the app is opened on
+  a device, each time a period of use begins, and how long the app was in the foreground.
+- What Firebase adds to every event: the app's version, your device's model and system version, your
+  language and country, and an identifier that Firebase makes for this installation of the app. It is
+  not tied to your name or account, and the advertising identifier is not used.
+- Never: anything you type, anything a terminal shows, prompts, file names, folder names, the names
+  of your Macs, or anything from the sign-ins of the coding agents. An event has no field that could
+  hold such text.
+
+**Crash reports (Firebase Crashlytics).** Off until you say yes.
+
+- When the app crashes: where in the app's code it happened, the app's version, your device's model
+  and system version, and the installation identifier.
+- When the host on the Mac stops unexpectedly: only the fact that it did.
+
+**Your choices.** The app asks about crash reports once, the first time it is opened. Both switches
+are in **Settings > Privacy** on the Mac and under **Privacy** in the menu of the iPhone app, and a
+change takes effect at once.
+
+**Builds that send nothing.** An app built from the source code, and the development build
+"AgentTerm Dev", contain no Firebase configuration and send nothing, whatever the switches say.
+
+**Other.** If you install the iPhone app from TestFlight or the App Store, Apple may share crash
+reports and usage statistics with the developer if you have agreed to that in your device's
+settings. If you write to the support address, your message and email address are used only to
+answer you.
 
 ## 7. Children
 

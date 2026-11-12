@@ -7,6 +7,8 @@ DerivedData/
 dist/
 iOS/AgentTerm/Info.plist
 iOS/Version.xcconfig
+# Put there for a release build only; see docs/RELEASE.md.
+iOS/AgentTerm/GoogleService-Info.plist
 
 # fastlane
 fastlane/report.xml

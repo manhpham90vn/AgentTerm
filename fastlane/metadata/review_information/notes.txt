@@ -1,0 +1,18 @@
+AgentTerm for iPhone is a remote for terminal sessions that run on a computer the user owns. It connects directly to the AgentTerm host app on that computer. There is no account, no login and no server operated by the developer, so demo credentials do not apply. Programs and shell commands run on the user's computer, not on the iPhone.
+
+OWNERSHIP
+I, Manh Pham, independently develop both the iPhone app and the macOS host. Both are open source (MIT): https://github.com/manhpham90vn/AgentTerm . The repository includes LICENSE and THIRD_PARTY_NOTICES.md.
+Claude Code, Codex, Antigravity and GitHub Copilot CLI are command-line programs of their respective owners that the user installs separately on the computer. AgentTerm starts them in a terminal; it does not include them, their accounts or their content, and is not affiliated with them. References to macOS describe which computers the host runs on.
+
+HOW TO TEST
+1. On a Mac with macOS 14 or later, on the same network as the iPhone, install AgentTerm from https://github.com/manhpham90vn/AgentTerm/releases (open the disk image and drag the app to Applications), and open it.
+2. In the Mac app, click "Pair iPhone". It shows a QR code.
+3. On the iPhone, open AgentTerm and scan the code. The camera is used only for this. Without a camera, "Enter a pairing link" accepts the link shown under the code.
+4. The iPhone lists the Mac's folders. Tap "Shell" under a folder to start a terminal session; no coding agent or account is needed to test.
+5. In the terminal, type in the Message field and tap Send. The key bar above the keyboard has Esc, Tab, Ctrl-C and the arrow keys.
+6. Go back, then open "Git, History, Files" of a folder to see its changes, past conversations and files.
+
+For remote use outside the local network the app relies on Tailscale, a separate VPN app; it is not needed for this test.
+
+DATA
+The app sends crash reports through Firebase Crashlytics only after the user agrees in a prompt at first launch, and counts of feature use through Firebase Analytics, which can be switched off under Privacy in the app's menu. No terminal content, prompts or file names are sent. The advertising identifier is not used.

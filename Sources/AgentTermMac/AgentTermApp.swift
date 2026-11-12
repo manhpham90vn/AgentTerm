@@ -1,4 +1,6 @@
+import AgentTermFirebase
 import AgentTermProtocol
+import AgentTermTelemetry
 import SwiftUI
 
 @main
@@ -8,9 +10,17 @@ struct AgentTermApp: App {
     /// Stay in the menu bar when the window is closed, instead of quitting.
     @AppStorage(MenuBarMode.key) private var staysInMenuBar = MenuBarMode.defaultValue
 
+    init() {
+        // Before anything is shown: the question about crash reports
+        // depends on whether this build can report at all.
+        FirebaseSink.start()
+        Telemetry.shared.record(.appOpen)
+    }
+
     var body: some Scene {
         Window(AppChannel.current.appName, id: "main") {
             RootView()
+                .modifier(CrashReportQuestion())
                 .environmentObject(model)
                 .environmentObject(model.files)
                 .preferredColorScheme(.dark)
@@ -123,6 +133,21 @@ private struct MenuBarMenu: View {
 }
 
 /// The panes of the Settings window. The one last looked at comes back.
+/// Asks once, at the first launch of a build that can send them, whether
+/// crash reports may be sent. Until answered, none are.
+private struct CrashReportQuestion: ViewModifier {
+    @StateObject private var preferences = TelemetryPreferences()
+
+    func body(content: Content) -> some View {
+        content.alert(TelemetryPreferences.Wording.question, isPresented: $preferences.needsAsking) {
+            Button("Send Crash Reports") { preferences.answer(sendCrashReports: true) }
+            Button("Don't Send", role: .cancel) { preferences.answer(sendCrashReports: false) }
+        } message: {
+            Text(TelemetryPreferences.Wording.questionDetail + "\n\nYou can change this, and usage statistics, in Settings > Privacy.")
+        }
+    }
+}
+
 private struct SettingsTabs: View {
     @AppStorage("settingsTab") private var tab = "general"
 
@@ -130,6 +155,7 @@ private struct SettingsTabs: View {
         TabView(selection: $tab) {
             SettingsView().tabItem { Label("General", systemImage: "gearshape") }.tag("general")
             PermissionsView().tabItem { Label("Permissions", systemImage: "lock.shield") }.tag("permissions")
+            PrivacySettingsView().tabItem { Label("Privacy", systemImage: "hand.raised") }.tag("privacy")
         }
     }
 }
@@ -167,6 +193,52 @@ private struct SettingsView: View {
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
                 }
+            }
+        }
+        .padding(24)
+        .frame(width: 600, alignment: .top)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// What AgentTerm reports to its developer, and the switches for it.
+private struct PrivacySettingsView: View {
+    @StateObject private var preferences = TelemetryPreferences()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsHeader(
+                symbol: "hand.raised.fill", tint: .blue, title: "Privacy",
+                subtitle: "What \(AppChannel.current.appName) reports to its developer. Your terminals, prompts and files are never part of it.")
+            SettingsCard {
+                Toggle(isOn: $preferences.crashReports) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Send crash reports").font(.system(size: 13, weight: .medium))
+                        Text(TelemetryPreferences.Wording.questionDetail)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+            }
+            SettingsCard {
+                Toggle(isOn: $preferences.usageStatistics) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Share usage statistics").font(.system(size: 13, weight: .medium))
+                        Text(TelemetryPreferences.Wording.usageDetail)
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+            }
+            if !preferences.isAvailable {
+                Label(TelemetryPreferences.Wording.unavailable, systemImage: "info.circle")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(24)

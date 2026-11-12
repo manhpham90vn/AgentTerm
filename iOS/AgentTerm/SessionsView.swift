@@ -1,4 +1,5 @@
 import AgentTermProtocol
+import AgentTermTelemetry
 import AgentTermTerminal
 import SwiftUI
 import UniformTypeIdentifiers
@@ -7,6 +8,7 @@ import UniformTypeIdentifiers
 struct SessionsView: View {
     @EnvironmentObject private var model: PhoneModel
     @State private var confirmingForget = false
+    @State private var showingPrivacy = false
 
     var body: some View {
         NavigationStack(path: $model.path) {
@@ -81,6 +83,11 @@ struct SessionsView: View {
                         } label: {
                             Label("Check Agents Again", systemImage: "arrow.clockwise")
                         }
+                        Button {
+                            showingPrivacy = true
+                        } label: {
+                            Label("Privacy…", systemImage: "hand.raised")
+                        }
                         Button(role: .destructive) {
                             confirmingForget = true
                         } label: {
@@ -120,6 +127,9 @@ struct SessionsView: View {
                         .navigationTitle("All Conversations")
                         .navigationBarTitleDisplayMode(.inline)
                 }
+            }
+            .sheet(isPresented: $showingPrivacy) {
+                PrivacySheet().preferredColorScheme(.dark)
             }
             .sheet(isPresented: $model.showBrowser) {
                 BrowseSheet()
@@ -175,6 +185,37 @@ private struct VersionCard: View {
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.yellow.opacity(0.12)))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("version-card")
+    }
+}
+
+/// What AgentTerm reports to its developer, and the switches for it.
+private struct PrivacySheet: View {
+    @EnvironmentObject private var preferences: TelemetryPreferences
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Toggle("Send crash reports", isOn: $preferences.crashReports)
+                } footer: {
+                    Text(TelemetryPreferences.Wording.questionDetail)
+                }
+                Section {
+                    Toggle("Share usage statistics", isOn: $preferences.usageStatistics)
+                } footer: {
+                    Text(TelemetryPreferences.Wording.usageDetail)
+                }
+                if !preferences.isAvailable {
+                    Section { Text(TelemetryPreferences.Wording.unavailable).font(.footnote).foregroundStyle(.secondary) }
+                }
+            }
+            .navigationTitle("Privacy")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+            }
+        }
     }
 }
 

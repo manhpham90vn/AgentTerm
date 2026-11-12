@@ -16,6 +16,12 @@ ones `Package.resolved` pins.
 | [swift-argument-parser](https://github.com/apple/swift-argument-parser) | A dependency of SwiftTerm's tools | Apache 2.0 |
 | [swift-png](https://github.com/tayloraswift/swift-png) and [h](https://github.com/rarestype/h) | Dependencies of SwiftTerm | Apache 2.0 |
 
+The released apps also link [Firebase](https://github.com/firebase/firebase-ios-sdk)
+(Analytics and Crashlytics, Apache 2.0) and the libraries it brings with it,
+each under the license in its own repository: GoogleAppMeasurement,
+GoogleUtilities, GoogleDataTransport, nanopb (zlib license), Promises and
+others listed in `Package.resolved`.
+
 ## Bundled files
 
 | File | What | License |

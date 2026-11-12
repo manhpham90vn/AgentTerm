@@ -44,6 +44,15 @@ done
 # The icon is drawn by scripts/make-icons.swift and checked in.
 cp assets/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
+# Usage statistics and crash reports go through Firebase, and only from a
+# released app that was given its config file. Without FIREBASE_CONFIG_MAC,
+# as in a build from source, the app has no service to report to and sends
+# nothing. A development build never gets the file.
+if [ "$CHANNEL" = release ] && [ -n "${FIREBASE_CONFIG_MAC:-}" ]; then
+    [ -f "$FIREBASE_CONFIG_MAC" ] || { echo "bundle-mac.sh: FIREBASE_CONFIG_MAC is not a file: $FIREBASE_CONFIG_MAC" >&2; exit 1; }
+    cp "$FIREBASE_CONFIG_MAC" "$APP/Contents/Resources/GoogleService-Info.plist"
+fi
+
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -60,6 +69,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key><string>14.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key><true/>
+    <!-- Firebase collects nothing by itself: the app switches each kind of
+         report on only when the user's choices allow it. -->
+    <key>FIREBASE_ANALYTICS_COLLECTION_ENABLED</key><false/>
+    <key>FirebaseCrashlyticsCollectionEnabled</key><false/>
     <!-- macOS holds a terminal responsible for what runs inside it. Without
          these, a program in a session that wants one of these things is
          refused without the user ever being asked. -->

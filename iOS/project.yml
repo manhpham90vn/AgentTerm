@@ -26,6 +26,10 @@ targets:
         product: AgentTermTerminal
       - package: AgentTerm
         product: AgentTermEditor
+      - package: AgentTerm
+        product: AgentTermTelemetry
+      - package: AgentTerm
+        product: AgentTermFirebase
     configFiles:
       Debug: Version.xcconfig
       Release: Version.xcconfig
@@ -37,6 +41,8 @@ targets:
         TARGETED_DEVICE_FAMILY: "1"
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
+        # Firebase's Objective-C categories are only found with this.
+        OTHER_LDFLAGS: $(inherited) -ObjC
         ENABLE_USER_SCRIPT_SANDBOXING: YES
       # A build made on a developer's machine is an app of its own next to the
       # one from TestFlight: its own identifier, name and pairing link scheme.
@@ -56,6 +62,10 @@ targets:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         UILaunchScreen: {}
+        # Firebase collects nothing by itself: the app switches each kind of
+        # report on only when the user's choices allow it.
+        FIREBASE_ANALYTICS_COLLECTION_ENABLED: false
+        FirebaseCrashlyticsCollectionEnabled: false
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft

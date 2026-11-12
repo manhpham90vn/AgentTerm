@@ -1,0 +1,38 @@
+AgentTerm is a remote for the coding agents running on your own computer. Start Claude Code, Codex, Antigravity or Copilot CLI in a project folder, leave your desk, and pick the same sessions up on your iPhone.
+
+It needs the free AgentTerm app on your computer, which holds the sessions. The iPhone connects to it directly, over your own Tailscale network. There is no account and no server in between.
+
+A REAL TERMINAL, MADE FOR A PHONE
+• The same live session you have on your computer, not a copy.
+• A key bar with Esc, Tab, Shift+Tab, Ctrl-C and the arrows.
+• A compose field to write prompts with the normal keyboard, dictation and autocorrect included, in any language.
+• Text size you can change, and a terminal sized to the phone while you use it.
+
+START AND ARRANGE SESSIONS
+• One tap starts an agent or a shell in any of your project folders, or in any folder on the computer.
+• Pin the sessions you keep, group them with a name and a color, and drag them into order. The arrangement is the same on the computer.
+• Sessions keep running when you close the app.
+
+SEE WHAT THE AGENT DID
+• Git: the folder's changes, staged and unstaged, with diffs. Stage, unstage and commit from the phone.
+• Files: browse the project, read and edit text with syntax coloring, preview Markdown and Mermaid diagrams.
+• History: every conversation each agent had in a folder, to resume in a new session.
+
+USAGE AT A GLANCE
+• Under each agent's terminal: the model, how full the context is, and what your account has left, with reset times.
+
+HAND OFF
+• When one agent runs out of quota, hand the conversation to another. It gets the conversation so far and the state of the working tree, in the same folder or another one.
+
+PAIRING AND PRIVACY
+• Pair by scanning a QR code shown on the computer. More than one computer can be paired.
+• Each phone gets its own token, which you can revoke on the computer.
+• What your terminals show, your prompts and your files stay on your devices. Crash reports are sent only if you agree, and usage statistics can be switched off.
+• Open source, under the MIT license.
+
+REQUIREMENTS
+• AgentTerm for macOS 14 or later on the computer, free at github.com/manhpham90vn/AgentTerm.
+• Tailscale on both devices to connect from outside your home network.
+• At least one agent CLI installed on the computer. AgentTerm does not include the agents or an account for them.
+
+Claude Code, Codex, Antigravity and GitHub Copilot are products of their respective owners. AgentTerm is an independent app and is not affiliated with or endorsed by them.
