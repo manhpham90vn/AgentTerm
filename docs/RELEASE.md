@@ -83,9 +83,11 @@ make store-screenshots   # send fastlane/screenshots/en-US
 
 The "Store listing" workflow on GitHub does the same from CI, run by hand
 (`gh workflow run metadata.yml`, with `-f screenshots=true` for the
-screenshots too). Neither submits anything for review. `review_information/phone_number.txt`
-is not in the repository; App Review asks for a phone number, which is set
-on App Store Connect.
+screenshots too). Neither submits anything for review. App Store Connect takes the contact
+for App Review only together with a phone number, which is not kept in the
+repository: without `review_information/phone_number.txt` the lane leaves
+that folder out, and the contact and notes are set on App Store Connect by
+hand (the notes to paste are in `review_information/notes.txt`).
 
 ## Mac
 
