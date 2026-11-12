@@ -32,10 +32,14 @@ them over [Tailscale](https://tailscale.com).
 - **Tabs you arrange.** Sessions, files and diffs in one strip: drag to
   reorder, pin, and group with a name and a color.
 - **Git, files and history** of each project folder next to the terminal:
-  stage and commit, edit files, preview Markdown and Mermaid, resume a past
-  conversation.
+  stage, commit, push and pull, have an agent write the commit message, edit
+  files, preview Markdown and Mermaid, resume a past conversation.
 - **Usage at a glance.** Model, context and what your account has left, with
-  reset times, for Claude Code, Codex, Antigravity and Copilot CLI.
+  reset times, for Claude Code, Codex, Antigravity and Copilot CLI, and how
+  the Mac itself is doing:
+  processor, memory, network speed, temperature, battery and uptime.
+- **SSH hosts.** The hosts of your `~/.ssh/config`, one click each, also
+  from the iPhone through the Mac.
 - **Handoff.** Pass a conversation's work to another agent when one runs out
   of quota, in the same folder or another one.
 - **iPhone remote.** Pair with a QR code and get the same sessions, folders,
@@ -90,6 +94,7 @@ the same row.
 
 | Mac app | iPhone app | Protocol |
 |---|---|---|
+| 0.4.x | 0.4.x | 6 |
 | 0.2.x, 0.3.x | 0.2.x, 0.3.x | 5 |
 | 0.1.x | 0.1.x | 4 |
 

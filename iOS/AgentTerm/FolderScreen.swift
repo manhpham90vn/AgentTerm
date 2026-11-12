@@ -30,6 +30,7 @@ struct FolderScreen: View {
         .background(Palette.canvas.ignoresSafeArea())
         .navigationTitle((folder as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
         .toolbar {
             if model.folders.contains(folder) {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -65,8 +66,32 @@ private struct ChangesList: View {
             if let diff = model.diffs[folder] {
                 if !diff.isRepository {
                     Placeholder(text: "This folder is not a git repository.")
-                } else if diff.files.isEmpty {
+                } else if diff.files.isEmpty && !diff.canPush && !diff.canPull {
                     Placeholder(text: "No uncommitted changes.")
+                } else if diff.files.isEmpty {
+                    // Nothing to commit, but a commit that was just made is
+                    // what there is to push.
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            if let branch = diff.branch {
+                                Label(branch, systemImage: "arrow.triangle.branch")
+                                    .font(.footnote.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .padding(.horizontal, 6)
+                                    .padding(.bottom, 10)
+                            }
+                            SyncBar(folder: folder, diff: diff)
+                            Text("No uncommitted changes.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 48)
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.bottom, 24)
+                    }
+                    .refreshable { model.loadDiff(folder) }
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 0) {
@@ -80,7 +105,7 @@ private struct ChangesList: View {
                                 Spacer()
                                 DiffCount(added: diff.files.reduce(0) { $0 + $1.added }, deleted: diff.files.reduce(0) { $0 + $1.deleted })
                                 Button {
-                                    viewMode = isTree ? "list" : "tree"
+                                    model.setDisplay { $0.changesView = isTree ? "list" : "tree" }
                                 } label: {
                                     Image(systemName: isTree ? "list.bullet" : "list.bullet.indent")
                                         .font(.system(size: 15, weight: .semibold))
@@ -90,6 +115,10 @@ private struct ChangesList: View {
                             }
                             .padding(.horizontal, 6)
                             .padding(.bottom, 10)
+                            if diff.canPush || diff.canPull {
+                                SyncBar(folder: folder, diff: diff)
+                                    .padding(.bottom, 12)
+                            }
                             CommitBox(folder: folder, stagedCount: diff.staged.count)
                                 .padding(.bottom, 14)
                             if !diff.staged.isEmpty {
@@ -169,6 +198,73 @@ private struct ChangesList: View {
     }
 }
 
+/// Push and pull for the branch that is checked out, with how far it is
+/// from the branch it follows. git runs on the Mac.
+private struct SyncBar: View {
+    @EnvironmentObject private var model: PhoneModel
+    let folder: String
+    let diff: DiffSnapshot
+    @State private var confirmingFirstPush = false
+
+    private var busy: String? { model.syncing[folder] }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                if diff.canPull {
+                    button("Pull", symbol: "arrow.down", count: diff.behind ?? 0, working: busy == "pull") { model.pull(in: folder) }
+                        .accessibilityIdentifier("git-pull")
+                }
+                if diff.canPush {
+                    button(diff.upstream == nil ? "Publish Branch" : "Push", symbol: "arrow.up", count: diff.ahead ?? 0, working: busy == "push") {
+                        // A first push gives the branch an upstream: said first.
+                        if diff.upstream == nil { confirmingFirstPush = true } else { model.push(in: folder) }
+                    }
+                    .accessibilityIdentifier("git-push")
+                }
+            }
+            .disabled(busy != nil || model.status != .connected)
+            Text(diff.upstream.map { "Follows \($0)" } ?? "Not on a remote yet")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.head)
+                .padding(.horizontal, 6)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .confirmationDialog(
+            "Push “\(diff.branch ?? "")” to \(diff.pushRemote ?? "the remote")?", isPresented: $confirmingFirstPush, titleVisibility: .visible
+        ) {
+            Button("Push") { model.push(in: folder) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "The branch does not follow a branch on a remote yet. It is pushed as \(diff.pushRemote ?? "origin")/\(diff.branch ?? ""), which it follows from then on."
+            )
+        }
+    }
+
+    private func button(_ title: String, symbol: String, count: Int, working: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                if working {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: symbol).font(.system(size: 13, weight: .bold))
+                }
+                Text(title).font(.subheadline.weight(.semibold))
+                if count > 0 {
+                    Text("\(count)").font(.subheadline.weight(.semibold)).monospacedDigit().foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 3)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityLabel(count > 0 ? "\(title), \(count)" : title)
+    }
+}
+
 /// Where the commit message is written and the commit is made.
 private struct CommitBox: View {
     @EnvironmentObject private var model: PhoneModel
@@ -185,14 +281,40 @@ private struct CommitBox: View {
         stagedCount > 0 && model.committing == nil && !message.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var isWriting: Bool { model.writingCommitMessage.contains(folder) }
+
     var body: some View {
         VStack(spacing: 8) {
-            TextField("Commit message", text: message, axis: .vertical)
-                .lineLimit(1...5)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.panel))
-                .accessibilityIdentifier("commit-message")
+            HStack(alignment: .top, spacing: 8) {
+                TextField("Commit message", text: message, axis: .vertical)
+                    .lineLimit(1...5)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.panel))
+                    .accessibilityIdentifier("commit-message")
+                if let writer = model.commitWriterAgent {
+                    // An agent on the Mac writes the message for what is
+                    // staged. While it does, the same button stops it.
+                    Button {
+                        if isWriting { model.cancelCommitMessage(in: folder) } else { model.writeCommitMessage(in: folder) }
+                    } label: {
+                        Group {
+                            if isWriting {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Image(systemName: "sparkles").font(.system(size: 16, weight: .semibold))
+                            }
+                        }
+                        .frame(width: 42, height: 42)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.panel))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(stagedCount > 0 ? Palette.tint : Color.secondary)
+                    .disabled((stagedCount == 0 && !isWriting) || model.status != .connected)
+                    .accessibilityLabel(isWriting ? "Stop writing the commit message" : "Write the commit message with \(writer.name)")
+                    .accessibilityIdentifier("write-commit-message")
+                }
+            }
             Button {
                 model.commit(in: folder)
             } label: {
@@ -323,12 +445,21 @@ struct PatchScreen: View {
     let staged: Bool
 
     private var key: String { PhoneModel.patchKey(folder: folder, file: file, staged: staged) }
+    /// "unified" shows the diff in one panel, "split" as before and after
+    /// side by side, which reads best with the phone on its side.
+    @AppStorage("diffLayout") private var layout = "unified"
+
+    private var isSplit: Bool { layout == "split" }
 
     var body: some View {
         Group {
             if let loaded = model.patches[key] {
                 if let diff = loaded {
-                    PatchLines(patch: diff.patch)
+                    if isSplit {
+                        SplitDiffView(patch: diff.patch, fontSize: 11)
+                    } else {
+                        PatchLines(patch: diff.patch)
+                    }
                 } else {
                     Placeholder(text: "This file no longer has changes.")
                 }
@@ -339,6 +470,18 @@ struct PatchScreen: View {
         .background(Palette.canvas.ignoresSafeArea())
         .navigationTitle((file as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    model.setDisplay { $0.diffLayout = isSplit ? "unified" : "split" }
+                } label: {
+                    Image(systemName: isSplit ? "rectangle" : "rectangle.split.2x1")
+                }
+                .accessibilityLabel(isSplit ? "Show in one panel" : "Show side by side")
+                .accessibilityIdentifier("diff-layout")
+            }
+        }
         .onAppear { model.loadPatch(folder: folder, file: file, staged: staged) }
     }
 }
@@ -751,6 +894,7 @@ struct ConversationSheet: View {
             .background(Palette.canvas.ignoresSafeArea())
             .navigationTitle(showsResume ? "Conversation" : "Hand Off")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar(.hidden, for: .tabBar)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }

@@ -49,12 +49,34 @@ public struct DiffSnapshot: Codable, Equatable, Sendable {
     public var isRepository: Bool
     public var branch: String?
     public var files: [FileDiff]
+    /// The branch on the remote that the checked out branch follows,
+    /// "origin/main". Nil when it follows none.
+    public var upstream: String?
+    /// Commits the branch has that its upstream has not, and the other way
+    /// round, as of the last time the remote was asked.
+    public var ahead: Int?
+    public var behind: Int?
+    /// The remote a first push would go to, for a branch without an
+    /// upstream. Nil when there is an upstream, or no remote at all.
+    public var pushRemote: String?
 
-    public init(isRepository: Bool, branch: String?, files: [FileDiff]) {
+    public init(
+        isRepository: Bool, branch: String?, files: [FileDiff],
+        upstream: String? = nil, ahead: Int? = nil, behind: Int? = nil, pushRemote: String? = nil
+    ) {
         self.isRepository = isRepository
         self.branch = branch
         self.files = files
+        self.upstream = upstream
+        self.ahead = ahead
+        self.behind = behind
+        self.pushRemote = pushRemote
     }
+
+    /// Whether there is somewhere to push the branch to.
+    public var canPush: Bool { branch != nil && (upstream != nil || pushRemote != nil) }
+    /// Whether there is somewhere to pull from.
+    public var canPull: Bool { branch != nil && upstream != nil }
 
     public static let notARepository = DiffSnapshot(isRepository: false, branch: nil, files: [])
 

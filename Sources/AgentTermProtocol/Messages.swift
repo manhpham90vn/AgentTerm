@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 5
+public let agenttermProtocolVersion = 6
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -152,8 +152,11 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Starts a session and attaches the sender to it.
     case create(CreateRequest)
     /// Starts receiving a session. Watching does not change the session's
-    /// size, unless nobody else is attached.
-    case attach(session: SessionID, size: TermSize)
+    /// size, unless nobody else is attached. `have` is how far into the
+    /// session's output the sender's terminal already is, as `replaying`
+    /// and what followed it told: the host then sends only what came after,
+    /// when it still keeps that. Nil for a terminal that starts empty.
+    case attach(session: SessionID, size: TermSize, have: Int? = nil)
     case detach(session: SessionID)
     /// Reports that the sender's own grid changed (a window was resized, a
     /// keyboard appeared). The session follows only if the sender is the one
@@ -180,6 +183,20 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case gitUnstage(path: String, files: [String])
     /// Commits what is staged.
     case gitCommit(path: String, message: String)
+    /// Pushes the branch that is checked out to its upstream. A branch
+    /// without one is pushed to the remote the folder's changes name
+    /// (`DiffSnapshot.pushRemote`), which becomes its upstream. Answered
+    /// with the folder's changes, as `diff` is.
+    case gitPush(path: String)
+    /// Brings in what the upstream has. A pull that conflicts is undone.
+    case gitPull(path: String)
+    /// Asks an agent to write the commit message for what is staged.
+    /// Answered with `commitMessage`. It never commits.
+    case writeCommitMessage(path: String)
+    /// Stops the agent that is writing a commit message for the folder.
+    case cancelCommitMessage(path: String)
+    /// Replaces which agent writes commit messages, and how it is asked.
+    case setCommitWriter(CommitWriterSettings)
     /// Asks for what the agents' accounts have used and have left. With
     /// `refresh`, the agents' services are asked again first.
     case accountUsage(refresh: Bool)
@@ -188,6 +205,17 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case setTabLayout(TabLayout)
     /// Keep the Mac awake while sessions are running, or stop doing so.
     case setKeepAwake(Bool)
+    /// Replaces how the Mac is kept awake: the display too, only on power,
+    /// and for how long. `until` is the host's to set and is ignored here.
+    case setKeepAwakeOptions(KeepAwakeOptions)
+    /// Replaces how things are shown on every device: the temperature's
+    /// unit, diffs in one panel or two, changes as a list or a tree.
+    case setDisplaySettings(DisplaySettings)
+    /// Asks for the hosts of the Mac's SSH configuration. Answered with `sshHosts`.
+    case sshHosts
+    /// Opens `ssh <host>` in a new session the sender is attached to. The
+    /// host has to be one the Mac's SSH configuration names.
+    case connectSSH(host: String, size: TermSize)
     /// Asks for the files and folders in a folder. Answered with `files`.
     case files(path: String)
     /// Asks for what a file holds. Answered with `file`.
@@ -228,6 +256,12 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// Project folders on the host, in the order they were added.
     case folders([String])
     case attached(SessionInfo)
+    /// Sent after `attached`, before the session's earlier output: where in
+    /// the session's output what follows starts. It is the `have` the
+    /// client attached with when the host could go on from there. Any other
+    /// number means all that is kept comes again, for a terminal that
+    /// starts empty.
+    case replaying(session: SessionID, from: Int)
     /// Sent after `attached` and the session's earlier output that follows
     /// it: everything before this was a replay of what already happened.
     case replayed(session: SessionID)
@@ -257,6 +291,27 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// Whether the Mac is kept awake while sessions are running. Sent on
     /// connecting and when a client changes it.
     case keepAwake(Bool)
+    /// How the Mac is kept awake. Sent with `keepAwake`.
+    case keepAwakeOptions(KeepAwakeOptions)
+    /// Which agent writes commit messages, and how it is asked. Sent on
+    /// connecting and when a client changes it.
+    case commitWriter(CommitWriterSettings)
+    /// Answer to `writeCommitMessage`. `message` is nil when the agent was
+    /// stopped or failed; an `error` says why before it.
+    case commitMessage(path: String, message: String?)
+    /// How things are shown, the same on every device. Sent on connecting
+    /// and when a client changes it. Nil from a host that keeps none yet:
+    /// the client then hands it its own.
+    case displaySettings(DisplaySettings?)
+    /// The hosts the Mac's SSH configuration names, as they are written there.
+    case sshHosts([String])
+    /// A push or a pull in a folder is over, whether git took it or not.
+    /// Sent after the `error` and the `diff` that answer it: a `diff` alone
+    /// may be the answer to something else asked in the meantime.
+    case gitSynced(path: String)
+    /// How the Mac itself is doing: processor, memory, network, heat,
+    /// battery and uptime. Sent every few seconds while a client is connected.
+    case systemStats(SystemStats)
     /// The files and folders in a folder.
     case files(path: String, entries: [FileEntry])
     /// What a file holds. `data` carries the bytes of an image.

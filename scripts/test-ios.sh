@@ -51,6 +51,14 @@ git -C "$PROJECT" config user.email t@example.com
 git -C "$PROJECT" config commit.gpgsign false
 printf 'first line\n' > "$PROJECT/notes.txt"
 git -C "$PROJECT" add . && git -C "$PROJECT" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m init
+# A remote the project follows, so the commit made from the phone can be pushed.
+REMOTE="$STATE/remote.git"
+git init -q --bare -b main "$REMOTE"
+git -C "$PROJECT" remote add origin "$REMOTE"
+git -C "$PROJECT" push -q -u origin main
+# Hosts for the SSH menu. Nothing connects to them.
+mkdir -p "$FAKE_HOME/.ssh"
+printf 'Host build-server\n  HostName 127.0.0.1\nHost *.internal\n' > "$FAKE_HOME/.ssh/config"
 # A change long and wide enough that its diff has to scroll both ways.
 {
     printf 'first line\nsecond line\n'
@@ -97,10 +105,23 @@ export TEST_RUNNER_AGENTTERM_SECOND_PAIR_URL="$(AGENTTERM_STATE_DIR="$SECOND_STA
 export TEST_RUNNER_AGENTTERM_LAUNCH="${AGENTTERM_LAUNCH:-Start Shell}"
 export TEST_RUNNER_AGENTTERM_TEST_PROJECT=1
 if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export TEST_RUNNER_AGENTTERM_SHOT_DIR="$SHOTS"; fi
+# TAKEOVER=1 has something play the Mac: once the phone has a session open,
+# it is taken at a Mac's size, with output to scroll through. TAKEOVER=only
+# checks nothing else.
+if [ -n "${TAKEOVER:-}" ]; then
+    export TEST_RUNNER_AGENTTERM_EXPECT_MAC_TAKEOVER=1
+    [ "$TAKEOVER" = only ] && export TEST_RUNNER_AGENTTERM_ONLY_MAC_TAKEOVER=1
+    AGENTTERM_STATE_DIR="$STATE" "$AGENTTERMD" take-control --port "$PORT" --after 8 --hold 60 --type 'seq 1 400' > "$STATE/takeover.log" 2>&1 &
+    TAKEOVER_PID=$!
+    trap 'kill "$DAEMON" "$SECOND_DAEMON" "$TAKEOVER_PID" 2>/dev/null || true; rm -rf "$STATE" "$SECOND_STATE"' EXIT
+fi
 
 if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     # The test arranged the sessions; the host has to have kept that.
+    if [ "${TAKEOVER:-}" = only ]; then echo "iOS UI test passed (Mac takeover only)."; rm -f "$LOG"; exit 0; fi
     grep -q '"Group 1 api"' "$STATE/tabs.json" || { echo "test-ios.sh: the host did not save the arrangement of the sessions" >&2; exit 1; }
+    # The test committed and pushed from the phone; the remote has to have it.
+    [ "$(git -C "$REMOTE" log -1 --format=%s main)" = "test: add a second line" ] || { echo "test-ios.sh: the push from the phone did not reach the remote" >&2; exit 1; }
     grep -E "Test Case .* (passed|failed)|Executed [0-9]+ test" "$LOG" | tail -3
     echo "iOS UI test passed."
     rm -f "$LOG"

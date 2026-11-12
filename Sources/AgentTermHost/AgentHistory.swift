@@ -42,8 +42,11 @@ public enum AgentHistory {
         let home = URL(fileURLWithPath: home, isDirectory: true)
         let scope = Scope(directory: nil, includeSubfolders: true)
         let all = claude(scope, home) + codex(scope, home) + antigravity(scope, home) + copilot(scope, home)
+        // What an agent was asked on the host's own behalf, a commit
+        // message for one, is not a conversation of the user's.
+        let own = HostEnvironment.commitWriterDirectory.standardizedFileURL.path
         return Array(
-            all.filter { isSafeIdentifier($0.sessionID) && !$0.title.isEmpty }
+            all.filter { isSafeIdentifier($0.sessionID) && !$0.title.isEmpty && URL(fileURLWithPath: $0.cwd).standardizedFileURL.path != own }
                 .sorted { $0.updatedAt > $1.updatedAt }
                 .prefix(limit)
         )

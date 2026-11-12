@@ -21,6 +21,8 @@ struct RootView: View {
                     .frame(minWidth: 210, idealWidth: 250, maxWidth: 380)
             }
             VStack(spacing: 0) {
+                // Right under the launch buttons: how this Mac is doing.
+                SystemStatsLine(store: model.system)
                 if let path = model.otherHost {
                     OtherHostBanner(path: path)
                 } else if model.hostMatch != .same {
@@ -94,6 +96,16 @@ struct RootView: View {
         } message: { _ in
             Text("What is running in the terminals stops. Files with unsaved changes stay open.")
         }
+        .confirmationDialog(
+            model.pendingFirstPush.map { "Push “\($0.branch)” to \($0.remote)?" } ?? "",
+            isPresented: Binding(get: { model.pendingFirstPush != nil }, set: { if !$0 { model.pendingFirstPush = nil } }),
+            titleVisibility: .visible, presenting: model.pendingFirstPush
+        ) { push in
+            Button("Push") { model.pushConfirmed(push) }
+            Button("Cancel", role: .cancel) {}
+        } message: { push in
+            Text("The branch does not follow a branch on a remote yet. It is pushed as \(push.remote)/\(push.branch), which it follows from then on.")
+        }
         .sheet(item: $model.pendingHandoff) { conversation in
             HandoffSheet(conversation: conversation)
         }
@@ -117,8 +129,52 @@ struct LaunchBar: View {
             }
             LaunchButton(title: "Shell", id: "shell") { model.launch(nil) }
                 .help("Start a shell in \(model.workingDirectory)")
+            SSHMenu()
         }
         .disabled(model.status != .connected)
+    }
+}
+
+/// The hosts of `~/.ssh/config`, each opening `ssh <host>` as a session.
+/// Not shown when the configuration names none.
+struct SSHMenu: View {
+    @EnvironmentObject private var model: AppModel
+    var large = false
+
+    var body: some View {
+        if !model.sshHosts.isEmpty {
+            Menu {
+                Section("Hosts in ~/.ssh/config") {
+                    ForEach(model.sshHosts, id: \.self) { host in
+                        Button(host) { model.connectSSH(host) }
+                    }
+                }
+            } label: {
+                HStack(spacing: large ? 8 : 6) {
+                    Image(systemName: Theme.symbol(for: "ssh"))
+                        .font(.system(size: large ? 13 : 11, weight: .semibold))
+                        .foregroundStyle(Theme.accent(for: "ssh"))
+                    Text("SSH")
+                        .font(.system(size: large ? 13 : 12, weight: .medium))
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: large ? 9 : 8, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                // One element to assistive tools, not one per part of the label.
+                .accessibilityElement(children: .ignore)
+                .padding(.horizontal, large ? 14 : 10)
+                .padding(.vertical, large ? 9 : 5)
+                .background(RoundedRectangle(cornerRadius: large ? 9 : 7, style: .continuous).fill(Theme.raised))
+                .overlay(RoundedRectangle(cornerRadius: large ? 9 : 7, style: .continuous).strokeBorder(Theme.hairline))
+                .contentShape(Rectangle())
+            }
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("Open a session on a host of this Mac's SSH configuration")
+            .accessibilityLabel("SSH")
+        }
     }
 }
 
@@ -325,16 +381,20 @@ struct CenterView: View {
                         if let info, let agent = info.agent {
                             // What the agent's session has used, under its terminal.
                             Theme.hairline.frame(height: 1)
-                            UsageBar(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent]) { showingUsage = true }
-                                .background(Theme.panel)
-                                .help("Show the account's usage")
-                                .popover(isPresented: $showingUsage, arrowEdge: .bottom) {
-                                    ScrollView {
-                                        UsageDetails(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent]) { model.refreshAccountUsage() }
+                            UsageBar(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent]) {
+                                showingUsage = true
+                            }
+                            .background(Theme.panel)
+                            .help("Show the account's usage")
+                            .popover(isPresented: $showingUsage, arrowEdge: .bottom) {
+                                ScrollView {
+                                    UsageDetails(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent]) {
+                                        model.refreshAccountUsage()
                                     }
-                                    .frame(width: 380)
-                                    .frame(maxHeight: 520)
                                 }
+                                .frame(width: 380)
+                                .frame(maxHeight: 520)
+                            }
                         }
                     }
                 } else {
@@ -421,6 +481,7 @@ struct WelcomeView: View {
                     LaunchButton(title: agent.name, id: agent.id, large: true) { model.launch(agent) }
                 }
                 LaunchButton(title: "Shell", id: "shell", large: true) { model.launch(nil) }
+                SSHMenu(large: true)
             }
             if model.agentsLoaded && model.installedAgents.isEmpty {
                 VStack(spacing: 6) {

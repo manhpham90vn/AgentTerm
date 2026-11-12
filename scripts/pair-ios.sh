@@ -17,10 +17,15 @@ source scripts/lib-simulator.sh
 if [ "${1:-}" = "--list" ] || [ "${1:-}" = "-l" ]; then print_simulators; exit 0; fi
 choose_simulator "${1:-}" "iPhone 17"
 DEVICE="$SIM_UDID"
-PORT="${AGENTTERM_PORT:-7717}"
+# Without AGENTTERM_PORT the host's own default is asked: this build is the
+# development app's, whose host is on another port than the released app's.
+# Naming the released app's port here would ask that host, with the
+# development app's token, and be refused as "invalid token".
+PORT_OPTION=()
+if [ -n "${AGENTTERM_PORT:-}" ]; then PORT_OPTION=(--port "$AGENTTERM_PORT"); fi
 
 swift build --product agenttermd >/dev/null
-LINK="$("$(swift build --show-bin-path)/agenttermd" pairing-link --port "$PORT" --host 127.0.0.1)"
+LINK="$("$(swift build --show-bin-path)/agenttermd" pairing-link ${PORT_OPTION[@]+"${PORT_OPTION[@]}"} --host 127.0.0.1)"
 xcrun simctl openurl "$DEVICE" "$LINK"
 echo "Sent a pairing link to $SIM_NAME. If it asks \"Open in AgentTerm?\", choose Open."
 echo "The link works once and for five minutes."

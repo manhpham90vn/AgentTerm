@@ -21,6 +21,9 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     /// Set while another device's size is in effect.
     public private(set) var foreignSize: TermSize?
 
+    /// How far back a terminal scrolls, in lines.
+    public static let scrollbackLines = 20_000
+
     private var applyingRemoteSize = false
     private var hasLaidOut = false
     /// The emulator's current grid. SwiftTerm does not expose it.
@@ -36,6 +39,12 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         view.nativeBackgroundColor = TerminalStyle.background
         view.nativeForegroundColor = TerminalStyle.foreground
         view.terminalDelegate = self
+        // Lines kept to scroll back through. The host replays megabytes of
+        // a session's earlier output; without room for them here most of
+        // that would be thrown away as it arrives.
+        view.changeScrollback(Self.scrollbackLines)
+        // Full-width characters at the size of their two cells: see `WideGlyphs`.
+        view.glyphFallbackProvider = WideGlyphs.shared
         #if os(iOS)
         // The emulator brings a key bar of its own above the keyboard, which
         // appears when the terminal is tapped. The app has its own key bar
@@ -67,14 +76,31 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         reportNaturalSizeSoon()
     }
 
+    /// Where in the session's output this terminal is: how much of all the
+    /// session wrote came before the next byte fed here. The host says
+    /// where a replay starts and this follows from there. With it a client
+    /// that lost its connection can ask for only what it has not seen. Nil
+    /// until the host has said, and with a host that never does.
+    public var position: Int?
+
     public func feed(_ data: Data) {
+        if let position { self.position = position + data.count }
+        // A replay is megabytes in many pieces and may take a while over a
+        // slow link. It is over when it says so, or when nothing more of it
+        // comes: not some seconds after it began.
+        if isReplaying, !replayIsFed { armReplayTimeout(seconds: replayQuiet) }
         view.feed(byteArray: ArraySlice([UInt8](data)))
     }
 
     /// True while the emulator may still be answering what the host
     /// replayed: the session's output from before this client attached.
     private var isReplaying = false
+    /// True once all of the replay was fed and the emulator was asked to
+    /// mark its end. What is fed after that is the session's live output.
+    private var replayIsFed = false
     private var replayTimeout: DispatchWorkItem?
+    /// How long a replay may say nothing before it is taken to be over.
+    var replayQuiet: TimeInterval = 5
 
     /// A mode nothing uses. The emulator is asked about it after a replay,
     /// and its answer marks the end of the answers that belong to the replay.
@@ -84,9 +110,17 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     /// questions the program once asked its terminal (which terminal are
     /// you, where is the cursor), and the emulator answers them again. Sent
     /// on, those answers would land in the program's input as stray text.
-    public func beginReplay() {
+    ///
+    /// `size` is the session's grid. The emulator takes it before the first
+    /// byte: what is replayed was drawn for that grid, and fed to an
+    /// emulator of another width its lines wrap in the wrong places. A
+    /// program that redraws in place, an agent for one, then shows a broken
+    /// screen, and nothing makes it draw again while its size stays as it is.
+    public func beginReplay(size: TermSize? = nil) {
+        if let size { setGrid(size) }
         isReplaying = true
-        armReplayTimeout(seconds: 5)
+        replayIsFed = false
+        armReplayTimeout(seconds: replayQuiet)
     }
 
     /// The replay has been fed. The emulator works through what it is fed
@@ -95,6 +129,7 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     /// every answer that comes before the answer to that one is the replay's.
     public func endReplay() {
         guard isReplaying else { return }
+        replayIsFed = true
         view.feed(text: "\u{1b}[?\(Self.replayMarkMode)$p")
         armReplayTimeout(seconds: 3)
     }
@@ -152,7 +187,10 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     /// grid as is rather than our own, so the content lines up.
     public func hostResized(to size: TermSize, driver: Bool) {
         foreignSize = driver ? nil : (size == naturalSize ? nil : size)
-        setGrid(driver ? naturalSize : size)
+        // Until this view has been laid out, the grid that fits it is not
+        // known: the session keeps its own rather than a made-up one. Once
+        // the view is on screen it reports what fits and the session follows.
+        setGrid(driver && hasLaidOut ? naturalSize : size)
     }
 
     private func setGrid(_ size: TermSize) {
@@ -161,6 +199,11 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         applyingRemoteSize = true
         view.resize(cols: size.cols, rows: size.rows)
         applyingRemoteSize = false
+        // A session that changes hands is drawn again for its new size.
+        // Whoever was reading further up is brought back to the screen as
+        // it is now, rather than left at a place in the old output that no
+        // longer lines up, with the prompt out of sight.
+        view.scroll(toPosition: 1)
         #if os(macOS)
         view.needsDisplay = true
         #else

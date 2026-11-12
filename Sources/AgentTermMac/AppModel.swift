@@ -133,6 +133,139 @@ final class AppModel: ObservableObject {
         connection?.send(.setKeepAwake(on))
     }
 
+    /// The display too, only on power, and for how long. The host keeps
+    /// them, so the iPhone shows the same.
+    @Published private(set) var keepAwakeOptions = KeepAwakeOptions()
+
+    func setKeepAwakeOptions(_ options: KeepAwakeOptions) {
+        keepAwakeOptions = options
+        connection?.send(.setKeepAwakeOptions(options))
+    }
+
+    /// How things are shown: the temperature's unit, diffs in one panel or
+    /// two, changes as a list or a tree. The host keeps them, so a choice
+    /// made here shows on the iPhone too, and the other way round. The views
+    /// read them from this app's preferences, which are written here.
+    @Published private(set) var display = DisplaySettings.stored()
+    func setDisplay(_ change: (inout DisplaySettings) -> Void) {
+        var settings = display
+        change(&settings)
+        settings = settings.checked
+        guard settings != display else { return }
+        display = settings
+        settings.store()
+        connection?.send(.setDisplaySettings(settings))
+    }
+
+    /// The host's settings, or, from a host that keeps none yet, the cue
+    /// to hand it this app's.
+    private func hostSent(display settings: DisplaySettings?) {
+        if let settings {
+            display = settings.checked
+            display.store()
+        } else {
+            connection?.send(.setDisplaySettings(display))
+        }
+    }
+
+    /// Which agent writes commit messages, and how it is asked. Kept by the host.
+    @Published private(set) var commitWriter = CommitWriterSettings()
+
+    func setCommitWriter(_ settings: CommitWriterSettings) {
+        commitWriter = settings
+        connection?.send(.setCommitWriter(settings))
+    }
+
+    /// The folders an agent is writing a commit message for right now.
+    @Published private(set) var writingCommitMessage: Set<String> = []
+
+    /// Asks an agent for the message of what is staged in the selected
+    /// folder. The host runs it; the answer lands in the message field.
+    func writeCommitMessage() {
+        guard let directory = selectedFolder, status == .connected, !writingCommitMessage.contains(directory) else { return }
+        writingCommitMessage.insert(directory)
+        connection?.send(.writeCommitMessage(path: directory))
+    }
+
+    func cancelCommitMessage() {
+        guard let directory = selectedFolder, writingCommitMessage.contains(directory) else { return }
+        connection?.send(.cancelCommitMessage(path: directory))
+    }
+
+    /// How this Mac is doing: processor, memory, network, heat, battery, uptime.
+    /// Kept apart from this model, so that figures arriving every few
+    /// seconds redraw only the view that shows them.
+    let system = SystemStatsStore()
+
+    /// The hosts of this Mac's SSH configuration, as the host read them.
+    @Published private(set) var sshHosts: [String] = []
+
+    func refreshSSHHosts() {
+        // A host from before 0.4.0 does not know the request, and would
+        // answer with an error for the user to wonder about.
+        guard hostVersion >= 6 else { return }
+        connection?.send(.sshHosts)
+    }
+
+    /// The protocol version the running host speaks. Zero until it has said.
+    private var hostVersion = 0
+
+    /// Opens `ssh <host>` in a new session.
+    func connectSSH(_ host: String) {
+        guard status == .connected else { return }
+        lastError = nil
+        selectNextAttached = true
+        Telemetry.shared.record(.sessionStart(agent: .init(id: nil)))
+        connection?.send(.connectSSH(host: host, size: startingSize))
+    }
+
+    /// "push" or "pull" while one is under way in a folder.
+    @Published private(set) var syncing: [String: String] = [:]
+    /// A first push that waits to be confirmed: it gives the branch an upstream.
+    @Published var pendingFirstPush: FirstPush?
+
+    struct FirstPush: Identifiable {
+        let folder: String
+        let branch: String
+        let remote: String
+        var id: String { folder + branch }
+    }
+
+    /// Pushes the selected folder's branch. A branch that follows nothing
+    /// yet is asked about first, saying where it would go.
+    func push() {
+        guard let directory = selectedFolder, let diff, let branch = diff.branch else { return }
+        if diff.upstream == nil, let remote = diff.pushRemote {
+            pendingFirstPush = FirstPush(folder: directory, branch: branch, remote: remote)
+        } else {
+            sync("push", in: directory) { GitActions.push(in: $0) }
+        }
+    }
+
+    func pushConfirmed(_ push: FirstPush) {
+        sync("push", in: push.folder) { GitActions.push(in: $0) }
+    }
+
+    func pull() {
+        guard let directory = selectedFolder else { return }
+        sync("pull", in: directory) { GitActions.pull(in: $0) }
+    }
+
+    private func sync(_ what: String, in directory: String, _ action: @escaping (String) -> String?) {
+        guard syncing[directory] == nil else { return }
+        syncing[directory] = what
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let problem = action(directory)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.syncing[directory] = nil
+                if let problem { self.notice = problem }
+                self.refreshDiff()
+                self.files.refresh()
+            }
+        }
+    }
+
     /// True once the host has listed its sessions.
     var sessionsKnown = false
 
@@ -237,6 +370,10 @@ final class AppModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.syncTabs() }
             .store(in: &observers)
+        // The SSH configuration may have been edited while the app was behind.
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in self?.refreshSSHHosts() }
+            .store(in: &observers)
         diffTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.showDiff, NSApp.isActive else { return }
@@ -314,6 +451,11 @@ final class AppModel: ObservableObject {
             controllers.removeAll()
             sessionsKnown = false
             keepAwake = nil
+            hostVersion = 0
+            system.stats = nil
+            sshHosts = []
+            writingCommitMessage = []
+            syncing = [:]
             hostMatch = .same
             tabLayoutKnown = false
             sessions = []
@@ -352,6 +494,8 @@ final class AppModel: ObservableObject {
     private func handle(_ message: ServerMessage) {
         switch message {
         case .welcome(let version, _):
+            hostVersion = version
+            refreshSSHHosts()
             hostMatch = ProtocolMatch(host: version)
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             wasConnected = true
@@ -367,6 +511,21 @@ final class AppModel: ObservableObject {
             agentsLoaded = true
         case .keepAwake(let on):
             keepAwake = on
+        case .keepAwakeOptions(let options):
+            keepAwakeOptions = options
+        case .commitWriter(let settings):
+            commitWriter = settings
+        case .displaySettings(let settings):
+            hostSent(display: settings)
+        case .commitMessage(let path, let message):
+            writingCommitMessage.remove(path)
+            // The agent's answer is a draft: it goes in the field, to be
+            // read and changed before anything is committed.
+            if let message { commitMessages[path] = message }
+        case .sshHosts(let list):
+            sshHosts = list
+        case .systemStats(let stats):
+            system.stats = stats
         case .tabLayout(let layout):
             let first = !tabLayoutKnown
             tabLayoutKnown = true
@@ -389,7 +548,7 @@ final class AppModel: ObservableObject {
         case .attached(let info):
             if controllers[info.id] == nil { controllers[info.id] = makeController(for: info.id) }
             // What follows is the session's earlier output, until `replayed`.
-            controllers[info.id]?.beginReplay()
+            controllers[info.id]?.beginReplay(size: info.size)
             if !sessions.contains(where: { $0.id == info.id }) { sessions.append(info) }
             if selectNextAttached || selectedSession == nil {
                 // A session that was just started comes to the front, also
@@ -417,6 +576,15 @@ final class AppModel: ObservableObject {
             }
         case .error(let text):
             lastError = text
+            // What stopped an agent from writing a commit message is said
+            // where the user is looking, not on the launch screen.
+            if !writingCommitMessage.isEmpty {
+                // A host from before 0.4.0 does not know the request and
+                // will never answer it.
+                let unknown = text == "malformed message"
+                notice = unknown ? "The host that is running is from an older version of AgentTerm and cannot do this. Restart the host." : text
+                if unknown { writingCommitMessage = [] }
+            }
         case .pairingCode(let code, let expiresAt):
             pairingCode = PairingCode(code: code, expiresAt: expiresAt)
         case .devices(let list):
@@ -428,7 +596,7 @@ final class AppModel: ObservableObject {
             devices = list
         case .accountUsage(let list):
             accountUsage = Dictionary(list.map { ($0.agent, $0) }, uniquingKeysWith: { $1 })
-        case .paired, .diff, .diffFile, .history, .directory, .handoffPlan, .files, .file, .fileSaved, .fileCreated:
+        case .paired, .diff, .gitSynced, .replaying, .diffFile, .history, .directory, .handoffPlan, .files, .file, .fileSaved, .fileCreated:
             // The Mac app reads changes, history and folders directly: it
             // runs on the machine they are on.
             break

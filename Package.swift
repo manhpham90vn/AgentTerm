@@ -83,5 +83,6 @@ let package = Package(
         .testTarget(name: "AgentTermEditorTests", dependencies: ["AgentTermEditor"]),
         .testTarget(name: "AgentTermTelemetryTests", dependencies: ["AgentTermTelemetry"]),
         .testTarget(name: "AgentTermHostTests", dependencies: ["AgentTermHost", "AgentTermClient"]),
+        .testTarget(name: "AgentTermTerminalTests", dependencies: ["AgentTermTerminal"]),
     ]
 )

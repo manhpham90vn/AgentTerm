@@ -17,8 +17,6 @@ enum Route: Hashable {
     case folder(String)
     /// The diff of one changed file.
     case file(folder: String, file: String, staged: Bool)
-    /// Every conversation on the Mac.
-    case allHistory
     /// A file on the Mac, to read or edit.
     case document(path: String)
 }
@@ -74,6 +72,107 @@ final class PhoneModel: ObservableObject {
         connection?.send(.setKeepAwake(on))
     }
 
+    /// The display too, only on power, and for how long. The Mac keeps
+    /// them, and its Settings show the same.
+    @Published private(set) var keepAwakeOptions = KeepAwakeOptions()
+
+    func setKeepAwakeOptions(_ options: KeepAwakeOptions) {
+        keepAwakeOptions = options
+        connection?.send(.setKeepAwakeOptions(options))
+    }
+
+    /// How things are shown: the temperature's unit, diffs in one panel or
+    /// two, changes as a list or a tree. The host keeps them, so a choice
+    /// made here shows on the Mac too, and the other way round. The views
+    /// read them from this app's preferences, which are written here.
+    @Published private(set) var display = DisplaySettings.stored()
+    func setDisplay(_ change: (inout DisplaySettings) -> Void) {
+        var settings = display
+        change(&settings)
+        settings = settings.checked
+        guard settings != display else { return }
+        display = settings
+        settings.store()
+        connection?.send(.setDisplaySettings(settings))
+    }
+
+    /// The host's settings, or, from a host that keeps none yet, the cue
+    /// to hand it this app's.
+    private func hostSent(display settings: DisplaySettings?) {
+        if let settings {
+            display = settings.checked
+            display.store()
+        } else {
+            connection?.send(.setDisplaySettings(display))
+        }
+    }
+
+    /// Which agent writes commit messages, and how it is asked. Kept by the Mac.
+    @Published private(set) var commitWriter = CommitWriterSettings()
+
+    func setCommitWriter(_ settings: CommitWriterSettings) {
+        commitWriter = settings
+        connection?.send(.setCommitWriter(settings))
+    }
+
+    /// The folders an agent is writing a commit message for right now.
+    @Published private(set) var writingCommitMessage: Set<String> = []
+
+    /// Asks an agent on the Mac for the message of what is staged. The
+    /// answer lands in the message field; nothing is committed.
+    func writeCommitMessage(in folder: String) {
+        guard status == .connected, !writingCommitMessage.contains(folder) else { return }
+        writingCommitMessage.insert(folder)
+        connection?.send(.writeCommitMessage(path: folder))
+    }
+
+    func cancelCommitMessage(in folder: String) {
+        guard writingCommitMessage.contains(folder) else { return }
+        connection?.send(.cancelCommitMessage(path: folder))
+    }
+
+    /// The agent that would write a commit message: the one chosen, or the
+    /// first one installed on the Mac.
+    var commitWriterAgent: AgentInfo? {
+        commitWriter.writer(among: agents)
+    }
+
+    /// "push" or "pull" while one is under way in a folder.
+    @Published private(set) var syncing: [String: String] = [:]
+
+    /// Pushes the folder's branch. For a branch that follows nothing yet
+    /// the Mac picks the remote the changes name, and sets it to be followed.
+    func push(in folder: String) {
+        guard status == .connected, syncing[folder] == nil else { return }
+        syncing[folder] = "push"
+        connection?.send(.gitPush(path: folder))
+    }
+
+    func pull(in folder: String) {
+        guard status == .connected, syncing[folder] == nil else { return }
+        syncing[folder] = "pull"
+        connection?.send(.gitPull(path: folder))
+    }
+
+    /// How the Mac is doing: processor, memory, network, heat, battery, uptime.
+    /// Kept apart from this model, so that figures arriving every few
+    /// seconds redraw only the view that shows them, not the lists: a list
+    /// that is rebuilt drops the row being dragged in it.
+    let system = SystemStatsStore()
+
+    /// The hosts of the Mac's SSH configuration.
+    @Published private(set) var sshHosts: [String] = []
+    /// The protocol version the Mac's host speaks. Zero until it has said.
+    private var hostVersion = 0
+
+    /// Opens `ssh <host>` on the Mac, which makes the Mac the way to that host.
+    func connectSSH(_ host: String) {
+        guard status == .connected else { return }
+        openCreatedSession = true
+        Telemetry.shared.record(.sessionStart(agent: .init(id: nil)))
+        connection?.send(.connectSSH(host: host, size: startingSize))
+    }
+
     /// How the version of AgentTerm on the Mac compares with this app's.
     @Published private(set) var hostMatch = ProtocolMatch.same
     /// The session being dragged in the list, from when it is picked up.
@@ -108,6 +207,8 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var agentsLoaded = false
     /// The screens on the navigation stack.
     @Published var path: [Route] = []
+    /// The tab in front: "sessions", "history" or "settings".
+    @Published var tab = "sessions"
     /// A folder's uncommitted changes, by folder. Without the diffs.
     @Published private(set) var diffs: [String: DiffSnapshot] = [:]
     /// The diff of a file, by `patchKey`. A missing file is stored as nil.
@@ -153,6 +254,8 @@ final class PhoneModel: ObservableObject {
     private var openCreatedSession = false
     private var reattachAfterConnect = false
     private var retryScheduled = false
+    /// Attempts to connect since the last time it worked.
+    private var failedAttempts = 0
     private var active = true
     private static let fontSizeKey = "terminalFontSize"
     private static let currentHostKey = "currentHost"
@@ -260,6 +363,44 @@ final class PhoneModel: ObservableObject {
 
     func session(_ id: SessionID) -> SessionInfo? { sessions.first { $0.id == id } }
 
+    // MARK: What was written for a session and not sent yet
+
+    /// Kept on the phone, per Mac and session, so that leaving the terminal
+    /// or closing the app does not lose a message half written. Not
+    /// published: the field that shows it holds the text while it is typed.
+    private var composeDrafts: [String: String] = UserDefaults.standard.dictionary(forKey: PhoneModel.composeDraftsKey) as? [String: String] ?? [:]
+    private static let composeDraftsKey = "composeDrafts"
+
+    /// Session numbers start over when the Mac's host is restarted, so the
+    /// time the session began is part of what names it.
+    private func composeDraftKey(for id: SessionID) -> String? {
+        guard let pairing, let session = session(id) else { return nil }
+        return "\(pairing.id)/\(id)/\(Int(session.createdAt.timeIntervalSince1970))"
+    }
+
+    func composeDraft(for id: SessionID) -> String {
+        composeDraftKey(for: id).flatMap { composeDrafts[$0] } ?? ""
+    }
+
+    func setComposeDraft(_ text: String, for id: SessionID) {
+        guard let key = composeDraftKey(for: id), composeDrafts[key] != (text.isEmpty ? nil : text) else { return }
+        composeDrafts[key] = text.isEmpty ? nil : text
+        UserDefaults.standard.set(composeDrafts, forKey: Self.composeDraftsKey)
+    }
+
+    /// Drops what was written for sessions of this Mac that have ended.
+    private func pruneComposeDrafts(of host: String, keeping sessions: [SessionInfo]) {
+        let kept = Set(sessions.map { "\(host)/\($0.id)/\(Int($0.createdAt.timeIntervalSince1970))" })
+        let before = composeDrafts.count
+        // Also what belonged to a Mac that is no longer paired under that name.
+        let paired = Set(hosts.map(\.id))
+        composeDrafts = composeDrafts.filter { draft in
+            guard let owner = draft.key.split(separator: "/").first.map(String.init), paired.contains(owner) else { return false }
+            return owner != host || kept.contains(draft.key)
+        }
+        if composeDrafts.count != before { UserDefaults.standard.set(composeDrafts, forKey: Self.composeDraftsKey) }
+    }
+
     /// The session whose terminal is on screen, if one is on top.
     var openSessionID: SessionID? {
         if case .session(let id)? = path.last { return id }
@@ -311,14 +452,44 @@ final class PhoneModel: ObservableObject {
         connect()
     }
 
-    /// Forgets the Mac on screen and moves to another one if there is any.
+    /// True once a Mac was picked from the list of Macs: the tabs then show
+    /// that Mac. The app opens on the list, so which Mac is on screen is
+    /// always something the user chose.
+    @Published private(set) var entered = false
+
+    /// Picks a Mac from the list and goes into its tabs.
+    func enter(_ host: SavedHost) {
+        select(host)
+        if connection == nil { connect() }
+        path = []
+        tab = "sessions"
+        entered = true
+    }
+
+    /// Back to the list of Macs. The Mac that was on screen stays connected
+    /// until another is picked, so coming back to it is instant.
+    func showMacs() {
+        entered = false
+    }
+
+    /// Forgets the Mac on screen and goes back to the list of Macs.
     func forgetMac() {
+        if let pairing { forget(pairing) }
+    }
+
+    /// Forgets a paired Mac: its token is thrown away, and pairing again is
+    /// the only way back to it.
+    func forget(_ host: SavedHost) {
+        let wasCurrent = host.id == pairing?.id
+        hosts.removeAll { $0.id == host.id }
+        PairingStore.save(hosts)
+        pruneComposeDrafts(of: host.id, keeping: [])
+        guard wasCurrent else { return }
         disconnect()
         clearHostState()
         pendingPairing = nil
         isPairing = false
-        hosts.removeAll { $0.id == pairing?.id }
-        PairingStore.save(hosts)
+        entered = false
         setCurrent(hosts.first)
         if pairing != nil { connect() }
     }
@@ -332,6 +503,13 @@ final class PhoneModel: ObservableObject {
     /// What was shown belongs to the Mac that is being left.
     private func clearHostState() {
         keepAwake = nil
+        keepAwakeOptions = KeepAwakeOptions()
+        commitWriter = CommitWriterSettings()
+        writingCommitMessage = []
+        syncing = [:]
+        sshHosts = []
+        system.stats = nil
+        hostVersion = 0
         hostMatch = .same
         sessions = []
         folders = []
@@ -356,7 +534,13 @@ final class PhoneModel: ObservableObject {
     /// Called when the app comes to the front.
     func resume() {
         active = true
-        if pairing != nil, connection == nil { connect() }
+        if pairing != nil, connection == nil {
+            connect()
+        } else {
+            // The connection the app left behind may have died while it
+            // was away. Ask, so a dead one is replaced within seconds.
+            connection?.check()
+        }
     }
 
     func retry() {
@@ -434,7 +618,11 @@ final class PhoneModel: ObservableObject {
     private func scheduleRetry() {
         guard !retryScheduled, pairing != nil else { return }
         retryScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+        // At once the first time, since most drops are over as soon as they
+        // are noticed; then every few seconds while the Mac stays out of reach.
+        let delay: TimeInterval = failedAttempts == 0 ? 0.5 : 3
+        failedAttempts += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else { return }
             self.retryScheduled = false
             if self.connection == nil, self.pairing != nil, UIApplication.shared.applicationState == .active {
@@ -449,11 +637,20 @@ final class PhoneModel: ObservableObject {
             hostMatch = ProtocolMatch(host: version)
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             status = .connected
+            failedAttempts = 0
             reattachAfterConnect = true
+            // Whatever was under way when the connection dropped got no answer.
+            writingCommitMessage = []
+            syncing = [:]
             connection?.send(.agents(refresh: false))
+            // A Mac from before 0.4.0 does not know the request, and would
+            // answer with an error for the user to wonder about.
+            hostVersion = version
+            if version >= 6 { connection?.send(.sshHosts) }
         case .sessions(let list):
             sessions = list
             sessionsKnown = true
+            if let pairing { pruneComposeDrafts(of: pairing.id, keeping: list) }
             syncSessionLayout()
             if let open = openSessionID, !list.contains(where: { $0.id == open }) {
                 // The session ended: back to the screen it was opened from.
@@ -465,8 +662,14 @@ final class PhoneModel: ObservableObject {
                 reattachAfterConnect = false
                 // The connection was lost while a terminal was on screen.
                 if let open = openSessionID {
-                    controller = nil
-                    self.open(open)
+                    if let controller, controller.session == open, let have = controller.position, hostVersion >= 6 {
+                        // The terminal is still here with all it was sent:
+                        // only what the session wrote since is asked for.
+                        connection?.send(.attach(session: open, size: session(open)?.size ?? .default, have: have))
+                    } else {
+                        controller = nil
+                        self.open(open)
+                    }
                 }
             }
         case .agents(let list):
@@ -474,6 +677,20 @@ final class PhoneModel: ObservableObject {
             agentsLoaded = true
         case .keepAwake(let on):
             keepAwake = on
+        case .keepAwakeOptions(let options):
+            keepAwakeOptions = options
+        case .commitWriter(let settings):
+            commitWriter = settings
+        case .displaySettings(let settings):
+            hostSent(display: settings)
+        case .commitMessage(let folder, let text):
+            writingCommitMessage.remove(folder)
+            // A draft: it goes in the field, to be read before committing.
+            if let text { commitDrafts[folder] = text }
+        case .sshHosts(let list):
+            sshHosts = list
+        case .systemStats(let stats):
+            system.stats = stats
         case .tabLayout(let layout):
             layoutKnown = true
             applyingHostLayout = true
@@ -492,9 +709,20 @@ final class PhoneModel: ObservableObject {
                 // On top of wherever it was started from, so Back returns there.
                 path.removeAll { if case .session = $0 { return true } else { return false } }
                 path.append(.session(info.id))
+                // The terminal is in the Sessions tab, wherever it was started from.
+                tab = "sessions"
             }
             // What follows is the session's earlier output, until `replayed`.
-            if controller?.session == info.id { controller?.beginReplay() }
+            if controller?.session == info.id { controller?.beginReplay(size: info.size) }
+        case .replaying(let id, let from):
+            guard let current = controller, current.session == id, current.position != from else { return }
+            if current.position != nil {
+                // The Mac could not go on from where this terminal stopped
+                // and sends all it keeps: that is for a terminal that starts empty.
+                controller = makeController(for: id)
+                controller?.beginReplay(size: session(id)?.size)
+            }
+            controller?.position = from
         case .replayed(let id):
             if controller?.session == id { controller?.endReplay() }
         case .resized(let id, let size, let driver):
@@ -517,6 +745,10 @@ final class PhoneModel: ObservableObject {
             pendingPairing = nil
             isPairing = false
             showPairSheet = false
+            // A Mac that was just paired is the one to look at.
+            path = []
+            tab = "sessions"
+            entered = true
         case .error(let text):
             if text == "invalid token" {
                 let name = pairing?.name ?? "The Mac"
@@ -524,6 +756,13 @@ final class PhoneModel: ObservableObject {
                 self.message = "\(name) removed this iPhone from its paired devices. Pair it again to reconnect."
             } else if text == "invalid pairing code" {
                 self.message = "That pairing code has expired or was already used. Show a new one on the Mac and try again."
+            } else if text == "malformed message" {
+                // A Mac from before 0.4.0 does not know what was asked and
+                // will never answer it.
+                openCreatedSession = false
+                writingCommitMessage = []
+                syncing = [:]
+                self.message = "The AgentTerm on the Mac is an older version and cannot do this. Update it, and restart its host."
             } else {
                 // A request that was going to open a session failed.
                 openCreatedSession = false
@@ -540,6 +779,10 @@ final class PhoneModel: ObservableObject {
                 committing = nil
                 commitDrafts[folder] = nil
             }
+        case .gitSynced(let folder):
+            // Not at the `diff` before it: one asked for while git was still
+            // at work would free the buttons for a second push beside the first.
+            syncing[folder] = nil
         case .diffFile(let folder, let file):
             // The host answers per folder; the file asked for is the one waiting.
             if let file {
@@ -779,6 +1022,7 @@ final class PhoneModel: ObservableObject {
     func refreshAgents() {
         agentsLoaded = false
         connection?.send(.agents(refresh: true))
+        if hostVersion >= 6 { connection?.send(.sshHosts) }
     }
 
     func changeFontSize(by delta: Double) {

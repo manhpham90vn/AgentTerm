@@ -35,6 +35,9 @@ final class FlowTests: XCTestCase {
         let start = app.buttons[launchButton].firstMatch
         XCTAssertTrue(start.waitForExistence(timeout: 15), "not connected to the host")
         capture("2-sessions")
+        // The Mac's figures arrive a moment after the list and push it
+        // down: a tap aimed at where the button was would land beside it.
+        _ = app.descendants(matching: .any)["system-cpu"].firstMatch.waitForExistence(timeout: 10)
         start.tap()
 
         // The terminal opens with the key bar and the compose field.
@@ -54,11 +57,26 @@ final class FlowTests: XCTestCase {
             XCTAssertTrue(fit.waitForExistence(timeout: 30), "the Mac did not take the session")
             sleep(1)
             capture("3b-mac-in-control")
+            // The Mac's terminal can be scrolled back and forth here while
+            // it is shown scaled down, and stays in one piece.
+            let terminal = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3))
+            terminal.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
+            sleep(1)
+            capture("3b1-scrolled-back")
+            terminal.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)))
+            sleep(1)
+            capture("3b2-scrolled-back-more")
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).press(
+                forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)))
+            sleep(1)
+            capture("3b3-scrolled-forward")
             fit.tap()
             let gone = NSPredicate(format: "exists == false")
             wait(for: [expectation(for: gone, evaluatedWith: fit)], timeout: 10)
             sleep(1)
             capture("3c-taken-back")
+            // A run that only looks at this part stops here.
+            if environment["AGENTTERM_ONLY_MAC_TAKEOVER"] != nil { return }
         }
 
         compose.tap()
@@ -96,12 +114,61 @@ final class FlowTests: XCTestCase {
         sleep(2)
         capture("6b-bottom-row")
 
+        // What is written and not sent is kept for the session: it is there
+        // again when the terminal is opened the next time.
+        compose.tap()
+        compose.typeText("not sent yet")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["zsh"].firstMatch.waitForExistence(timeout: 5))
+        app.staticTexts["zsh"].firstMatch.tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 10))
+        XCTAssertEqual(compose.value as? String, "not sent yet", "what was written and not sent was lost")
+        // Also when the app was closed in between.
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.buttons["First Mac"].waitForExistence(timeout: 15))
+        app.buttons["First Mac"].tap()
+        XCTAssertTrue(app.staticTexts["zsh"].firstMatch.waitForExistence(timeout: 15))
+        app.staticTexts["zsh"].firstMatch.tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 10))
+        XCTAssertEqual(compose.value as? String, "not sent yet", "what was written and not sent was lost when the app was closed")
+        // Sent, it is no longer kept.
+        app.buttons["Send"].tap()
+        sleep(1)
+        XCTAssertNotEqual(compose.value as? String, "not sent yet")
+
         // Back in the list the session is there to return to.
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["First Mac"].waitForExistence(timeout: 5))
         let session = app.staticTexts["zsh"].firstMatch
         XCTAssertTrue(session.waitForExistence(timeout: 5))
+        if environment["AGENTTERM_TEST_PROJECT"] != nil {
+            // How the Mac itself is doing, above its sessions.
+            for figure in ["system-cpu", "system-memory", "system-temperature", "system-down", "system-battery", "system-uptime"] {
+                XCTAssertTrue(app.descendants(matching: .any)[figure].firstMatch.waitForExistence(timeout: 15), "\(figure) is not shown")
+            }
+            // The Settings tab: what the menu used to hold, in the order of
+            // the Mac's Settings.
+            app.tabBars.buttons["Settings"].tap()
+            XCTAssertTrue(app.switches["keep-awake"].waitForExistence(timeout: 5), "Settings has no Keep Mac Awake switch")
+            XCTAssertTrue(app.staticTexts["Commit Messages"].exists)
+            capture("7-settings-tab")
+            app.tabBars.buttons["History"].tap()
+            XCTAssertTrue(app.navigationBars["History"].waitForExistence(timeout: 5))
+            app.tabBars.buttons["Sessions"].tap()
+            // The hosts of the Mac's SSH configuration, without its patterns.
+            let ssh = app.buttons["ssh-menu"].firstMatch
+            XCTAssertTrue(ssh.waitForExistence(timeout: 5), "there is no SSH menu")
+            ssh.tap()
+            XCTAssertTrue(app.buttons["build-server"].waitForExistence(timeout: 5), "the SSH host is not listed")
+            capture("7-ssh-hosts")
+            // Put the menu away without connecting anywhere.
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.92)).tap()
+            // The menu takes a moment to go; what is under it cannot be tapped until then.
+            expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: app.buttons["build-server"])
+            waitForExpectations(timeout: 10)
+        }
         capture("7-session-listed")
 
         // The folder's git changes and its history, as in the Mac's side
@@ -136,6 +203,20 @@ final class FlowTests: XCTestCase {
             for _ in 0..<14 where !lastChange.exists { app.swipeUp() }
             XCTAssertTrue(lastChange.exists, "the diff does not scroll down to its end")
             capture("7b1-diff-end")
+            // The same diff as two panels, before and after, and back.
+            app.buttons["diff-layout"].tap()
+            XCTAssertTrue(app.descendants(matching: .any)["split-diff-after"].firstMatch.waitForExistence(timeout: 10), "the diff is not shown as two panels")
+            capture("7b1a-diff-two-panels")
+            // Each panel scrolls sideways on its own.
+            let after = app.descendants(matching: .any)["split-diff-after"].firstMatch
+            let changed = app.staticTexts.matching(NSPredicate(format: "label CONTAINS 'second line'")).firstMatch
+            XCTAssertTrue(changed.waitForExistence(timeout: 5), "the two panels do not show the changed line")
+            let before = changed.frame.minX
+            after.swipeLeft()
+            XCTAssertLessThan(changed.frame.minX, before, "the panel of what it is now does not scroll sideways")
+            after.swipeRight()
+            app.buttons["diff-layout"].tap()
+            XCTAssertTrue(app.descendants(matching: .any)["patch"].firstMatch.waitForExistence(timeout: 10))
             app.navigationBars.buttons.firstMatch.tap()
 
             // Stage the file, take it back, stage it again and commit it.
@@ -159,6 +240,17 @@ final class FlowTests: XCTestCase {
             commit.tap()
             XCTAssertTrue(app.staticTexts["No uncommitted changes."].waitForExistence(timeout: 15), "the commit was not made")
             capture("7b4-committed")
+
+            // The commit is what there is to push: the project follows a remote.
+            let push = app.buttons["git-push"]
+            XCTAssertTrue(push.waitForExistence(timeout: 10), "there is no Push button")
+            XCTAssertEqual(push.label, "Push, 1", "one commit is waiting to be pushed")
+            XCTAssertTrue(app.buttons["git-pull"].exists)
+            XCTAssertTrue(app.staticTexts["Follows origin/main"].exists)
+            push.tap()
+            expectation(for: NSPredicate(format: "label == %@", "Push"), evaluatedWith: push)
+            waitForExpectations(timeout: 20)
+            capture("7b4a-pushed")
 
             // The folder's files: open one, edit it, save it, make a new one.
             app.buttons["Files"].tap()
@@ -299,6 +391,10 @@ final class FlowTests: XCTestCase {
         }
         let rows = app.staticTexts.matching(identifier: "zsh")
         XCTAssertEqual(rows.count, 4)
+        // The list is longer than the screen now. Bring the project's
+        // sessions to the middle, clear of the bars, before dragging them.
+        let from = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
+        from.press(forDuration: 0.05, thenDragTo: app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.42)))
         let group = app.buttons["session-group"].firstMatch
         func groupSays(_ text: String) -> Bool {
             let wanted = NSPredicate(format: "label CONTAINS %@", text)
@@ -371,6 +467,9 @@ final class FlowTests: XCTestCase {
         capture("15-folder-menu")
         app.buttons["Move Down"].tap()
         XCTAssertTrue(orderBecomes(["home", "project", "demo"]), "Move Down did not move the folder: \(order())")
+        // Back to the top of the list, so both names are on screen and
+        // clear of the bars: one is dragged onto the other.
+        app.swipeDown()
         names.element(boundBy: 1).press(forDuration: 0.7, thenDragTo: names.element(boundBy: 0), withVelocity: .slow, thenHoldForDuration: 0.6)
         XCTAssertTrue(orderBecomes(["project", "home", "demo"]), "dragging a folder onto another did not move it: \(order())")
         capture("16-folders-reordered")

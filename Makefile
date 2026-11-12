@@ -7,7 +7,7 @@ SIM ?=
 SWIFT_PATHS := Package.swift Sources Tests iOS/AgentTerm iOS/AgentTermUITests
 
 .DEFAULT_GOAL := help
-.PHONY: help version bump build test test-ios test-all run run-ios pair-ios bundle format lint check reset-permissions \
+.PHONY: help version bump build test test-ios test-all run run-ios pair-ios run-all bundle format lint check reset-permissions \
         release-check release-mac release-ios release store-metadata store-screenshots announce cask clean
 
 help: ## List what can be made
@@ -50,6 +50,9 @@ run-ios: ## Build and open the iPhone app in a simulator: make run-ios SIM="iPho
 
 pair-ios: ## Pair that simulator with the Mac app running here
 	./scripts/pair-ios.sh $(if $(SIM),"$(SIM)")
+
+run-all: ## Run the Mac app and the iPhone app and pair them: make run-all SIM="iPhone 17"
+	./scripts/run-all.sh $(if $(SIM),"$(SIM)")
 
 bundle: ## Only build the Mac app bundle in dist/
 	./scripts/bundle-mac.sh

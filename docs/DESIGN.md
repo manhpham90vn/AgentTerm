@@ -168,13 +168,19 @@ Client to host:
 | `list` | Ask for the session list. |
 | `agents(refresh)` | Ask which agent CLIs are installed. |
 | `create(command, cwd, title, size)` | Start a session and attach to it. |
-| `attach(session, size)` / `detach(session)` | Start or stop receiving a session. |
+| `attach(session, size, have)` / `detach(session)` | Start or stop receiving a session. `have` is how far into the session's output the client's terminal already is; nil for a terminal that starts empty. |
 | `resize(session, size)` | Report that this client's grid changed. Applied only if it drives the session. |
 | `takeControl(session, size)` | The user is using the session here: become the driver at this size. |
 | `kill(session)` | Hang up the session (SIGHUP, then SIGKILL after 3 s). |
 | `addFolder(path)` / `removeFolder(path)` | Change the shared folder list. |
 | `diff(path)` / `diffFile(path, file, staged)` | A folder's uncommitted changes without the diffs, then one file's diff: its staged part, or what is only in the working tree. |
 | `gitStage(path, files)` / `gitUnstage(path, files)` / `gitCommit(path, message)` | Change what the next commit contains (no files means all), and commit it. Answered with `diff`, after an `error` carrying git's words if it failed. |
+| `gitPush(path)` / `gitPull(path)` | Push the checked out branch, or bring in what its upstream has. Answered the same way, then with `gitSynced(path)`: a `diff` alone may answer something asked while git was still at work. |
+| `writeCommitMessage(path)` / `cancelCommitMessage(path)` | Have an agent write the message for what is staged, or stop it. Answered with `commitMessage(path, message)`, whose message is nil when it was stopped or failed. |
+| `setCommitWriter(settings)` | Which agent writes commit messages, on which model, with which prompt. |
+| `setKeepAwake(on)` / `setKeepAwakeOptions(options)` | Keep the Mac awake while sessions run, and how: the display too, only on power, for how long. |
+| `setDisplaySettings(settings)` | How things are shown on every device: the temperature's unit, diffs in one panel or two, changes as a list or a tree. The host keeps it in `settings.json` and passes it on as `displaySettings`. A host that keeps none yet sends nil, and the client hands it its own. Each app also writes the values to its own preferences, which is what its views read. |
+| `sshHosts` / `connectSSH(host, size)` | The hosts of the Mac's SSH configuration, and `ssh <host>` in a new session. |
 | `history(path)` | Conversations agents had in a folder, or everywhere when `path` is nil. |
 | `resume(agent, sessionID, cwd, size)` | Reopen a conversation in its agent, in a new session. |
 | `handoffPlan(agent)` | What the receiving agent would be told, to show it before handing off. |
@@ -185,8 +191,13 @@ Client to host:
 
 Host to client: `welcome`, `sessions`, `agents`, `folders`, `attached`,
 `resized`, `exited`, `error`, `diff`, `diffFile`, `history`, `directory`,
-and for pairing `paired`, `pairingCode`, `devices`. The session list and the folder list are pushed
-to every client when they change.
+`commitMessage`, `sshHosts`, and for pairing `paired`, `pairingCode`,
+`devices`. The session list, the folder list and the host's settings
+(`tabLayout`, `keepAwake`, `keepAwakeOptions`, `commitWriter`) are pushed to
+every client when they change.
+
+The protocol version is 6 since 0.4.0, which added the messages for push
+and pull, commit messages, keep awake options and SSH hosts.
 
 The folder list is host state, saved in `folders.json`, so the Mac and the
 iPhone show the same projects and the phone can start an agent in any of them.
@@ -197,10 +208,40 @@ is not attached to the session is dropped.
 
 ## Attaching to a running session
 
-The host keeps the last 512 KB of each session's output and replays it to a
-client that attaches. This is simple and good enough for shells. For full
-screen programs it relies on the program redrawing, which happens when the
-attach changes the size.
+The host keeps the last 4 MB of each session's output and replays it to a
+client that attaches, so a phone that opens a session can scroll back
+through what happened before it looked. The replay goes out in pieces of
+256 KB, since one message may not be larger than 4 MB, and once the oldest
+output has been dropped it starts at the beginning of a line rather than
+in the middle of one. The buffer is cut back to its limit only when it is
+a quarter over, because cutting copies it. Each emulator keeps 20,000
+lines to scroll back through (SwiftTerm's own default is 500, which threw
+most of a replay away as it arrived). For full screen programs the replay
+relies on the program redrawing, which happens when the attach changes the
+size.
+
+A phone that lost its connection attaches again within seconds, with its
+terminal still holding all it was sent. Replaying megabytes it would only
+draw again costs time and cellular data at each change of network. So the
+host says where in the session's output a replay starts
+(`replaying(session, from)`), the terminal counts on from there
+(`TerminalController.position`), and attaching again names that place
+(`have`): the host then sends only what came since. When it no longer
+keeps that far back, or the place is not one of this session's, it sends
+all it keeps and says so with another `from`, and the client starts a new
+terminal for it. The Mac app does not use this: it loses its connection
+only when the host itself stops, and its sessions with it.
+
+The replay was drawn for the session's grid, so the emulator takes that
+grid before the first replayed byte (`TerminalController.beginReplay(size:)`),
+and keeps it until its view has been laid out and the grid that fits is
+known. Before 0.4.0 the emulator replayed at the size it happened to be
+created with and then went to 80 × 24: lines wrapped in the wrong places,
+and a program that redraws in place, an agent above all, showed a broken
+screen. Nothing made it draw again, because the Mac attaches at the
+session's own size, so the size never changed. It showed whenever the app
+was opened with an agent already running, which is what the first launch
+after an update is.
 
 ## Agent detection
 
@@ -217,13 +258,109 @@ The diff of a file scrolls sideways as far as its longest line, with scroll
 bars that stay visible: macOS hides them until you scroll, which would give
 no hint that a line continues.
 
+The two-panel view is laid out by `SplitDiff.rows` (in `AgentTermProtocol`)
+from the same unified patch: lines both sides share are one row, a run of
+removed lines followed by added ones is paired line by line, and what one
+side has more of faces an empty row. Line numbers come from the hunk
+headers. `SplitDiffView` (in `AgentTermTerminal`) draws it for both apps: one
+vertical scroll view holding two horizontal ones, so the panels move down
+together and sideways apart. Its rows are not lazy, since a lazy stack
+inside the sideways scroll would have no height to be lazy in, so it shows
+at most 2,500 rows and says when it left some out.
+
 `GitDiff` shells out to `git`: `diff --cached` for what is staged, `diff` for
 what is not, and `ls-files --others` plus `diff --no-index` for untracked
 files, then splits the output per file. Renames are not detected
 (`--no-renames`), so every entry is one path that can be staged on its own.
 `GitActions` runs `git add`, `git restore --staged` (`git rm --cached`
 before the first commit) and `git commit`, with `--literal-pathspecs` so a
-file name is never read as a pattern. The Mac app calls it directly every few seconds while it is
+file name is never read as a pattern.
+
+The snapshot also says which branch the checked out one follows and how
+far the two are apart (`git for-each-ref` with `%(upstream:short)` and
+`%(upstream:track)`, one cheap call that asks nothing of the remote), and,
+for a branch that follows none, the remote a first push would go to:
+`origin`, else the first remote. `GitActions.push` runs `git push`, or
+`git push --set-upstream <remote> <branch>` for that first push;
+`GitActions.pull` runs `git pull --no-edit`, so it merges or rebases as the
+repository is set up to. Both run with `GIT_TERMINAL_PROMPT=0`, no askpass
+program and `SSH_ASKPASS_REQUIRE=never`: credential helpers and the SSH
+agent still answer, and anything that would wait for typing fails with
+git's own message, since there is no terminal to type in. A pull that
+leaves a merge or a rebase under way is aborted, unless one was already
+under way before it, which is the user's and is left alone.
+
+## Commit messages written by an agent
+
+`CommitWriter` builds the agent's input: the prompt, the list of staged
+files with their counts (`git diff --cached --stat`), then each file's
+diff, capped at 8,000 characters a file and 60,000 in all; files past that
+are named without their diff. It then runs the agent once, without a
+terminal, through the login shell as sessions are:
+
+| Agent | Run as |
+|---|---|
+| Claude Code | `claude -p --no-session-persistence --strict-mcp-config --tools '' --model <m>`, the input on stdin |
+| Codex | `codex exec --skip-git-repo-check --ephemeral --sandbox read-only -o <file> -`, the input on stdin |
+| Antigravity | `agy --print "<input>"` |
+| Copilot CLI | `copilot -p "<input>" --silent --no-custom-instructions --no-ask-user` |
+
+The agent runs in `<state>/commit-writer`, not in the project: a headless
+run inside the project would leave a conversation there, which the History
+tab would list and `SessionSummaries` could pair with a session running in
+that folder. Claude Code and Codex are told not to save one at all; what
+Antigravity and Copilot save belongs to that folder of the host's, which
+History leaves out. No agent is given a way to change anything: no tools
+for Claude Code, a read-only sandbox for Codex, and for the other two no
+approvals, which without a terminal means every tool request is refused.
+The answer is taken out of a code fence or quotes if it came in one, and is
+only ever put in the message field. A run can be stopped; it is also
+stopped after three minutes.
+
+The settings (agent, model, prompt) are the host's, in `settings.json`, so
+the Mac's Write button and the iPhone's do the same. Both apps ask the host
+with `writeCommitMessage`, the Mac too, though it runs git itself.
+
+## How the Mac is doing
+
+`SystemSampler` measures the Mac itself every three seconds while a client
+is connected, and the host sends the result as `systemStats`:
+
+| Figure | From |
+|---|---|
+| Processor | `host_statistics(HOST_CPU_LOAD_INFO)`: busy ticks over all ticks between two samples |
+| Memory | `host_statistics64(HOST_VM_INFO64)`: app memory, wired and compressed, less what can be purged, as Activity Monitor counts it; `hw.memsize` |
+| Network | `getifaddrs`: bytes in and out of every interface but the loopback, between two samples |
+| Temperature | The hottest of the processor's sensors, through IOKit's HID event system; `ProcessInfo.thermalState` always |
+| Battery | `IOPSCopyPowerSourcesInfo`: charge and whether it is charging |
+| Uptime | `kern.boottime` |
+
+The calls that read the temperature sensors are in IOKit but not in its
+headers, so `SystemSampler` declares them itself. Where they find no
+sensor, an Intel Mac for one, no temperature is sent and the apps show the
+thermal state in words. Figures are rounded (a tenth of a gigabyte, a
+kilobyte a second) so a Mac at rest is not announced again and again.
+`SystemStatsView`, in `AgentTermTerminal`, draws them for both apps.
+
+## SSH hosts
+
+`SSHConfig.hosts` reads `~/.ssh/config`: the names after `Host`, following
+`Include` (relative to `~/.ssh`, with `~` and wildcards) up to eight deep.
+Patterns are skipped, and so is any name that is not plain (letters,
+digits, `-`, `_`, `.`), because a name is put on a command line. Only the
+names are sent to a client. `connectSSH` takes a name the host finds in
+its own reading of the configuration, never a command.
+
+## Keeping the Mac awake
+
+`SleepGuard` holds an IOKit power assertion: `PreventUserIdleSystemSleep`,
+or `PreventUserIdleDisplaySleep` when the display is to stay on. The host
+holds it while the switch is on, a session exists, and, with "only on
+power", `IOPSGetProvidingPowerSourceType` does not say battery; it looks
+again on its timer, so plugging in or pulling the cable is followed within
+seconds. A hold given a length carries the time it ends in the options;
+when that passes the host switches it off and tells the clients. The
+switch, the options and the end time are kept in `settings.json`. The Mac app calls it directly every few seconds while it is
 in front. The iPhone asks the host: `diff` returns the list of files without
 their diffs, which can be megabytes, and `diffFile` returns one file's diff.
 The host keeps the last result per folder for 20 seconds so opening a file
@@ -487,9 +624,22 @@ the same folder can therefore be mixed up; the History tab is exact.
   is no camera (the simulator) the link can be entered as text, and the app
   also opens `agentterm://pair` links.
 - `TerminalScreen` stacks the terminal, the key bar and the compose field.
+  What is written in the compose field and not sent is kept per session on
+  the phone (`PhoneModel.composeDraft`), so it is there again after leaving
+  the terminal or closing the app. The Mac needs nothing for this: what is
+  typed there is already in the program's own input, in the session.
   The keyboard shrinks the terminal's frame, which resizes the PTY.
-- While the app is in front it reconnects every few seconds after a drop and
-  re-attaches to the session that was open.
+- While the app is in front it reconnects after a drop, at once the first
+  time and then every few seconds, and re-attaches to the session that was
+  open. The terminal screen says so meanwhile.
+- A drop is rarely announced: the network changes or the app was asleep,
+  and what is sent just goes nowhere. `AgentTermConnection` therefore asks
+  a host that has been quiet for four seconds for a WebSocket pong, and
+  closes a connection that does not answer within six, which is what lets
+  the app connect again. Coming back to the front asks at once. Bytes that
+  keep arriving count as an answer: a large message over a slow link, a
+  replay or a file, holds the pong back behind it, and that link is slow,
+  not gone.
 
 ## Testing
 
@@ -508,7 +658,9 @@ the same folder can therefore be mixed up; the History tab is exact.
 - Session rows on the iPhone are named after the session's working directory
   when it is not a listed folder; the home directory shows as the user name.
 
-- Attach replays raw bytes instead of a screen snapshot.
+- Attach replays raw bytes instead of a screen snapshot. What a program
+  drew for another width, before the session was resized, reads badly
+  further up.
 - SwiftTerm resets some terminal modes when its grid is resized from code,
   which happens when another device takes over the size.
 - A terminal wider than the Mac window (a phone in landscape next to a narrow

@@ -1,5 +1,6 @@
 import AgentTermHost
 import AgentTermProtocol
+import AgentTermTerminal
 import SwiftUI
 
 struct DiffView: View {
@@ -17,6 +18,12 @@ struct DiffView: View {
         VStack(spacing: 0) {
             header
             Theme.hairline.frame(height: 1)
+            if let diff = model.diff, diff.canPush || diff.canPull {
+                // Above the changes and not among them: a commit that was
+                // just made leaves no changes, and is what there is to push.
+                SyncBar(diff: diff)
+                Theme.hairline.frame(height: 1)
+            }
             content
         }
         .background(Theme.panel)
@@ -39,7 +46,7 @@ struct DiffView: View {
                 DiffCount(added: files.reduce(0) { $0 + $1.added }, deleted: files.reduce(0) { $0 + $1.deleted })
             }
             Button {
-                viewMode = isTree ? "list" : "tree"
+                model.setDisplay { $0.changesView = isTree ? "list" : "tree" }
             } label: {
                 Image(systemName: isTree ? "list.bullet" : "list.bullet.indent")
                     .font(.system(size: 11, weight: .semibold))
@@ -136,6 +143,73 @@ struct DiffView: View {
     }
 }
 
+/// Push and pull for the branch that is checked out, with how far it is
+/// from the branch it follows.
+private struct SyncBar: View {
+    @EnvironmentObject private var model: AppModel
+    let diff: DiffSnapshot
+
+    private var busy: String? { model.selectedFolder.flatMap { model.syncing[$0] } }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            if diff.canPull {
+                SyncButton(title: "Pull", symbol: "arrow.down", count: diff.behind ?? 0, working: busy == "pull") { model.pull() }
+                    .help(
+                        (diff.behind ?? 0) > 0
+                            ? "Bring in \(diff.behind ?? 0) \((diff.behind ?? 0) == 1 ? "commit" : "commits") from \(diff.upstream ?? "the remote")"
+                            : "Ask \(diff.upstream ?? "the remote") for new commits and bring them in")
+            }
+            if diff.canPush {
+                SyncButton(
+                    title: diff.upstream == nil ? "Publish Branch" : "Push", symbol: "arrow.up", count: diff.ahead ?? 0, working: busy == "push"
+                ) { model.push() }
+                .help(
+                    diff.upstream == nil
+                        ? "Push this branch to \(diff.pushRemote ?? "the remote") and follow it there"
+                        : ((diff.ahead ?? 0) > 0
+                            ? "Send \(diff.ahead ?? 0) \((diff.ahead ?? 0) == 1 ? "commit" : "commits") to \(diff.upstream ?? "the remote")"
+                            : "Nothing new to send to \(diff.upstream ?? "the remote")"))
+            }
+            Spacer(minLength: 4)
+            Text(diff.upstream ?? "not on a remote yet")
+                .font(.system(size: 10.5))
+                .foregroundStyle(.tertiary)
+                .lineLimit(1)
+                .truncationMode(.head)
+        }
+        .disabled(busy != nil)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+    }
+}
+
+private struct SyncButton: View {
+    let title: String
+    let symbol: String
+    let count: Int
+    let working: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if working {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: symbol).font(.system(size: 9.5, weight: .bold))
+                }
+                Text(title)
+                if count > 0 {
+                    Text("\(count)").monospacedDigit().foregroundStyle(.secondary)
+                }
+            }
+        }
+        .controlSize(.small)
+        .accessibilityLabel(count > 0 ? "\(title), \(count)" : title)
+    }
+}
+
 /// Where the commit message is written and the commit is made.
 private struct CommitBox: View {
     @EnvironmentObject private var model: AppModel
@@ -152,6 +226,14 @@ private struct CommitBox: View {
         stagedCount > 0 && !model.isCommitting && !message.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    private var isWriting: Bool { model.selectedFolder.map(model.writingCommitMessage.contains) ?? false }
+
+    /// The agent that would write the message: the one chosen in Settings,
+    /// or the first one installed.
+    private var writer: AgentInfo? {
+        model.commitWriter.writer(among: model.agents)
+    }
+
     var body: some View {
         VStack(spacing: 6) {
             TextField("Commit message", text: message, axis: .vertical)
@@ -162,19 +244,47 @@ private struct CommitBox: View {
                 .padding(.vertical, 6)
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.raised))
                 .accessibilityLabel("Commit message")
-            Button {
-                model.commit()
-            } label: {
-                HStack(spacing: 6) {
-                    if model.isCommitting { ProgressView().controlSize(.mini) }
-                    Text(stagedCount > 0 ? "Commit \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Commit")
+            HStack(spacing: 6) {
+                Button {
+                    model.commit()
+                } label: {
+                    HStack(spacing: 6) {
+                        if model.isCommitting { ProgressView().controlSize(.mini) }
+                        Text(stagedCount > 0 ? "Commit \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Commit")
+                    }
+                    .frame(maxWidth: .infinity)
                 }
-                .frame(maxWidth: .infinity)
+                .controlSize(.small)
+                .buttonStyle(.borderedProminent)
+                .disabled(!canCommit)
+                .help(stagedCount == 0 ? "Stage the changes to commit first" : "Commit what is staged")
+                if let writer {
+                    // While the agent writes, the same button stops it.
+                    Button {
+                        if isWriting { model.cancelCommitMessage() } else { model.writeCommitMessage() }
+                    } label: {
+                        HStack(spacing: 4) {
+                            if isWriting {
+                                ProgressView().controlSize(.mini)
+                                Text("Stop")
+                            } else {
+                                Image(systemName: "sparkles").font(.system(size: 10, weight: .semibold))
+                                Text("Write")
+                            }
+                        }
+                    }
+                    .controlSize(.small)
+                    .disabled(stagedCount == 0 && !isWriting)
+                    .help(
+                        isWriting
+                            ? "Stop \(writer.name)"
+                            : (stagedCount == 0
+                                ? "Stage the changes first: \(writer.name) writes the message for what is staged"
+                                : "Have \(writer.name) write the message for what is staged. Nothing is committed until you commit.")
+                    )
+                    .accessibilityLabel(isWriting ? "Stop writing the commit message" : "Write the commit message with \(writer.name)")
+                }
             }
-            .controlSize(.small)
-            .buttonStyle(.borderedProminent)
-            .disabled(!canCommit)
-            .help(stagedCount == 0 ? "Stage the changes to commit first" : "Commit what is staged")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
@@ -339,6 +449,11 @@ private struct FileRow: View {
 struct DiffDocumentView: View {
     @EnvironmentObject private var model: AppModel
     let file: FileDiff
+    /// "unified" shows the diff in one panel, "split" as before and after
+    /// side by side.
+    @AppStorage("diffLayout") private var layout = "unified"
+
+    private var isSplit: Bool { layout == "split" }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -356,6 +471,16 @@ struct DiffDocumentView: View {
                     .truncationMode(.head)
                 Spacer(minLength: 6)
                 DiffCount(added: file.added, deleted: file.deleted)
+                Button {
+                    model.setDisplay { $0.diffLayout = isSplit ? "unified" : "split" }
+                } label: {
+                    Image(systemName: isSplit ? "rectangle" : "rectangle.split.2x1")
+                        .font(.system(size: 12, weight: .medium))
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(isSplit ? "Show the diff in one panel" : "Show before and after side by side")
+                .accessibilityLabel(isSplit ? "Show in one panel" : "Show side by side")
                 Button(file.isStaged ? "Unstage" : "Stage") {
                     if file.isStaged { model.unstage([file]) } else { model.stage([file]) }
                 }
@@ -370,6 +495,13 @@ struct DiffDocumentView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if isSplit {
+                SplitDiffView(patch: file.patch)
+                    .background(Theme.canvas)
+                    // By the file alone: a diff that changes under the
+                    // reader, as an agent keeps editing, must stay where it
+                    // was scrolled to rather than start over at the top.
+                    .id(file.id)
             } else {
                 PatchView(file: file)
             }
@@ -426,7 +558,8 @@ private struct PatchView: View {
             }
         }
         .background(Theme.canvas)
-        .id(file.id + file.patch)
+        // By the file alone, not by its diff: see `DiffDocumentView`.
+        .id(file.id)
     }
 
     private func foreground(_ line: Substring) -> Color {
