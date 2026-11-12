@@ -1,0 +1,275 @@
+# Testing AgentTerm
+
+What AgentTerm does, case by case, and what checks each case. The list
+follows `SPEC.md`. Each case says three things:
+
+- **Input**: what there is before anything is done: the data, and the state
+  the apps and the host are in.
+- **Action or event**: what the user does, or what happens.
+- **Expected response**: what has to be true afterwards.
+
+The last column says what checks the case. A case marked "hand" is checked
+by nothing automatic, which is where a bug can sit unnoticed.
+
+## The layers
+
+| Mark | Layer | Run with | Runs in CI |
+|---|---|---|---|
+| H | Host and protocol: a real host over a loopback WebSocket | `swift test` | yes |
+| P | iPhone app in the simulator, against two throwaway hosts | `scripts/test-ios.sh` | no |
+| L | iPhone app on its side | `LANDSCAPE=only scripts/test-ios.sh` | no |
+| M | Mac app, driven through accessibility, against a throwaway host | `scripts/test-mac.sh` | no |
+| X | Mac app and iPhone app together on one host | `scripts/test-both.sh` | no |
+| hand | Only by hand so far | | |
+
+In M a second device, a phone say, is played by a client that speaks the
+protocol: the Mac app is real, the other device is not. In X both apps are
+real.
+
+M and X need the terminal they run in to be allowed under System Settings >
+Privacy & Security > Accessibility. They press and read the app's own
+elements, as VoiceOver does: no pointer is moved and no key is sent. All
+layers use state folders, ports, a home folder and preferences of their own,
+and stand-in agents (small scripts) instead of the installed ones: the
+installed app, its sessions, its paired devices and the user's accounts are
+never touched.
+
+## Cases
+
+"The fixture project" is a git repository with a remote, one commit, and
+changes not yet committed: `notes.txt` with a second line, `docs/guide.md`
+new, `new.txt` new. "A second device" is another client on the same host.
+
+### Sessions
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| SES-1 | A host with no session | A client creates a session with the command `echo hello-$((40+2)); exit 3` | The output `hello-42` arrives, then the exit status 3, then a session list without it | H |
+| SES-2 | The app connected, the fixture project selected | Press the Shell launch button | A session starts in the project's folder and its terminal is shown | P, M |
+| SES-3 | Stand-in agents `claude` and `codex` installed | Press the Claude Code launch button | A session titled "Claude Code" starts, runs the agent's program, and has a tab | M |
+| SES-4 | Two sessions running, one with a line typed and not sent | Quit the Mac app and open it again | Both sessions are listed again, under the same ids, with what was typed still at the prompt | M |
+| SES-5 | A session open on the iPhone | The connection drops and comes back | The app reconnects by itself and is back in that session | H (the host side), hand (the app) |
+| SES-6 | A session started on one device | A second device attaches to it | The second device gets the same output; a session started on the Mac is listed on the iPhone, and one started on the iPhone on the Mac | H, M, X |
+| SES-7 | A session that wrote more than 4 MB | A client attaches | The last 4 MB arrive whole, in pieces, starting at the beginning of a line, ending with the newest output | H |
+| SES-8 | A client that was attached and got N bytes | It attaches again naming how far it is | Only what the session wrote since is sent; a place that is not this session's gets all of it again, and is told so | H |
+| SES-9 | A link that carries 100 KB a second; a link that carries nothing | A replay of 300 KB is sent; nothing is sent | The slow connection stays open and gets all of it; the silent one is closed as lost | H |
+| SES-10 | A session in front on the Mac; a session open on the iPhone | Choose End Session | The app asks first, nothing ends before the answer, and after it the session is gone from every device | P, M |
+| SES-11 | A client that is not attached to a session | It sends input for that session | The input does not reach the program | H |
+| SES-12 | Text written for a session and not sent | Leave the terminal, or close the app, and come back | iPhone: the text is in the message field again. Mac: it is still at the program's prompt | P; M as far as the host goes: the session is there and replays what was typed. What the Mac's terminal draws cannot be read through accessibility |
+| SES-13 | A replay holding a question the program once asked its terminal | The replay is fed slowly, longer than five seconds in all | The emulator's answer does not reach the program; a question asked after the replay is answered | H |
+
+### Session names and usage
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| NAME-1 | An agent's session whose agent saved a conversation | The host looks at the sessions | The session is named after the conversation's title | H |
+| NAME-2 | Two sessions of one agent in one folder | Each has its own conversation | Each session gets its own conversation, not the other's | H |
+| NAME-3 | A session started on the Mac | Look at the folder list, the tabs, and the iPhone | The same name and icon in all three | M (Mac), X (name on the iPhone) |
+| USE-1 | What each agent's service answers about limits | The host reads it | The limits are listed as the agent's own usage screen lists them | H |
+| USE-2 | A sign-in for one service; one that has run out | The host asks for usage | The sign-in goes only to the service that issued it; one that ran out is not sent and never renewed | H |
+| USE-3 | An agent's session in front | Look under the terminal, press the band | The band shows model, context and limits; pressing it opens the details | hand (the band is there in M; its figures need a real account) |
+| USE-4 | A user with a status line of their own | Claude Code runs AgentTerm's status line | The user's own still runs, with the same input | H |
+
+### The Mac at a glance
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| SYS-1 | A host with a client connected | Three seconds pass | The six figures are measured and sent | H |
+| SYS-2 | The app connected | Look under the launch buttons (Mac), above the sessions (iPhone) | Processor, memory, network down and up, temperature, battery, uptime are shown | P, M |
+| SYS-3 | Temperature in Celsius | A second device chooses Fahrenheit | The Mac's line shows °F | H, M |
+
+### Terminal size
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| SIZE-1 | Two clients attached with different sizes | One takes control; the other only watches | The PTY has the size of the one that took control; watching changes nothing | H |
+| SIZE-2 | A client attached that is not the driver | Its emulator answers a question by itself | The session is not taken away from the driver | H |
+| SIZE-3 | A session open on the iPhone | The Mac takes the session at a larger size | The iPhone shows the Mac's terminal scaled down with "Fit This Screen", which takes it back | P (`TAKEOVER=1`) |
+| SIZE-4 | A session started on the Mac | A second device takes control at 40 × 20 | The Mac says another device is using it, names 40 × 20, and offers "Use This Window's Size"; pressing it gives the Mac's size back | M |
+| SIZE-5 | A session at the size that fits | Make the text four steps larger, then back to the actual size | Fewer columns while it is larger; the same number again afterwards | P, M |
+| SIZE-6 | A session open on the iPhone | Turn the phone on its side, bring up the keyboard | The terminal keeps a usable height; one row holds back, the keys, the message field and the menu | L |
+
+### Quick launch and SSH
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| LAUNCH-1 | Two of the four agents installed | Open the app | Launch buttons for those two and for Shell, none for the other two | H, M |
+| LAUNCH-2 | `~/.ssh/config` with `Host build-server`, `Host *.internal` | Open the SSH menu | `build-server` is listed; the pattern is not | H, P, M |
+| LAUNCH-3 | The same configuration | A client asks to open a host the configuration does not name | The host refuses | H |
+| LAUNCH-4 | No SSH configuration | Open the app | There is no SSH menu | M |
+| LAUNCH-5 | A `Host` line with a comment after it | The host reads the configuration | The words of the comment are not hosts | H |
+
+### Handoff
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| HAND-1 | A conversation of each agent, with tool traffic in it | Prepare a handoff | The file holds what the user and the agent said, without the tool traffic | H |
+| HAND-2 | A git repository | Prepare a handoff | The file is in `.agentterm/handoffs/`, and git does not list it as a change | H, M |
+| HAND-3 | A past conversation of Claude Code, Codex installed too | Choose Hand Off on the conversation | A sheet names Codex and shows the prompt it will start with, naming the handoff file | P, M |
+| HAND-4 | The sheet from HAND-3 | Press Hand Off | A Codex session starts, told to read the handoff file, and the file exists in the project | P, M |
+| HAND-5 | The same, with another folder picked under Continue in | Press Hand Off | The agent starts in that folder, which is added to the list | M |
+| HAND-6 | A running session of an agent | Choose Hand Off from the session's menu | The sheet opens for that session's conversation | P, M |
+
+### The Mac window and its tabs
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| WIN-1 | A host with one folder | A second device adds a folder, then removes it | The Mac's list gains the folder, then loses it | H, P, M |
+| WIN-2 | A session started in a folder that is not listed | Look at the list | The session is under "Other" | P, M |
+| WIN-3 | The window with all three panes | Press the Folders button twice, the Side Panel button twice | Each pane goes and comes back | M |
+| TAB-1 | Three sessions | Pick one in the sidebar | It has a tab and its terminal is shown | M |
+| TAB-2 | The same | Pin the tab in front; add another to a new group | The host has the pin and the group | H, P, M |
+| TAB-3 | The arrangement from TAB-2 | Quit the Mac app and open it again; look on a second device | The same arrangement on both, also after the restart | H, P, M |
+| TAB-4 | Several tabs, one pinned, one file with unsaved changes | Close Others, Close All | The app asks before ending sessions; the pinned tab and the unsaved file stay | M (Close Others: it asks, and the pinned tab stays) |
+| TAB-5 | A file open and a diff picked | Look at the strip of tabs | The file and the diff are tabs next to the sessions | M (as part of FILE-3 and GIT-4) |
+
+### Git
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| GIT-1 | The fixture project | Open the Git tab | `notes.txt`, `guide.md` and `new.txt` are listed under Changes, each with a button to stage it | H, P, M |
+| GIT-2 | The same | Stage `notes.txt`; Stage all; unstage `new.txt` | After each step git's index holds exactly what the lists show as staged | H, P, M |
+| GIT-3a | Two files staged, a message in the field | Press Commit | git has a commit with that message; the committed files leave the list, the others stay, the field is empty | H, P, M |
+| GIT-3b | A pre-commit hook that prints a message and fails | Press Commit | git's own words are shown; no commit is made; the message stays in the field | H, M |
+| GIT-4 | `notes.txt` changed | Pick it in the list; switch to two panels and back | Its diff opens as a tab with `+second line`; in two panels the line is on the right without its mark | P, M |
+| GIT-5 | Changes in several folders | Press Group by folder | The list becomes a tree; folders fold and show totals | H, P, X |
+| GIT-6 | One panel and a flat list on both devices | Choose two panels, or the tree, on one device | The other device shows the same choice | H, M, X |
+| GIT-7 | One commit that the remote does not have | Press Push | The remote has the commit | H, P, M |
+| GIT-8 | A pull that would conflict; a remote that asks for a password | Pull; push | The pull is undone and says so; git fails with its own message instead of waiting | H |
+| GIT-9 | A push under way on the iPhone | The changes are asked for again meanwhile | That answer is not taken for the end of the push | H |
+| GIT-10 | Files staged, a stand-in agent that answers with a message | Press Write | The agent's message is in the field; nothing is committed | H, M |
+| GIT-11 | Default commit message settings | A second device sets agent Codex, a model and a prompt | Settings > Git shows that agent, model and prompt, and the Write button names Codex | H, M |
+| GIT-12 | Changes listed on the Mac | Another device stages everything and commits | The Mac's list is empty and git has that device's commit | M, X |
+| GIT-13 | A diff scrolled part of the way down | The file changes under it | The diff stays where it was scrolled to | M |
+
+### History
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| HIST-1 | Conversations of each agent in a folder, a subfolder and a look-alike sibling | The host lists the folder's conversations | Only that folder's, newest first | H |
+| HIST-2 | One conversation of Claude Code in the fixture project | Open the History tab | The conversation is listed, with "1 conversation" | P, M |
+| HIST-3 | The same | Choose Resume | A new session of that agent starts with the conversation's id on its command line | H, P, M |
+
+### Keeping the Mac awake, starting at login
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| AWAKE-1 | Keep awake on | A session starts; the last session ends | The hold on sleep is taken, then let go | H |
+| AWAKE-2 | Keep awake off on both devices | Switch it on on the Mac; switch it off, or an option on, on a second device | Each device shows what the other set | H, P, M, X |
+| AWAKE-3 | Keep awake on with "after 1 hour" | The hour passes | The switch goes off on both devices | H |
+| LOGIN-1 | A host that can be started at login | A client switches Start at Login on, then off | A launch agent naming this host's program is written, then removed; every client is told | H |
+| LOGIN-2 | A host with a state folder of its own | Connect | No client shows the switch | H |
+| LOGIN-3 | Start at Login on | Log out and in again | The host is running without the app having been opened | hand |
+
+### Menu bar, permissions, another copy's host
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| MENU-1 | The window open | Close it | The menu bar icon stays, and its menu opens the window again | hand |
+| MENU-2 | The app running | Choose File > New Shell, New Claude Code | A session of each kind starts | M |
+| PERM-1 | The app running | Open Settings > Permissions | Each permission is listed with whether it is allowed | M |
+| HOST-1 | A host from another copy of the app on the app's port | Open the app | A banner names the other host's path and offers this app's own | M |
+| HOST-2 | A host of another protocol version | Connect | Both apps say the versions differ | H, P |
+
+### Files
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| FILE-1 | The fixture project | Open the Files tab; press the `docs` folder | Folders come first, `.git` is not listed, and `docs` opens in place showing `guide.md` | H, P, M |
+| FILE-2 | The same | New file, new folder, rename, move to the Trash; a name that is taken | Each is done on disk; the taken name is refused and nothing is overwritten | H, P, M |
+| FILE-3 | `notes.txt` with two lines | Open it, add a third line, choose Save | The editor shows the two lines; the disk is unchanged until Save, and has three lines after | H, P, M |
+| FILE-4 | A Markdown file with a Mermaid block | Open it | A rendered preview with a switch to the source | H (Markdown), M |
+| FILE-5 | An image, a binary file, a file over 2 MB | Open each | The image shows; the others say why they do not | H, M |
+| FILE-6 | A file open without edits | Something else rewrites it on disk; press Refresh | The editor shows the new text | M |
+| FILE-7 | A file open as a tab | Quit the app and open it again | The file is a tab again | M |
+| FILE-8 | The Files tab open on the Mac | A second device creates a file and writes into it | The file appears in the Mac's tree and opens with that text | M |
+
+### Pairing and devices
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| PAIR-1 | A pairing code on show | It is used once; used again; five minutes pass; the window closes | It pairs one device; every later use is refused | H |
+| PAIR-2 | A pairing link | Open it on the iPhone | The iPhone is paired with a token of its own and shows the Mac | H, P, X |
+| PAIR-3 | A paired device's client | It asks for a pairing code, or to remove a device | The host refuses: only the Mac's own client may | H |
+| PAIR-4 | Tailscale connected, or not | Open the pairing window | A code, or what Tailscale is missing with the steps to fix it | M (one or the other, whichever this Mac is in) |
+| PAIR-5 | A paired device connected | The Mac removes it | It is disconnected at once and has to pair again | H, M (a paired Mac) |
+| PAIR-6 | The iPhone paired with one Mac | Pair a second; switch between them | Both are listed; each shows its own folders and sessions | P |
+
+### Another Mac
+
+A second host stands in for the other Mac, with a project of its own.
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| REMOTE-1 | The other Mac's pairing link | Choose Pair with Another Mac, paste the link | The other Mac is on screen and named in the menu | M |
+| REMOTE-2 | Paired | Look at the folders | The other Mac's folder is listed and this Mac's is not | M |
+| REMOTE-3 | A changed file on the other Mac | Stage it, commit with a message; open a file, change it, save | The other Mac's git has the commit and its disk has the saved text | M |
+| REMOTE-4 | The other Mac's home with `Sites/blog` | Press Add; go into Sites, into blog; press Add This Folder | The other Mac's list has the folder and it shows here | M |
+| REMOTE-5 | A session started on the other Mac from here | Switch to This Mac, then back | This Mac shows its own folder; back on the other Mac the session is still running | M |
+| REMOTE-6 | The other Mac on screen | Quit the app and open it again | It comes back to the other Mac | M |
+| REMOTE-7 | The other Mac on screen | Look for Pair Device | It is not offered | M (Pair Device), hand (Show in Finder, Restart Host) |
+| REMOTE-8 | Paired | The other Mac removes this one from its devices | A message says so, the other Mac is forgotten, and this Mac is on screen | M |
+| REMOTE-9 | A file of the other Mac open with unsaved changes | Switch to This Mac | Refused, with a message to save or discard first; the other Mac stays on screen | M |
+| REMOTE-10 | A changed file on the other Mac | Pick it in the Git tab | Its diff, which comes after the list, is shown | M |
+| REMOTE-11 | A file staged on the other Mac, a stand-in agent there | Press Write, then Commit | The other Mac's agent writes the message into the field, and its git has the commit | M |
+| REMOTE-12 | That commit, which the other Mac's remote does not have | Press Push | The other Mac's remote has the commit | M |
+| REMOTE-13 | A conversation an agent had on the other Mac | Choose Hand Off on it, press Hand Off | The prompt comes from the other Mac's host; the receiving agent starts there and the handoff file is on its disk | M |
+
+### iPhone only
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| IOS-1 | A shell with a command in its history | Press Up, then Return, in the key bar | The command runs again | P |
+| IOS-2 | A shell open | Write `echo Xin chào tiếng Việt: ờ ữ ẩ đ` in the message field, press Send | The terminal shows the text as written | P, H |
+| IOS-3 | Text in the message field, the keyboard up | Press the hide keyboard button | The keyboard goes; the text stays | P, L |
+| IOS-4 | A session open, the phone on its side | Bring up the keyboard | There is still terminal to see, and a way back without the navigation bar | L |
+| IOS-5 | The Mac's home with folders | Open Another Folder, pick one, start a shell | The shell starts in that folder | H, P |
+| IOS-6 | The History or Settings tab in front | The Mac answers with an error | The message shows over whichever tab is in front | P |
+| IOS-7 | Paired | Look at the three tabs | Sessions, History, Settings, with the settings the Mac's Settings window has | P |
+
+### Waiting
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| LOAD-1 | A slow link to the Mac | Open the History tab; open a session with megabytes behind it | A spinner with what is loading: "Loading the history…", "Loading the session…" | M (the session); the iPhone by hand |
+| LOAD-2 | The same, slower still | Ten seconds pass | It says that it is taking longer than usual, and offers Try Again where that can be done | M; the iPhone by hand |
+
+### Vietnamese input
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| VN-1 | Vietnamese text with combining marks | Send it through a PTY and through a session | It arrives byte for byte | H |
+| VN-2 | Telex, VNI, and a tool that retypes with backspaces | Type in zsh and in each agent on the Mac | The words come out right, with nothing doubled or lost | hand (issue #4) |
+| VN-3 | The Vietnamese keyboard on a real iPhone | Write in the message field and send | The words arrive as written | hand |
+
+## What the tests found
+
+Bugs that came to light while these tests were written, as a record of
+what the layers are good for:
+
+- Ending one session on the Mac (⌘W, End Session) did not ask first, though
+  closing many tabs did and the iPhone always asks. It asks now (SES-10).
+- The two main switches of Settings > General on the Mac had no name for
+  VoiceOver: they were read as "checkbox" (AWAKE-2).
+- Rows of the Mac's sidebar, of its Files tab, of its changes and of its
+  History could not be pressed without a pointer; a conversation's Resume
+  and Hand Off only showed under the pointer, and what a tab's or a file's
+  menu holds (End Session, Close Other Tabs, Hand Off, Rename, Move to
+  Trash) was only in a menu that opens under the pointer (TAB-1, TAB-4,
+  FILE-2, FILE-3, GIT-4, HIST-3, HAND-6).
+
+## What stays by hand
+
+Some of this cannot be automated here, and is checked before a release:
+
+- Anything that needs a second machine or a real phone: Tailscale between
+  devices, the camera scanning a pairing code, a cellular link.
+- What macOS decides: permission prompts, sleep, starting the host at
+  login, the menu bar icon after the window closes.
+- Real input methods (VN-2, VN-3).
+- The agents' own services (USE-3): the figures need a signed-in account.
+- On the iPhone, what a slow link shows (LOAD-1, LOAD-2): the test that
+  drives the app waits for it to be still, which a spinner never is. It
+  was looked at once by capturing the simulator from outside.
+- What the Mac's terminal draws: accessibility does not give its text.
+  What a session holds is checked through the host instead.

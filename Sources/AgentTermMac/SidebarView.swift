@@ -10,9 +10,6 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            MacSwitcher()
-                .padding(.horizontal, 14)
-                .padding(.top, 12)
             HStack {
                 Text("FOLDERS")
                     .font(.system(size: 11, weight: .semibold))
@@ -140,7 +137,7 @@ private struct SessionArranging: ViewModifier {
                 Divider()
                 Button(model.tabLayout.isPinned(id) ? "Unpin" : "Pin") { model.setTabPinned(id, !model.tabLayout.isPinned(id)) }
                 Divider()
-                Button("End Session") { model.close(session.id) }
+                Button("End Session") { model.requestEnd(session.id) }
             }
     }
 }
@@ -237,6 +234,12 @@ struct FolderRow: View {
     let folder: Folder
     @State private var hovering = false
 
+    private func select() {
+        model.selectedFolder = folder.path
+        // Jump to this folder's most recent session, or its launch screen.
+        model.selectedSession = model.sessions.last { $0.cwd == folder.path }?.id
+    }
+
     private var isSelected: Bool { model.selectedFolder == folder.path && model.selectedSession == nil }
 
     var body: some View {
@@ -255,11 +258,13 @@ struct FolderRow: View {
         .modifier(RowBackground(selected: isSelected, hovering: hovering))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture {
-            model.selectedFolder = folder.path
-            // Jump to this folder's most recent session, or its launch screen.
-            model.selectedSession = model.sessions.last { $0.cwd == folder.path }?.id
-        }
+        .onTapGesture { select() }
+        // One thing to press, for VoiceOver and anything else without a pointer.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(folder.name), folder")
+        .accessibilityIdentifier("folder-" + folder.path)
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { select() }
         .help(folder.path)
         .contextMenu {
             // A folder of another Mac is not in this Mac's Finder.
@@ -343,6 +348,11 @@ struct SessionRow: View {
         .onHover { hovering = $0 }
         .onTapGesture { model.select(session: session) }
         .help(session.summary.map { "\(session.title): \($0)" } ?? session.title)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(session.displayName), session")
+        .accessibilityIdentifier("session-\(session.id)")
+        .accessibilityAddTraits(model.selectedSession == session.id ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { model.select(session: session) }
     }
 }
 

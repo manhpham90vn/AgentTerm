@@ -81,7 +81,7 @@ outside your desk. At least one agent CLI installed on the Mac.
 
 1. Open AgentTerm on the Mac and add a project folder.
 2. Start an agent with its button in the toolbar.
-3. Click **Pair iPhone**, and scan the code with the iPhone app.
+3. Click **Pair Device**, and scan the code with the iPhone app.
 
 macOS asks for permissions on behalf of what the agents do (files, automation,
 screen recording and so on). **Settings → Permissions** lists them and where to

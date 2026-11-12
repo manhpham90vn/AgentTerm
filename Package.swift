@@ -64,7 +64,10 @@ let package = Package(
         // Starts a program on a pseudo terminal. C, because it needs fork().
         .target(name: "CAgentTermPTY"),
         // macOS only: PTY ownership, session management, WebSocket server.
-        .target(name: "AgentTermHost", dependencies: ["AgentTermProtocol", "CAgentTermPTY"]),
+        .target(
+            name: "AgentTermHost",
+            dependencies: ["AgentTermProtocol", "CAgentTermPTY", .product(name: "SwiftTerm", package: "SwiftTerm")]
+        ),
         .executableTarget(name: "agenttermd", dependencies: ["AgentTermHost", "AgentTermClient"]),
         .executableTarget(
             name: "AgentTermMac",
@@ -82,7 +85,13 @@ let package = Package(
         .testTarget(name: "AgentTermProtocolTests", dependencies: ["AgentTermProtocol"]),
         .testTarget(name: "AgentTermEditorTests", dependencies: ["AgentTermEditor"]),
         .testTarget(name: "AgentTermTelemetryTests", dependencies: ["AgentTermTelemetry"]),
-        .testTarget(name: "AgentTermHostTests", dependencies: ["AgentTermHost", "AgentTermClient"]),
+        .testTarget(
+            name: "AgentTermHostTests",
+            dependencies: ["AgentTermHost", "AgentTermClient", .product(name: "SwiftTerm", package: "SwiftTerm")]
+        ),
         .testTarget(name: "AgentTermTerminalTests", dependencies: ["AgentTermTerminal"]),
+        // The Mac app driven through accessibility against a host of its own.
+        // Skipped unless run through scripts/test-mac.sh.
+        .testTarget(name: "AgentTermMacUITests", dependencies: ["AgentTermClient", "AgentTermProtocol"]),
     ]
 )

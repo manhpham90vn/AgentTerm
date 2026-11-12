@@ -32,6 +32,16 @@ public enum AgentDetector {
         return parse(output)
     }
 
+    /// The agents whose programs are in `directory`, and nowhere else. For
+    /// tests, which stand small programs in for the real agents: those must
+    /// not be started, signed in as they are to someone's accounts.
+    public static func detect(in directory: String) -> [AgentInfo] {
+        known.map { agent in
+            let path = (directory as NSString).appendingPathComponent(agent.id)
+            return AgentInfo(id: agent.id, name: agent.name, path: FileManager.default.isExecutableFile(atPath: path) ? path : nil)
+        }
+    }
+
     static func parse(_ output: String) -> [AgentInfo] {
         var paths: [String: String] = [:]
         for line in output.split(whereSeparator: \.isNewline) {

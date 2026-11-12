@@ -139,7 +139,7 @@ private struct MenuBarMenu: View {
             }
         }
         Divider()
-        Button("Pair iPhone…") {
+        Button("Pair Device…") {
             showWindow()
             model.showPairing = true
         }
@@ -211,6 +211,9 @@ private struct SettingsView: View {
                     }
                 }
                 .toggleStyle(.switch)
+                // The words next to a switch are its label only to the eye.
+                .accessibilityLabel("Stay in the menu bar when the window is closed")
+                .accessibilityIdentifier("menu-bar")
             }
             if let startAtLogin = model.startAtLogin {
                 SettingsCard {
@@ -227,6 +230,7 @@ private struct SettingsView: View {
                         }
                     }
                     .toggleStyle(.switch)
+                    .accessibilityLabel("Start the host when you log in")
                     .accessibilityIdentifier("start-at-login")
                 }
             }
@@ -245,6 +249,8 @@ private struct SettingsView: View {
                         }
                     }
                     .toggleStyle(.switch)
+                    .accessibilityLabel("Keep the Mac awake while sessions are running")
+                    .accessibilityIdentifier("keep-awake")
                     KeepAwakeOptionsView(isOn: keepAwake)
                 }
             }

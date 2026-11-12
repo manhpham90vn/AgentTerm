@@ -1,0 +1,83 @@
+import AgentTermProtocol
+import XCTest
+
+/// Starting sessions from the Mac app, and what it shows of the Mac.
+final class SessionTests: MacUITestCase {
+    func testTheWindowShowsTheFolderTheAgentsAndTheMac() throws {
+        // WIN-1: the folder of the host's list.
+        app.wait(for: .text("project, folder"))
+        // LAUNCH-1: a button for each agent that is installed, and none for the others.
+        app.wait(for: .button("Claude Code"))
+        XCTAssertTrue(app.exists(.button("Codex")))
+        XCTAssertTrue(app.exists(.button("Shell")))
+        XCTAssertFalse(app.exists(.button("Antigravity")), "an agent that is not installed has a launch button")
+        XCTAssertFalse(app.exists(.button("Copilot CLI")))
+        // SYS-2: how the Mac is doing.
+        for figure in ["system-cpu", "system-memory", "system-down", "system-up", "system-temperature", "system-battery", "system-uptime"] {
+            app.wait(for: .id(figure), timeout: 15)
+        }
+        XCTAssertTrue(app.first(.id("system-cpu"))?.label.hasPrefix("CPU ") ?? false)
+    }
+
+    func testStartingSessionsAndFindingThemAgainAfterReopeningTheApp() throws {
+        let phone = try device()
+        // SES-2: a shell from the launch buttons.
+        app.press(.button("Shell"))
+        wait("the shell to start") { phone.sessions.count == 1 }
+        let shell = phone.sessions[0]
+        XCTAssertEqual(shell.cwd, project.path, "the session did not start in the selected folder")
+        // SES-3: an agent, named after it.
+        app.press(.button("Claude Code"))
+        wait("the agent to start") { phone.sessions.count == 2 }
+        let agent = try XCTUnwrap(phone.sessions.first { $0.id != shell.id })
+        XCTAssertEqual(agent.title, "Claude Code")
+        // TAB-1: each is a tab.
+        app.wait(for: .containing("Claude Code"))
+
+        // SES-6: what the program writes reaches another device too.
+        phone.send(.attach(session: agent.id, size: .default))
+        wait("the agent's first words on the other device") { phone.text(agent.id).contains("stand-in claude started") }
+
+        // SES-12: what is typed and not sent is still there after the app
+        // was closed. Typed from the other device: the app only has to show it.
+        phone.send(.attach(session: shell.id, size: .default))
+        phone.connection.sendInput(Data("echo not-sent-yet".utf8), to: shell.id)
+        wait("the typing echoed") { phone.text(shell.id).contains("not-sent-yet") }
+
+        // SES-4: the sessions outlive the app.
+        try relaunchApp()
+        wait("both sessions after reopening") { self.app.all(.containing("Claude Code")).count >= 1 && phone.sessions.count == 2 }
+        XCTAssertEqual(phone.sessions.map(\.id).sorted(), [shell.id, agent.id].sorted())
+        // And what was typed is what a device that opens the session now is shown.
+        let later = try device("later")
+        later.send(.attach(session: shell.id, size: .default))
+        wait("what was typed, replayed") { later.text(shell.id).contains("not-sent-yet") }
+    }
+
+    func testASessionAnotherDeviceIsUsingIsShownAtThatDevicesSize() throws {
+        let phone = try device()
+        app.press(.button("Shell"))
+        wait("the shell") { phone.sessions.count == 1 }
+        let id = phone.sessions[0].id
+        // Only shown on the phone, the session keeps the Mac's size.
+        phone.send(.attach(session: id, size: TermSize(cols: 40, rows: 20)))
+        wait("the Mac's size, told to the phone") { (phone.size(of: id)?.cols ?? 0) > 40 }
+        XCTAssertFalse(app.exists(.button("Use This Window's Size")))
+        // SIZE-4: used on the phone, it has the phone's size, and the Mac says so and offers to take it back.
+        phone.send(.takeControl(session: id, size: TermSize(cols: 40, rows: 20)))
+        wait("the phone's size") { phone.size(of: id) == TermSize(cols: 40, rows: 20) }
+        app.wait(for: .button("Use This Window's Size"), timeout: 15)
+        app.wait(for: .containing("Another device is using this session"))
+        app.wait(for: .containing("40 × 20"))
+        app.press(.button("Use This Window's Size"))
+        app.waitGone(.button("Use This Window's Size"), timeout: 15)
+        wait("the Mac's size again") { (phone.size(of: id)?.cols ?? 0) > 40 }
+    }
+
+    func testTheSSHMenuListsTheHostsOfTheConfiguration() throws {
+        // LAUNCH-2: the hosts, without the patterns.
+        app.press(.button("SSH"))
+        app.wait(for: .button("build-server"), menus: true)
+        XCTAssertFalse(app.nodes(menus: true).contains { $0.title.contains("internal") }, "a pattern is offered as a host")
+    }
+}

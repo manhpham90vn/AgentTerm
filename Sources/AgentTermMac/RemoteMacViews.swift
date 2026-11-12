@@ -2,11 +2,16 @@ import AgentTermProtocol
 import AgentTermTerminal
 import SwiftUI
 
-/// Which Mac is on screen: this one, or one it is paired with. At the top
-/// of the sidebar, since everything under it belongs to that Mac.
+/// Which Mac is on screen: this one, or one it is paired with. In the
+/// window's header, since everything in the window belongs to that Mac.
 struct MacSwitcher: View {
     @EnvironmentObject private var model: AppModel
     @State private var forgetting: RemoteMac?
+
+    /// Blue for this Mac, orange while another one is on screen.
+    private var tint: Color {
+        model.isRemote ? Color(red: 0.98, green: 0.62, blue: 0.22) : Color(red: 0.42, green: 0.62, blue: 1)
+    }
 
     var body: some View {
         Menu {
@@ -37,20 +42,36 @@ struct MacSwitcher: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: model.isRemote ? "macbook" : "desktopcomputer")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(model.isRemote ? Color.accentColor : .secondary)
+                    .font(.system(size: 12.5, weight: .bold))
+                    .foregroundStyle(tint)
                 Text(model.remote?.name ?? "This Mac")
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.tertiary)
-                Spacer(minLength: 0)
+                    .foregroundStyle(.secondary)
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 5)
+            // A filled shape of its own, so it reads as the place that says
+            // which Mac this is rather than as one more toolbar button. On
+            // another Mac it takes that Mac's color, which is hard to miss.
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(tint.opacity(model.isRemote ? 0.26 : 0.18))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(tint.opacity(model.isRemote ? 0.75 : 0.4), lineWidth: 1)
+            )
             .contentShape(Rectangle())
         }
-        .menuStyle(.borderlessButton)
+        // A plain button: the toolbar draws any other menu its own way,
+        // with a gray icon and without the shape around it.
+        .menuStyle(.button)
+        .buttonStyle(.plain)
         .menuIndicator(.hidden)
+        .fixedSize()
         .help("Use this Mac, or another Mac this one is paired with")
         .accessibilityLabel("Mac")
         .accessibilityValue(model.remote?.name ?? "This Mac")
@@ -77,7 +98,7 @@ struct PairMacSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text("Pair with Another Mac").font(.system(size: 17, weight: .semibold))
             Text(
-                "On the other Mac, open AgentTerm and choose Pair iPhone. Copy the link shown under the code and paste it here. This Mac then shows that Mac's sessions, folders, changes and files, as the iPhone app does."
+                "On the other Mac, open AgentTerm and choose Pair Device. Copy the link shown under the code and paste it here. This Mac then shows that Mac's sessions, folders, changes and files, as the iPhone app does."
             )
             .font(.system(size: 12))
             .foregroundStyle(.secondary)

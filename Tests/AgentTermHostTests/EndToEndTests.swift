@@ -221,15 +221,15 @@ final class EndToEndTests: XCTestCase {
         second.connection.send(.kill(session: id))
     }
 
-    func testALongReplayArrivesWholeInPiecesAndStartsOnALine() throws {
-        // A small limit, so the oldest output is dropped the way megabytes
-        // of it would be with the real one.
-        let host = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false, scrollbackLimit: 600_000))
+    func testAScreenWithManyLinesAboveItArrivesWholeInPieces() throws {
+        // A client that attaches is sent the screen and the lines above it,
+        // of which the host keeps the 10,000 newest.
+        let host = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false))
         let hostPort = try host.start()
         defer { host.stop() }
         let first = TestClient(port: hostPort, token: token, name: "first")
         waitUntil("welcome") { first.welcomed }
-        // 20,000 numbered lines of 60 characters: 1.2 MB, twice the limit.
+        // 20,000 numbered lines of 60 characters: twice what is kept.
         first.connection.send(.create(CreateRequest(command: "seq -f 'line-%06g-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' 1 20000; echo the-end; exec cat")))
         waitUntil("attached") { first.attached != nil }
         let id = try XCTUnwrap(first.attached?.id)
@@ -247,12 +247,12 @@ final class EndToEndTests: XCTestCase {
         let replay = late.text(id)
         XCTAssertGreaterThan(pieces, 1, "more than one message's worth came in one piece")
         XCTAssertGreaterThanOrEqual(replay.utf8.count, 500_000, "most of what is kept was not replayed")
-        XCTAssertTrue(replay.hasSuffix("the-end\r\n"), "the newest output is the end of the replay")
-        XCTAssertTrue(replay.hasPrefix("line-0"), "the replay starts in the middle of a line: \(replay.prefix(40))")
+        XCTAssertTrue(replay.contains("the-end"), "the newest output is not in it")
         XCTAssertFalse(replay.contains("line-000001-"), "the oldest output should have been dropped")
         // No line is lost or torn where two pieces meet.
-        let numbers = replay.split(separator: "\r\n").compactMap { $0.hasPrefix("line-") ? Int($0.dropFirst(5).prefix(6)) : nil }
+        let numbers = replay.components(separatedBy: "line-").dropFirst().compactMap { Int($0.prefix(6)) }
         XCTAssertEqual(numbers.last, 20000)
+        XCTAssertGreaterThanOrEqual(numbers.count, 9_900)
         XCTAssertEqual(numbers, Array((numbers.first ?? 0)...20000))
         first.connection.send(.kill(session: id))
     }
@@ -268,14 +268,16 @@ final class EndToEndTests: XCTestCase {
         func start(_ client: TestClient) -> Int? {
             client.messages.compactMap { if case .replaying(id, let from) = $0 { return from } else { return nil } }.last
         }
-        // A phone opens the session: all of it, and where that starts.
+        // A phone opens the session: its screen, and where that ends up in
+        // the session's output, which is where the session is now.
         let phone = connect("phone")
         phone.connection.send(.attach(session: id, size: .default))
         waitUntil("replayed") { phone.messages.contains(.replayed(session: id)) }
         let from = try XCTUnwrap(start(phone))
-        XCTAssertEqual(start(first), from, "the one that started the session was not told where its output starts")
+        let began = try XCTUnwrap(start(first), "the one that started the session was not told where its output starts")
         let seen = phone.output[id]?.count ?? 0
-        XCTAssertEqual(phone.text(id), first.text(id))
+        XCTAssertTrue(phone.text(id).contains("before-the-drop"))
+        XCTAssertEqual(from + seen, began + (first.output[id]?.count ?? 0), "the end of the screen is not where the session is")
         // Its connection goes, and the session writes on meanwhile.
         phone.connection.close()
         waitUntil("gone") { phone.isClosed }
@@ -288,16 +290,18 @@ final class EndToEndTests: XCTestCase {
         waitUntil("replayed") { back.messages.contains(.replayed(session: id)) }
         XCTAssertEqual(start(back), from + seen)
         XCTAssertEqual(back.text(id), "while-it-was-away\r\nwhile-it-was-away\r\n")
-        XCTAssertEqual(phone.text(id) + back.text(id), first.text(id))
 
         // A place that is not one of this session's, as after the host was
-        // restarted: all of it again, and the client is told so.
-        for place in [from - 1, from + 1_000_000, 0] {
+        // restarted: the screen again, and the client is told so.
+        let now = began + (first.output[id]?.count ?? 0)
+        for place in [began - 1, now + 1_000_000, 0] {
             let lost = connect("lost")
             lost.connection.send(.attach(session: id, size: .default, have: place))
             waitUntil("replayed") { lost.messages.contains(.replayed(session: id)) }
-            XCTAssertEqual(start(lost), from)
-            XCTAssertEqual(lost.text(id), first.text(id))
+            XCTAssertNotEqual(start(lost), place)
+            XCTAssertEqual((start(lost) ?? 0) + (lost.output[id]?.count ?? 0), now)
+            XCTAssertTrue(lost.text(id).contains("before-the-drop"))
+            XCTAssertTrue(lost.text(id).contains("while-it-was-away"))
             lost.connection.close()
         }
         first.connection.send(.kill(session: id))

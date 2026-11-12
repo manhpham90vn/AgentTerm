@@ -29,7 +29,7 @@ struct PairingView: View {
 
     var body: some View {
         VStack(spacing: 18) {
-            Text("Pair an iPhone")
+            Text("Pair a Device")
                 .font(.system(size: 18, weight: .semibold))
 
             if let device = model.justPaired {
@@ -98,8 +98,8 @@ struct PairingView: View {
             .monospacedDigit()
 
         VStack(alignment: .leading, spacing: 10) {
-            Step(number: 1, text: "Install Tailscale on the iPhone and sign in to the same account as this Mac.")
-            Step(number: 2, text: "Open AgentTerm on the iPhone and scan this code, or copy the link below and paste it there.")
+            Step(number: 1, text: "Install Tailscale on the iPhone or the other Mac and sign in to the same account as this Mac.")
+            Step(number: 2, text: "On an iPhone, open AgentTerm and scan this code. On another Mac, copy the link below and paste it under Pair with Another Mac.")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -119,7 +119,7 @@ struct PairingView: View {
             } label: {
                 Label(copied ? "Copied" : "Copy Pairing Link", systemImage: copied ? "checkmark" : "doc.on.doc")
             }
-            .help("Copy the link to paste into \"Enter a pairing link\" on the iPhone")
+            .help("Copy the link to paste into \"Enter a pairing link\" on the iPhone, or \"Pair with Another Mac\" on a Mac")
             Button("New Code") { model.requestPairingCode() }
                 .help("Replace this code. The old one stops working at once.")
         }
@@ -220,11 +220,14 @@ struct PairingView: View {
 
         Text(title(for: status))
             .font(.headline)
-        Text("AgentTerm reaches this Mac from your iPhone over Tailscale, a private network between your own devices. The pairing code appears here once Tailscale is ready on this Mac.")
-            .font(.callout)
-            .foregroundStyle(.secondary)
-            .multilineTextAlignment(.center)
-            .fixedSize(horizontal: false, vertical: true)
+        Text(
+            "AgentTerm reaches this Mac from your iPhone or another Mac over Tailscale, a private network between your own devices. "
+                + "The pairing code appears here once Tailscale is ready on this Mac."
+        )
+        .font(.callout)
+        .foregroundStyle(.secondary)
+        .multilineTextAlignment(.center)
+        .fixedSize(horizontal: false, vertical: true)
 
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(steps(for: status).enumerated()), id: \.offset) { index, text in
@@ -255,7 +258,7 @@ struct PairingView: View {
     }
 
     private func steps(for status: TailscaleStatus) -> [String] {
-        let phone = "Install Tailscale on the iPhone too and sign in to the same account."
+        let phone = "Install Tailscale on the iPhone or the other Mac too and sign in to the same account."
         switch status {
         case .notInstalled:
             return ["Install Tailscale on this Mac.", "Open it and sign in.", phone]

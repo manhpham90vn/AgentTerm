@@ -533,7 +533,7 @@ final class AppModel: ObservableObject {
     func pairMac(link: String) {
         guard !isPairingMac else { return }
         guard let url = URL(string: link.trimmingCharacters(in: .whitespacesAndNewlines)), let info = PairingInfo(url: url) else {
-            pairMacError = "That is not a pairing link. On the other Mac, open Pair iPhone and copy the link under the code."
+            pairMacError = "That is not a pairing link. On the other Mac, open Pair Device and copy the link under the code."
             return
         }
         pairMacError = nil
@@ -883,6 +883,16 @@ final class AppModel: ObservableObject {
         connection?.send(.kill(session: session))
     }
 
+    /// A session the user asked to end, until that is confirmed. Ending
+    /// one stops what runs in it, an agent in the middle of its work for
+    /// one, and ⌘W is pressed out of habit: it asks first, as closing many
+    /// tabs does and as the iPhone does.
+    @Published var pendingEnd: SessionInfo?
+
+    func requestEnd(_ session: SessionID) {
+        pendingEnd = sessions.first { $0.id == session }
+    }
+
     func takeControl() {
         currentController?.claimSize()
     }
@@ -1042,7 +1052,7 @@ final class AppModel: ObservableObject {
         } else if let path = files.active {
             files.requestClose(path)
         } else if let id = selectedSession {
-            close(id)
+            requestEnd(id)
         }
     }
 

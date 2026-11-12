@@ -48,15 +48,21 @@ struct RootView: View {
                 }
                 .help(model.showSidebar ? "Hide the folder list" : "Show the folder list")
             }
+            // Next to it: which Mac all of the window is about.
+            ToolbarItem(placement: .navigation) {
+                HStack(spacing: 0) { MacSwitcher() }
+            }
             // Middle: starting an agent is the main thing to do here, and
-            // pairing an iPhone is what sets the app apart, so it sits with
-            // them and stands out.
+            // pairing an iPhone or another Mac is what sets the app apart,
+            // so it sits with them and stands out.
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 10) {
                     LaunchBar()
-                    Theme.hairline.frame(width: 1, height: 16)
-                    // Pairing a phone is done on the Mac it is paired with.
-                    if !model.isRemote { PairButton() }
+                    // Pairing a device is done on the Mac it is paired with.
+                    if !model.isRemote {
+                        Theme.hairline.frame(width: 1, height: 16)
+                        PairButton()
+                    }
                 }
             }
             // Without this flexible space the items below sit right after
@@ -92,6 +98,16 @@ struct RootView: View {
             Button("Save") { if files.save(path) { files.close(path) } }
             Button("Don't Save", role: .destructive) { files.close(path) }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog(
+            "End \(model.pendingEnd?.displayName ?? "this session")?",
+            isPresented: Binding(get: { model.pendingEnd != nil }, set: { if !$0 { model.pendingEnd = nil } }),
+            titleVisibility: .visible, presenting: model.pendingEnd
+        ) { session in
+            Button("End Session", role: .destructive) { model.close(session.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("The program running in it is stopped.")
         }
         .confirmationDialog(
             closeQuestion,
@@ -199,7 +215,7 @@ struct PairButton: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "qrcode").font(.system(size: 11, weight: .bold))
-                Text("Pair iPhone").font(.system(size: 12, weight: .semibold))
+                Text("Pair Device").font(.system(size: 12, weight: .semibold))
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 11)
@@ -212,8 +228,8 @@ struct PairButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("Pair an iPhone with a QR code to use this Mac's sessions from it")
-        .accessibilityLabel("Pair iPhone")
+        .help("Pair an iPhone or another Mac to use this Mac's sessions from it")
+        .accessibilityLabel("Pair Device")
     }
 }
 

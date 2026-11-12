@@ -209,29 +209,55 @@ is not attached to the session is dropped.
 
 ## Attaching to a running session
 
-The host keeps the last 4 MB of each session's output and replays it to a
-client that attaches, so a phone that opens a session can scroll back
-through what happened before it looked. The replay goes out in pieces of
-256 KB, since one message may not be larger than 4 MB, and once the oldest
-output has been dropped it starts at the beginning of a line rather than
-in the middle of one. The buffer is cut back to its limit only when it is
-a quarter over, because cutting copies it. Each emulator keeps 20,000
-lines to scroll back through (SwiftTerm's own default is 500, which threw
-most of a replay away as it arrived). For full screen programs the replay
-relies on the program redrawing, which happens when the attach changes the
-size.
+The host keeps each session's screen: a terminal emulator of its own that
+nobody looks at (`ScreenMirror`, SwiftTerm without a view) is fed all the
+session writes and follows its size. A client that attaches is sent that
+screen written out again as terminal output: the lines above the screen
+(10,000 of them at most), the screen, the other screen when a full screen
+program is on it, then the margins, the cursor and the modes the program
+set (how keys, the mouse and pastes are reported, whether the cursor
+shows). To the client it is output like any other, so nothing in the
+protocol changed for it. It goes out in pieces of 256 KB, since one message
+may not be larger than 4 MB.
+
+Until 0.5.0 the client was sent the last 4 MB of the session's raw output
+instead. A full screen program then only looked right once it drew again,
+and what had been drawn for another width, before a phone took the session
+over, read badly further up. The screen written out again is right for the
+size the session has now, and is usually much smaller.
+
+Three things about it are deliberate:
+
+- It holds no question to the terminal (which terminal are you, where is
+  the cursor), so a client has nothing to answer a second time. Clients
+  still treat it as a replay and send nothing on until `replayed`.
+- The emulator's own colors are left out. A client has its own.
+- A program's output arrives in pieces cut anywhere, also inside an escape
+  sequence or a character. A client given the screen at such a moment would
+  get the end of something whose beginning it never saw. So the host also
+  follows the output byte by byte (`OutputTracker`) and ends what it sends
+  with the beginning of whatever is unfinished. The same tracker remembers
+  the few settings SwiftTerm keeps to itself: how the mouse is reported,
+  whether lines wrap, the cursor's shape and the colors text was being
+  written in.
+
+Not carried over: images, links, tab stops, character sets, origin mode
+and the palette a program changed.
 
 A phone that lost its connection attaches again within seconds, with its
-terminal still holding all it was sent. Replaying megabytes it would only
-draw again costs time and cellular data at each change of network. So the
-host says where in the session's output a replay starts
-(`replaying(session, from)`), the terminal counts on from there
-(`TerminalController.position`), and attaching again names that place
-(`have`): the host then sends only what came since. When it no longer
-keeps that far back, or the place is not one of this session's, it sends
-all it keeps and says so with another `from`, and the client starts a new
-terminal for it. The Mac app does not use this: it loses its connection
-only when the host itself stops, and its sessions with it.
+terminal still holding all it was sent. Sending the screen again costs
+time and cellular data at each change of network, and would throw away
+what the terminal had scrolled back to. So the host also keeps the last
+1 MB of each session's raw output and says where in the session's output
+what it sends ends up (`replaying(session, from)`, the place of the first
+byte, counted so that the end of a screen is where the session is now).
+The terminal counts on from there (`TerminalController.position`), and
+attaching again names that place (`have`): the host then sends only the
+raw output that came since. When it no longer keeps that far back, or the
+place is not one of this session's, it sends the screen and says so with
+another `from`, and the client starts a new terminal for it. The Mac app
+does not use this: it loses its connection only when the host itself
+stops, and its sessions with it.
 
 The replay was drawn for the session's grid, so the emulator takes that
 grid before the first replayed byte (`TerminalController.beginReplay(size:)`),
@@ -702,9 +728,8 @@ the sidebar switches between this Mac and the paired ones.
 - Session rows on the iPhone are named after the session's working directory
   when it is not a listed folder; the home directory shows as the user name.
 
-- Attach replays raw bytes instead of a screen snapshot. What a program
-  drew for another width, before the session was resized, reads badly
-  further up.
+- The lines above the screen that a client is sent are the 10,000 newest.
+  Images a program drew are not among them.
 - SwiftTerm resets some terminal modes when its grid is resized from code,
   which happens when another device takes over the size.
 - A terminal wider than the Mac window (a phone in landscape next to a narrow

@@ -104,6 +104,9 @@ struct FilesView: View {
                 ForEach(files.rows) { row in
                     FileTreeRow(row: row, changed: change(for: row.entry))
                         .contextMenu { menu(for: row.entry) }
+                        // The same, for who has no pointer to open the menu with.
+                        .accessibilityAction(named: "Rename") { ask(.rename(row.entry)) }
+                        .accessibilityAction(named: "Move to Trash") { trashing = row.entry }
                 }
                 if files.rows.isEmpty {
                     Text("This folder is empty.")
@@ -217,6 +220,7 @@ private struct FileTreeRow: View {
         .help(entry.path)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(entry.isDirectory ? "\(entry.name), folder, \(isExpanded ? "expanded" : "collapsed")" : entry.name)
+        .accessibilityIdentifier("file-" + entry.path)
         .accessibilityAddTraits(.isButton)
         // Said to be a button, so it has to act as one for VoiceOver and
         // for anything else that presses it without a pointer.

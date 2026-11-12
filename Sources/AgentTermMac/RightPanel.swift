@@ -291,5 +291,13 @@ private struct ConversationRow: View {
             }
         }
         .help(showsFolder ? "\(conversation.title)\n\((conversation.cwd as NSString).abbreviatingWithTildeInPath)" : conversation.title)
+        // The row's buttons only show under the pointer. Without one, the
+        // row says what it is and offers what they do as its actions.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(conversation.title)
+        .accessibilityIdentifier("conversation-" + conversation.sessionID)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: "Resume") { model.resume(conversation) }
+        .accessibilityAction(named: "Hand Off") { model.requestHandoff(conversation) }
     }
 }
