@@ -90,7 +90,7 @@ the same row.
 
 | Mac app | iPhone app | Protocol |
 |---|---|---|
-| 0.2.x | 0.2.x | 5 |
+| 0.2.x, 0.3.x | 0.2.x, 0.3.x | 5 |
 | 0.1.x | 0.1.x | 4 |
 
 Versions from different rows are not supported together. Update both apps

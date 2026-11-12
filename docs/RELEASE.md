@@ -81,7 +81,9 @@ make store-metadata      # send the listing; "What's New" is the version's relea
 make store-screenshots   # send fastlane/screenshots/en-US
 ```
 
-Neither submits anything for review. `review_information/phone_number.txt`
+The "Store listing" workflow on GitHub does the same from CI, run by hand
+(`gh workflow run metadata.yml`, with `-f screenshots=true` for the
+screenshots too). Neither submits anything for review. `review_information/phone_number.txt`
 is not in the repository; App Review asks for a phone number, which is set
 on App Store Connect.
 
