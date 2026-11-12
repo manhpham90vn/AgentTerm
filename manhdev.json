@@ -16,6 +16,10 @@
       "body": "Pair with a QR code and use the same sessions from your phone over Tailscale."
     },
     {
+      "title": "Tabs you arrange",
+      "body": "Drag to reorder, pin, and group sessions with a name and a color; the same on the iPhone."
+    },
+    {
       "title": "Git, history, files",
       "body": "Stage and commit, resume or hand off a conversation, browse and edit files, preview Markdown."
     },
@@ -62,6 +66,14 @@
       "caption": "iPhone: the same session, sized to the phone, with a key bar and a compose field."
     },
     {
+      "src": "fastlane/screenshots/en-US/01-sessions.png",
+      "alt": "Sessions on iPhone, with a pinned session and two groups",
+      "width": 1260,
+      "height": 2736,
+      "chrome": false,
+      "caption": "iPhone: your folders and sessions, pinned and grouped as on the Mac."
+    },
+    {
       "src": "fastlane/screenshots/en-US/03-usage.png",
       "alt": "The usage sheet on iPhone with the account's limits",
       "width": 1260,
@@ -93,7 +105,14 @@
       "sub": "Disk image · .dmg",
       "asset": "^AgentTerm-[\\d.]+(-[\\w.]+)?\\.dmg$",
       "file": "AgentTerm-{version}.dmg"
+    },
+    {
+      "platform": "ios",
+      "label": "iOS",
+      "sub": "TestFlight beta",
+      "href": "https://testflight.apple.com/join/Ny2JKHUp",
+      "external": true
     }
   ],
-  "version": "v0.1.0-beta.2"
+  "version": "v0.3.0-beta.3"
 }
