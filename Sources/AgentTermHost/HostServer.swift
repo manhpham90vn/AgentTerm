@@ -898,7 +898,10 @@ public final class HostServer {
             ?? (HostEnvironment.shell as NSString).lastPathComponent
         let info = SessionInfo(
             id: id, title: request.title ?? fallbackTitle, cwd: cwd, size: size, createdAt: Date(),
-            agent: SessionSummaries.agent(forCommand: request.command), conversationID: conversationID
+            agent: SessionSummaries.agent(forCommand: request.command),
+            // A session started with an agent's own resume command is that
+            // conversation's, whoever typed the command.
+            conversationID: conversationID ?? SessionSummaries.resumedConversation(inCommand: request.command)
         )
         let session = Session(info: info, process: process)
         sessions[id] = session

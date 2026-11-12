@@ -82,6 +82,19 @@ for the verdict, staples the ticket to it and checks it with `spctl`.
 The app is built for the Mac it is built on (Apple silicon on an Apple
 silicon Mac). There is no universal build yet.
 
+## Before a release
+
+- `VERSION` holds the version being released. A release as `0.3.0-beta.1`
+  is a pre-release of `0.3.0`; the workflow refuses a version that is not
+  the one in the file (`scripts/check-version.sh`).
+- `packaging/release-notes/v<version>.md` says what changed, one file for a
+  version and its pre-releases. The workflow refuses to release without it
+  (`scripts/check-release-notes.sh`). The GitHub release shows it, and
+  TestFlight gets it as "What to Test", for which the iPhone lane waits until
+  Apple has processed the build. `NOTES=0` skips the waiting and the notes.
+
+`make release V=0.3.0-beta.1` runs both checks and then starts the workflow.
+
 ## Homebrew
 
 The Mac app also installs with

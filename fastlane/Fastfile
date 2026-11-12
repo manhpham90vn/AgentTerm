@@ -36,6 +36,14 @@ def app_version
   File.read(File.join(ROOT, "VERSION")).strip
 end
 
+# Release notes as the plain text TestFlight shows: no Markdown marks, and
+# within the 4000 characters it allows.
+def what_to_test(markdown)
+  text = markdown.gsub(/^\#{1,6}\s*/, "").gsub(/\*\*(.+?)\*\*/, '\1').gsub(/`([^`]*)`/, '\1')
+  text = text.gsub(/\[([^\]]+)\]\(([^)]+)\)/, '\1 (\2)').gsub(/^- /, "• ")
+  text.strip[0, 4000]
+end
+
 platform :ios do
   desc "Build the iPhone app, signed for the App Store"
   lane :build do |options|
@@ -101,10 +109,17 @@ platform :ios do
   desc "Build the iPhone app and upload it to TestFlight"
   lane :beta do |options|
     build(options)
+    # "What to Test" is the version's release notes. TestFlight takes them
+    # only once it has processed the build, so the lane waits for that when
+    # there are notes; NOTES=0 uploads and leaves at once.
+    notes = File.join(ROOT, "packaging/release-notes/v#{app_version[/^[\d.]+/]}.md")
+    with_notes = File.size?(notes) && ENV["NOTES"] != "0"
     upload_to_testflight(
       api_key: asc_key,
       ipa: File.join(DIST, "AgentTerm.ipa"),
-      skip_waiting_for_build_processing: true
+      skip_waiting_for_build_processing: !with_notes,
+      distribute_external: false,
+      changelog: with_notes ? what_to_test(File.read(notes)) : nil
     )
   end
 end

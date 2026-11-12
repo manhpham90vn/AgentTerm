@@ -35,8 +35,15 @@ final class AppModel: ObservableObject {
     /// Sessions currently sized by another device, with that device's grid.
     @Published private(set) var foreignSizes: [SessionID: TermSize] = [:]
     @Published private(set) var diff: DiffSnapshot?
-    /// `id` of the change whose diff has a tab in the middle pane.
-    @Published private(set) var selectedDiffFile: String?
+    /// The change whose diff has a tab in the middle pane, with the folder
+    /// it is in. The tab keeps both: looking at a session of another folder
+    /// changes which folder the side panel shows, and must not close it.
+    @Published private(set) var diffTab: OpenDiff?
+
+    struct OpenDiff: Equatable {
+        let folder: String
+        var file: FileDiff
+    }
     /// Whether the diff's tab is the one in front.
     @Published private(set) var diffInFront = false
     private var observers: Set<AnyCancellable> = []
@@ -209,7 +216,7 @@ final class AppModel: ObservableObject {
             if active != nil { self?.diffInFront = false }
         }.store(in: &observers)
         // The arrangement of the tabs follows the tabs that exist.
-        $sessions.combineLatest(files.$documents, $selectedDiffFile, $diff)
+        $sessions.combineLatest(files.$documents, $diffTab, $diff)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.syncTabs() }
             .store(in: &observers)
@@ -348,6 +355,8 @@ final class AppModel: ObservableObject {
             syncTabs()
         case .folders(let list):
             folders = list.map(Folder.init)
+            // A diff of a folder that is no longer listed has nowhere to go back to.
+            if let tab = diffTab, !list.contains(tab.folder) { closeDiffTab() }
             if selectedFolder == nil || !list.contains(selectedFolder ?? "") { selectedFolder = list.first }
             migrateLocalFolders(known: list)
         case .attached(let info):
@@ -503,7 +512,7 @@ final class AppModel: ObservableObject {
 
     private func folderChanged() {
         diff = nil
-        closeDiffTab()
+        // The diff tab stays: it belongs to its own folder, not to the one on show.
         files.setRoot(selectedFolder)
         refreshDiff()
         // The list of every conversation does not depend on the folder.
@@ -697,35 +706,47 @@ final class AppModel: ObservableObject {
             DispatchQueue.main.async { [weak self] in
                 guard let self, generation == self.diffGeneration, self.selectedFolder == directory else { return }
                 if self.diff != snapshot { self.diff = snapshot }
-                if let selected = self.selectedDiffFile, !snapshot.files.contains(where: { $0.id == selected }) {
-                    // A file that was just staged or unstaged stays selected in its new list.
-                    let path = selected.hasPrefix("staged:") ? String(selected.dropFirst("staged:".count)) : selected
-                    self.selectedDiffFile = snapshot.files.first { $0.path == path }?.id
-                    // A change that is gone, committed for one, takes its tab with it.
-                    if self.selectedDiffFile == nil { self.closeDiffTab() }
+                if let tab = self.diffTab, tab.folder == directory {
+                    // The tab shows the change as it is now. A file that was
+                    // just staged or unstaged is followed into its new list.
+                    let now = snapshot.files.first { $0.id == tab.file.id } ?? snapshot.files.first { $0.path == tab.file.path }
+                    if let now {
+                        if now != tab.file { self.diffTab = OpenDiff(folder: directory, file: now) }
+                    } else {
+                        // A change that is gone, committed for one, takes its tab with it.
+                        self.closeDiffTab()
+                    }
                 }
             }
         }
     }
 
     /// The change that has a tab in the middle pane, if any.
-    var diffTabFile: FileDiff? { selectedDiffFile.flatMap { id in diff?.files.first { $0.id == id } } }
+    var diffTabFile: FileDiff? { diffTab?.file }
+
+    /// The change to mark in the Git tab's list: the diff tab's, while the
+    /// list is of its folder.
+    var diffTabFileInList: FileDiff? { diffTab?.folder == selectedFolder ? diffTab?.file : nil }
 
     /// Shows a change's diff in the middle pane. There is one diff tab; it
     /// follows the change picked in the Git tab.
     func openDiff(_ file: FileDiff) {
-        selectedDiffFile = file.id
+        guard let folder = selectedFolder else { return }
+        diffTab = OpenDiff(folder: folder, file: file)
         showDiffTab()
     }
 
     func showDiffTab() {
-        guard selectedDiffFile != nil else { return }
+        guard let tab = diffTab else { return }
         files.active = nil
         diffInFront = true
+        // Its folder comes with it, as a session's does: the Git tab lists
+        // that folder's changes, staging acts on it, and the diff is read again.
+        if selectedFolder != tab.folder, folders.contains(where: { $0.path == tab.folder }) { selectedFolder = tab.folder }
     }
 
     func closeDiffTab() {
-        selectedDiffFile = nil
+        diffTab = nil
         diffInFront = false
     }
 

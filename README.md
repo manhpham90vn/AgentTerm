@@ -11,6 +11,7 @@ and pick up any session from your iPhone.
 [![Release](https://img.shields.io/github/v/release/manhpham90vn/AgentTerm?include_prereleases&label=release)](https://github.com/manhpham90vn/AgentTerm/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Platforms](https://img.shields.io/badge/platforms-macOS%2014%2B%20%7C%20iOS%2017%2B-lightgrey)
+[![Discord](https://img.shields.io/badge/Discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/Ksagmsd6j)
 
 <img src="docs/screenshots/mac.png" alt="AgentTerm on macOS: folders, an agent's terminal and the git panel" width="900">
 
@@ -103,7 +104,7 @@ can revoke. To show account usage, AgentTerm reads each agent's sign-in on
 your Mac and sends it only to the service that issued it
 (`agenttermd --no-account-usage` turns that off). AgentTerm has no server of
 its own and collects nothing. Details
-in [PRIVACY.md](PRIVACY.md) and [docs/DESIGN.md](docs/DESIGN.md).
+in [SECURITY.md](SECURITY.md) and [PRIVACY.md](PRIVACY.md).
 
 ## Documentation
 
@@ -112,7 +113,9 @@ in [PRIVACY.md](PRIVACY.md) and [docs/DESIGN.md](docs/DESIGN.md).
 - [docs/DESIGN.md](docs/DESIGN.md): architecture and protocol
 - [docs/RELEASE.md](docs/RELEASE.md): how releases are made
 - [SUPPORT.md](SUPPORT.md): getting help
+- [Discord](https://discord.gg/Ksagmsd6j): questions, ideas and news
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Third-party software is listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

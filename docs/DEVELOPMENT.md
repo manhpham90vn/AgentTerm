@@ -53,6 +53,13 @@ make lint       # report what is off, change nothing; CI runs this and fails on 
 make check      # lint, build and test
 ```
 
+## Trying the permission prompts again
+
+`make reset-permissions` takes back every macOS privacy permission given to
+AgentTerm Dev (`scripts/reset-macos-permissions.sh --released` includes the
+released app), so the prompts and Settings > Permissions can be tried from
+the start.
+
 ## Tests
 
 ```sh

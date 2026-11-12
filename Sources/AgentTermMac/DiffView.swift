@@ -11,7 +11,7 @@ struct DiffView: View {
     private var isTree: Bool { viewMode == "tree" }
 
     /// The change whose diff is open in the middle pane.
-    private var selectedFile: FileDiff? { model.diffTabFile }
+    private var selectedFile: FileDiff? { model.diffTabFileInList }
 
     var body: some View {
         VStack(spacing: 0) {

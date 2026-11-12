@@ -34,6 +34,30 @@ public enum SessionSummaries {
         return AgentDetector.known.contains { $0.id == name } ? name : nil
     }
 
+    /// The conversation a command line resumes, if it is one of the agents'
+    /// own ways to say so: `claude --resume ID`, `codex resume ID`,
+    /// `agy --conversation ID`, `copilot --resume=ID`. A resumed conversation
+    /// began before its session, so it cannot be found by when it started.
+    public static func resumedConversation(inCommand command: String?) -> String? {
+        guard let command, let agent = agent(forCommand: command) else { return nil }
+        let words = command.split(whereSeparator: \.isWhitespace).map(String.init)
+        func value(after flag: String) -> String? {
+            if let index = words.firstIndex(of: flag), words.indices.contains(index + 1) { return words[index + 1] }
+            return words.first { $0.hasPrefix(flag + "=") }.map { String($0.dropFirst(flag.count + 1)) }
+        }
+        let found: String?
+        switch agent {
+        case "claude": found = value(after: "--resume") ?? value(after: "-r")
+        case "codex": found = words.count > 2 && words[1] == "resume" ? words[2] : nil
+        case "agy": found = value(after: "--conversation")
+        case "copilot": found = value(after: "--resume")
+        default: found = nil
+        }
+        // Only something that can be an id: a flag that follows is not one.
+        guard let found, !found.isEmpty, !found.hasPrefix("-"), AgentHistory.isSafeIdentifier(found) else { return nil }
+        return found
+    }
+
     /// Pairs sessions with conversations. A conversation goes to one session only.
     public static func assign(_ sessions: [Running], conversations: [Conversation]) -> [SessionID: Conversation] {
         var result: [SessionID: Conversation] = [:]

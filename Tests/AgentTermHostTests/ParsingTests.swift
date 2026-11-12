@@ -211,6 +211,30 @@ final class ParsingTests: XCTestCase {
         XCTAssertNil(SessionSummaries.agent(forCommand: "  "))
     }
 
+    func testAResumeCommandNamesItsConversation() {
+        XCTAssertEqual(SessionSummaries.resumedConversation(inCommand: "claude --resume 889c9379-2f84-4bd2"), "889c9379-2f84-4bd2")
+        XCTAssertEqual(SessionSummaries.resumedConversation(inCommand: "claude -r 889c9379 --verbose"), "889c9379")
+        XCTAssertEqual(SessionSummaries.resumedConversation(inCommand: "codex resume 0198-abc"), "0198-abc")
+        XCTAssertEqual(SessionSummaries.resumedConversation(inCommand: "agy --conversation c-12"), "c-12")
+        XCTAssertEqual(SessionSummaries.resumedConversation(inCommand: "/opt/homebrew/bin/copilot --resume=abc-1"), "abc-1")
+        // Not a resume, or nothing that can be an id.
+        XCTAssertNil(SessionSummaries.resumedConversation(inCommand: "claude"))
+        XCTAssertNil(SessionSummaries.resumedConversation(inCommand: "claude --resume"))
+        XCTAssertNil(SessionSummaries.resumedConversation(inCommand: "claude --resume --verbose"))
+        XCTAssertNil(SessionSummaries.resumedConversation(inCommand: "claude --resume '$(rm -rf x)'"))
+        XCTAssertNil(SessionSummaries.resumedConversation(inCommand: "vim --resume abc"))
+        XCTAssertNil(SessionSummaries.resumedConversation(inCommand: nil))
+    }
+
+    func testAResumedSessionKeepsItsConversationThoughItBeganEarlier() {
+        let conversations = [conversation("old", started: 100, updated: 5_000), conversation("newer", started: 1_010, updated: 1_500)]
+        let resumed = SessionSummaries.Running(
+            id: 1, agent: "claude", cwd: "/p", createdAt: Date(timeIntervalSince1970: 1_000),
+            conversationID: SessionSummaries.resumedConversation(inCommand: "claude --resume old")
+        )
+        XCTAssertEqual(SessionSummaries.assign([resumed], conversations: conversations)[1]?.sessionID, "old")
+    }
+
     func testASessionGetsTheConversationThatBeganAfterIt() {
         let conversations = [
             conversation("old", started: 100, updated: 5_000),  // touched lately, but began long before

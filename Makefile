@@ -7,7 +7,7 @@ SIM ?=
 SWIFT_PATHS := Package.swift Sources Tests iOS/AgentTerm iOS/AgentTermUITests
 
 .DEFAULT_GOAL := help
-.PHONY: help version bump build test test-ios test-all run run-ios pair-ios bundle format lint check \
+.PHONY: help version bump build test test-ios test-all run run-ios pair-ios bundle format lint check reset-permissions \
         release-check release-mac release-ios release cask clean
 
 help: ## List what can be made
@@ -64,10 +64,15 @@ release-ios: ## Build the iPhone app here and upload it to TestFlight
 	./scripts/release.sh ios beta
 
 release: ## Release both apps from GitHub Actions: make release [V=0.3.0-beta.1]
+	./scripts/check-version.sh $(or $(V),$(VERSION))
+	@./scripts/check-release-notes.sh $(or $(V),$(VERSION))
 	gh workflow run release.yml -f version=$(or $(V),$(VERSION))
 
 cask: ## Point the Homebrew cask at a released version: make cask [V=0.3.0]
 	./scripts/publish-homebrew.sh $(or $(V),$(VERSION))
+
+reset-permissions: ## Take back the macOS permissions given to AgentTerm Dev, to try the prompts again
+	./scripts/reset-macos-permissions.sh
 
 clean: ## Remove build output
 	rm -rf .build dist iOS/AgentTerm.xcodeproj iOS/Version.xcconfig
