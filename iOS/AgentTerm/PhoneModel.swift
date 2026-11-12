@@ -17,8 +17,6 @@ enum Route: Hashable {
     case folder(String)
     /// The diff of one changed file.
     case file(folder: String, file: String, staged: Bool)
-    /// Every conversation on the Mac.
-    case allHistory
     /// A file on the Mac, to read or edit.
     case document(path: String)
 }
@@ -136,8 +134,7 @@ final class PhoneModel: ObservableObject {
     /// The agent that would write a commit message: the one chosen, or the
     /// first one installed on the Mac.
     var commitWriterAgent: AgentInfo? {
-        let installed = installedAgents
-        return commitWriter.agent.flatMap { id in installed.first { $0.id == id } } ?? installed.first
+        commitWriter.writer(among: agents)
     }
 
     /// "push" or "pull" while one is under way in a folder.
@@ -366,6 +363,44 @@ final class PhoneModel: ObservableObject {
 
     func session(_ id: SessionID) -> SessionInfo? { sessions.first { $0.id == id } }
 
+    // MARK: What was written for a session and not sent yet
+
+    /// Kept on the phone, per Mac and session, so that leaving the terminal
+    /// or closing the app does not lose a message half written. Not
+    /// published: the field that shows it holds the text while it is typed.
+    private var composeDrafts: [String: String] = UserDefaults.standard.dictionary(forKey: PhoneModel.composeDraftsKey) as? [String: String] ?? [:]
+    private static let composeDraftsKey = "composeDrafts"
+
+    /// Session numbers start over when the Mac's host is restarted, so the
+    /// time the session began is part of what names it.
+    private func composeDraftKey(for id: SessionID) -> String? {
+        guard let pairing, let session = session(id) else { return nil }
+        return "\(pairing.id)/\(id)/\(Int(session.createdAt.timeIntervalSince1970))"
+    }
+
+    func composeDraft(for id: SessionID) -> String {
+        composeDraftKey(for: id).flatMap { composeDrafts[$0] } ?? ""
+    }
+
+    func setComposeDraft(_ text: String, for id: SessionID) {
+        guard let key = composeDraftKey(for: id), composeDrafts[key] != (text.isEmpty ? nil : text) else { return }
+        composeDrafts[key] = text.isEmpty ? nil : text
+        UserDefaults.standard.set(composeDrafts, forKey: Self.composeDraftsKey)
+    }
+
+    /// Drops what was written for sessions of this Mac that have ended.
+    private func pruneComposeDrafts(of host: String, keeping sessions: [SessionInfo]) {
+        let kept = Set(sessions.map { "\(host)/\($0.id)/\(Int($0.createdAt.timeIntervalSince1970))" })
+        let before = composeDrafts.count
+        // Also what belonged to a Mac that is no longer paired under that name.
+        let paired = Set(hosts.map(\.id))
+        composeDrafts = composeDrafts.filter { draft in
+            guard let owner = draft.key.split(separator: "/").first.map(String.init), paired.contains(owner) else { return false }
+            return owner != host || kept.contains(draft.key)
+        }
+        if composeDrafts.count != before { UserDefaults.standard.set(composeDrafts, forKey: Self.composeDraftsKey) }
+    }
+
     /// The session whose terminal is on screen, if one is on top.
     var openSessionID: SessionID? {
         if case .session(let id)? = path.last { return id }
@@ -448,6 +483,7 @@ final class PhoneModel: ObservableObject {
         let wasCurrent = host.id == pairing?.id
         hosts.removeAll { $0.id == host.id }
         PairingStore.save(hosts)
+        pruneComposeDrafts(of: host.id, keeping: [])
         guard wasCurrent else { return }
         disconnect()
         clearHostState()
@@ -614,6 +650,7 @@ final class PhoneModel: ObservableObject {
         case .sessions(let list):
             sessions = list
             sessionsKnown = true
+            if let pairing { pruneComposeDrafts(of: pairing.id, keeping: list) }
             syncSessionLayout()
             if let open = openSessionID, !list.contains(where: { $0.id == open }) {
                 // The session ended: back to the screen it was opened from.
@@ -722,13 +759,15 @@ final class PhoneModel: ObservableObject {
             }
         case .diff(let folder, let snapshot):
             diffs[folder] = snapshot
-            // Also the answer to a push or a pull, whether git took it or not.
-            syncing[folder] = nil
             if committing == folder {
                 // The answer to a commit that git accepted: an error would have come first.
                 committing = nil
                 commitDrafts[folder] = nil
             }
+        case .gitSynced(let folder):
+            // Not at the `diff` before it: one asked for while git was still
+            // at work would free the buttons for a second push beside the first.
+            syncing[folder] = nil
         case .diffFile(let folder, let file):
             // The host answers per folder; the file asked for is the one waiting.
             if let file {

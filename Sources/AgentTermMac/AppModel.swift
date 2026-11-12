@@ -596,7 +596,7 @@ final class AppModel: ObservableObject {
             devices = list
         case .accountUsage(let list):
             accountUsage = Dictionary(list.map { ($0.agent, $0) }, uniquingKeysWith: { $1 })
-        case .paired, .diff, .diffFile, .history, .directory, .handoffPlan, .files, .file, .fileSaved, .fileCreated:
+        case .paired, .diff, .gitSynced, .diffFile, .history, .directory, .handoffPlan, .files, .file, .fileSaved, .fileCreated:
             // The Mac app reads changes, history and folders directly: it
             // runs on the machine they are on.
             break

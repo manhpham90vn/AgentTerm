@@ -41,6 +41,23 @@ final class SSHConfigTests: XCTestCase {
         XCTAssertEqual(SSHConfig.hosts(home: home.path), ["build", "web-1", "web_2.example.com", "equals", "quoted"])
     }
 
+    func testACommentAfterAHostIsNotAHost() throws {
+        try write(
+            ".ssh/config",
+            """
+            Host build # staging box
+            Host web#1 "quoted # name" db	# the database
+            Host #nothing here
+            Include extra # conf.d/other
+            """)
+        try write(".ssh/extra", "Host extra\n")
+        try write(".ssh/conf.d/other", "Host other\n")
+        XCTAssertEqual(SSHConfig.hosts(home: home.path), ["build", "db", "extra"])
+        // A `#` inside a word is part of the word, as ssh reads it.
+        XCTAssertEqual(SSHConfig.words(of: "Host web#1 \"quoted # name\""), ["Host", "web#1", "quoted # name"])
+        XCTAssertEqual(SSHConfig.words(of: "Host build # staging box"), ["Host", "build"])
+    }
+
     func testIncludesAreFollowed() throws {
         try write(".ssh/config", "Include conf.d/*.conf\nInclude ~/extra\nInclude \(home.path)/absolute missing-file\nHost last\n")
         try write(".ssh/conf.d/b.conf", "Host from-b\n")

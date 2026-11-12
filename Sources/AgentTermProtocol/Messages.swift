@@ -296,6 +296,10 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case displaySettings(DisplaySettings?)
     /// The hosts the Mac's SSH configuration names, as they are written there.
     case sshHosts([String])
+    /// A push or a pull in a folder is over, whether git took it or not.
+    /// Sent after the `error` and the `diff` that answer it: a `diff` alone
+    /// may be the answer to something else asked in the meantime.
+    case gitSynced(path: String)
     /// How the Mac itself is doing: processor, memory, network, heat,
     /// battery and uptime. Sent every few seconds while a client is connected.
     case systemStats(SystemStats)

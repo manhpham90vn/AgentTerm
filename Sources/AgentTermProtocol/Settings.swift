@@ -57,6 +57,14 @@ public struct CommitWriterSettings: Codable, Equatable, Sendable {
         - Reply with the commit message only: no explanation, no quotes, no code fence.
         """
 
+    /// The agent that writes: the one chosen, or the first one installed
+    /// when none is chosen or the chosen one is no longer installed. The
+    /// host and both apps ask here, so the button says who will write.
+    public func writer(among agents: [AgentInfo]) -> AgentInfo? {
+        let installed = agents.filter(\.isInstalled)
+        return agent.flatMap { id in installed.first { $0.id == id } } ?? installed.first
+    }
+
     /// The prompt in effect.
     public var effectivePrompt: String {
         let own = prompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

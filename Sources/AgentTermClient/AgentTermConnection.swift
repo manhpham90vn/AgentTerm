@@ -45,11 +45,14 @@ public final class AgentTermConnection: @unchecked Sendable {
     private var lastHeard = DispatchTime.now()
     private var lastTick = DispatchTime.now()
     private var pingSentAt: DispatchTime?
+    /// Counts the bytes that arrive between two looks at the connection.
+    private var arriving: NWConnection.PendingDataTransferReport?
     /// How often the connection is looked at, how long a quiet host is left
     /// alone, and how long it has to answer.
-    private static let heartbeatInterval: TimeInterval = 2
-    private static let quietBeforePing: TimeInterval = 4
-    private static let pongTimeout: TimeInterval = 6
+    /// Set before `connect`, and only by tests, which cannot wait this long.
+    var heartbeatInterval: TimeInterval = 2
+    var quietBeforePing: TimeInterval = 4
+    var pongTimeout: TimeInterval = 6
 
     public convenience init(host: String, port: UInt16, token: String, clientName: String) {
         self.init(host: host, port: port, credential: .token(token), clientName: clientName)
@@ -131,7 +134,7 @@ public final class AgentTermConnection: @unchecked Sendable {
         lastHeard = .now()
         lastTick = .now()
         let timer = DispatchSource.makeTimerSource(queue: queue)
-        timer.schedule(deadline: .now() + Self.heartbeatInterval, repeating: Self.heartbeatInterval)
+        timer.schedule(deadline: .now() + heartbeatInterval, repeating: heartbeatInterval)
         timer.setEventHandler { [weak self] in self?.beat() }
         heartbeat = timer
         timer.resume()
@@ -141,7 +144,18 @@ public final class AgentTermConnection: @unchecked Sendable {
         let now = DispatchTime.now()
         let sinceTick = Self.seconds(from: lastTick, to: now)
         lastTick = now
-        if sinceTick > Self.heartbeatInterval * 3 {
+        // A message is only heard of once all of it is here, and the answer
+        // to a ping waits in line behind whatever the host is already
+        // sending. Over a slow link a large message, a replay or a file,
+        // takes longer than a ping is given, with the host alive all the
+        // while. Bytes that keep arriving say so.
+        let counted = arriving
+        arriving = connection.startDataTransferReport()
+        counted?.collect(queue: queue) { [weak self] report in
+            guard let self, self.heartbeat != nil, report.aggregatePathReport.receivedTransportByteCount > 0 else { return }
+            self.heard()
+        }
+        if sinceTick > heartbeatInterval * 3 {
             // The app was suspended in between. How long the host has been
             // quiet says nothing then: ask afresh and give it its time.
             pingSentAt = nil
@@ -149,8 +163,8 @@ public final class AgentTermConnection: @unchecked Sendable {
             return
         }
         if let sent = pingSentAt {
-            if Self.seconds(from: sent, to: now) > Self.pongTimeout { finish(reason: "The connection to the Mac was lost.") }
-        } else if Self.seconds(from: lastHeard, to: now) > Self.quietBeforePing {
+            if Self.seconds(from: sent, to: now) > pongTimeout { finish(reason: "The connection to the Mac was lost.") }
+        } else if Self.seconds(from: lastHeard, to: now) > quietBeforePing {
             ping()
         }
     }
@@ -166,7 +180,7 @@ public final class AgentTermConnection: @unchecked Sendable {
         connection.send(content: Data(), contentContext: context, completion: .idempotent)
     }
 
-    /// Anything from the host is a sign of life.
+    /// Anything from the host is a sign of life, also a part of a message.
     private func heard() {
         lastHeard = .now()
         pingSentAt = nil

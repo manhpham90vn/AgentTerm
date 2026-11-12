@@ -792,6 +792,43 @@ final class EndToEndTests: XCTestCase {
         waitUntil("still ahead") { latest(mine)?.upstream == "origin/main" && latest(mine)?.ahead == 1 }
     }
 
+    func testTheEndOfAPushIsSaidApartFromTheChanges() throws {
+        let root = state("e2e-synced")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let remote = root.appendingPathComponent("remote.git"), mine = root.appendingPathComponent("mine")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        git("init", "-q", "--bare", "-b", "main", remote.path, in: root)
+        git("clone", "-q", remote.path, mine.path, in: root)
+        git("config", "user.name", "Test", in: mine)
+        git("config", "user.email", "test@example.com", in: mine)
+        git("config", "commit.gpgsign", "false", in: mine)
+        git("checkout", "-q", "-B", "main", in: mine)
+        try "one\n".write(to: mine.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: mine)
+        git("commit", "-q", "-m", "init", in: mine)
+        // A push that takes a while, as one over a network does.
+        let hook = mine.appendingPathComponent(".git/hooks/pre-push")
+        try "#!/bin/sh\nsleep 1.5\n".write(to: hook, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
+
+        let phone = connect("phone")
+        func count(_ match: (ServerMessage) -> Bool) -> Int { phone.messages.filter(match).count }
+        let isDiff: (ServerMessage) -> Bool = { if case .diff(mine.path, _) = $0 { return true } else { return false } }
+        phone.connection.send(.gitPush(path: mine.path))
+        // The phone looks at the folder again while git is still pushing.
+        // That answer comes first, and is not the end of the push.
+        phone.connection.send(.diff(path: mine.path))
+        waitUntil("the changes asked for meanwhile") { count(isDiff) == 1 }
+        XCTAssertFalse(phone.messages.contains(.gitSynced(path: mine.path)), "the push was said to be over while git was still at it")
+        waitUntil("the end of the push") { phone.messages.contains(.gitSynced(path: mine.path)) }
+        XCTAssertEqual(count(isDiff), 2)
+        XCTAssertEqual(phone.messages.last, .gitSynced(path: mine.path))
+        // A stage or a commit ends with its changes, as before.
+        phone.connection.send(.gitStage(path: mine.path, files: ["a.txt"]))
+        waitUntil("the changes after staging") { count(isDiff) == 3 }
+        XCTAssertEqual(count { $0 == .gitSynced(path: mine.path) }, 1)
+    }
+
     func testAnAgentWritesTheCommitMessageAndTheSettingsAreSharedAndSaved() throws {
         let root = state("e2e-writer")
         defer { try? FileManager.default.removeItem(at: root) }

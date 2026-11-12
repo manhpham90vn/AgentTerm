@@ -13,7 +13,6 @@ public enum CommitWriter {
     public enum Failure: Error, Equatable, CustomStringConvertible {
         case nothingStaged
         case noAgent
-        case unknownAgent(String)
         case cancelled
         case failed(String)
 
@@ -21,7 +20,6 @@ public enum CommitWriter {
             switch self {
             case .nothingStaged: return "Stage the changes to commit first: there is nothing to write a message for."
             case .noAgent: return "No agent is installed to write the message."
-            case .unknownAgent(let name): return "\(name) is not installed on this Mac. Pick another agent for commit messages in Settings."
             case .cancelled: return "Stopped."
             case .failed(let reason): return reason
             }
@@ -33,6 +31,7 @@ public enum CommitWriter {
         private let lock = NSLock()
         private var process: Process?
         private var cancelled = false
+        private var expired = false
 
         public init() {}
 
@@ -44,19 +43,39 @@ public enum CommitWriter {
 
         public func cancel() {
             lock.lock()
+            defer { lock.unlock() }
             cancelled = true
-            let running = process
-            lock.unlock()
-            if let running, running.isRunning { running.terminate() }
+            // Only a process that was started is kept here, so one that is
+            // not running has ended by itself.
+            if let process, process.isRunning { process.terminate() }
         }
 
-        /// False when the run was cancelled before the process started.
-        fileprivate func adopt(_ process: Process) -> Bool {
+        /// Starts the process, unless the run was cancelled before. False
+        /// then. Starting and cancelling exclude each other: a run cannot
+        /// be cancelled between being taken on and being started, which
+        /// would leave the agent running with nobody waiting for it.
+        fileprivate func start(_ process: Process) throws -> Bool {
             lock.lock()
             defer { lock.unlock() }
             guard !cancelled else { return false }
+            try process.run()
             self.process = process
             return true
+        }
+
+        /// Stops a process that took too long.
+        fileprivate func expire() {
+            lock.lock()
+            defer { lock.unlock() }
+            guard let process, process.isRunning else { return }
+            expired = true
+            process.terminate()
+        }
+
+        fileprivate var isExpired: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return expired
         }
     }
 
@@ -66,17 +85,10 @@ public enum CommitWriter {
     private static let timeout: TimeInterval = 180
     private static let git = "/usr/bin/git"
 
-    /// The agent that writes: the one the settings name, else the first installed.
+    /// The agent that writes: the one both apps name on their Write button.
     static func agent(for settings: CommitWriterSettings, among agents: [AgentInfo]) -> Result<AgentInfo, Failure> {
-        let installed = agents.filter(\.isInstalled)
-        if let wanted = settings.agent, !wanted.isEmpty {
-            guard let found = installed.first(where: { $0.id == wanted }) else {
-                return .failure(.unknownAgent(agents.first { $0.id == wanted }?.name ?? wanted))
-            }
-            return .success(found)
-        }
-        guard let first = installed.first else { return .failure(.noAgent) }
-        return .success(first)
+        guard let writer = settings.writer(among: agents) else { return .failure(.noAgent) }
+        return .success(writer)
     }
 
     /// What the agent reads: the prompt, then what is staged. Nil when
@@ -190,21 +202,19 @@ public enum CommitWriter {
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        guard run.adopt(process) else { return .failure(.cancelled) }
-        do { try process.run() } catch { return .failure(.failed("\(agent.name) could not be started.")) }
-
-        var timedOut = false
-        let timer = DispatchWorkItem {
-            guard process.isRunning else { return }
-            timedOut = true
-            process.terminate()
+        do {
+            guard try run.start(process) else { return .failure(.cancelled) }
+        } catch {
+            return .failure(.failed("\(agent.name) could not be started."))
         }
+
+        let timer = DispatchWorkItem { run.expire() }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
         process.waitUntilExit()
         timer.cancel()
 
         if run.isCancelled { return .failure(.cancelled) }
-        if timedOut { return .failure(.failed("\(agent.name) took too long to write the message.")) }
+        if run.isExpired { return .failure(.failed("\(agent.name) took too long to write the message.")) }
         let message = clean((try? String(contentsOf: outputFile, encoding: .utf8)) ?? "")
         guard process.terminationStatus == 0, !message.isEmpty else {
             let said = ((try? String(contentsOf: errorFile, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

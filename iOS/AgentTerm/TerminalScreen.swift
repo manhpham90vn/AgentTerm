@@ -270,7 +270,11 @@ private struct KeyBar: View {
 /// Text is written here with the normal iOS keyboard and input methods, then
 /// sent to the terminal as finished text. Composition (Vietnamese Telex, for
 /// one) never happens inside the terminal emulator this way.
+///
+/// What is written and not sent yet is kept for the session: it is there
+/// again when the terminal, or the app, is opened the next time.
 private struct ComposeBar: View {
+    @EnvironmentObject private var model: PhoneModel
     let controller: TerminalController
     @State private var text = ""
     @FocusState private var focused: Bool
@@ -295,6 +299,8 @@ private struct ComposeBar: View {
         .padding(.top, 4)
         .padding(.bottom, 8)
         .background(Palette.panel)
+        .onAppear { text = model.composeDraft(for: controller.session) }
+        .onChange(of: text) { _, written in model.setComposeDraft(written, for: controller.session) }
     }
 
     private func send() {

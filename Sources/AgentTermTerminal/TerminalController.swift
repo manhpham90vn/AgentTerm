@@ -77,13 +77,22 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     }
 
     public func feed(_ data: Data) {
+        // A replay is megabytes in many pieces and may take a while over a
+        // slow link. It is over when it says so, or when nothing more of it
+        // comes: not some seconds after it began.
+        if isReplaying, !replayIsFed { armReplayTimeout(seconds: replayQuiet) }
         view.feed(byteArray: ArraySlice([UInt8](data)))
     }
 
     /// True while the emulator may still be answering what the host
     /// replayed: the session's output from before this client attached.
     private var isReplaying = false
+    /// True once all of the replay was fed and the emulator was asked to
+    /// mark its end. What is fed after that is the session's live output.
+    private var replayIsFed = false
     private var replayTimeout: DispatchWorkItem?
+    /// How long a replay may say nothing before it is taken to be over.
+    var replayQuiet: TimeInterval = 5
 
     /// A mode nothing uses. The emulator is asked about it after a replay,
     /// and its answer marks the end of the answers that belong to the replay.
@@ -102,7 +111,8 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     public func beginReplay(size: TermSize? = nil) {
         if let size { setGrid(size) }
         isReplaying = true
-        armReplayTimeout(seconds: 5)
+        replayIsFed = false
+        armReplayTimeout(seconds: replayQuiet)
     }
 
     /// The replay has been fed. The emulator works through what it is fed
@@ -111,6 +121,7 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     /// every answer that comes before the answer to that one is the replay's.
     public func endReplay() {
         guard isReplaying else { return }
+        replayIsFed = true
         view.feed(text: "\u{1b}[?\(Self.replayMarkMode)$p")
         armReplayTimeout(seconds: 3)
     }

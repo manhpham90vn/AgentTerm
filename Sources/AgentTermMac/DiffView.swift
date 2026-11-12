@@ -231,8 +231,7 @@ private struct CommitBox: View {
     /// The agent that would write the message: the one chosen in Settings,
     /// or the first one installed.
     private var writer: AgentInfo? {
-        let installed = model.installedAgents
-        return model.commitWriter.agent.flatMap { id in installed.first { $0.id == id } } ?? installed.first
+        model.commitWriter.writer(among: model.agents)
     }
 
     var body: some View {

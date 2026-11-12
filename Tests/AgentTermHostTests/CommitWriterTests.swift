@@ -116,7 +116,11 @@ final class CommitWriterTests: XCTestCase {
         ]
         XCTAssertEqual(try CommitWriter.agent(for: .init(), among: agents).get().id, "codex")
         XCTAssertEqual(try CommitWriter.agent(for: .init(agent: "agy"), among: agents).get().id, "agy")
-        XCTAssertEqual(CommitWriter.agent(for: .init(agent: "claude"), among: agents), .failure(.unknownAgent("Claude Code")))
+        // One that was chosen and is gone since: the first installed, which
+        // is the one the apps name on the Write button.
+        XCTAssertEqual(try CommitWriter.agent(for: .init(agent: "claude"), among: agents).get().id, "codex")
+        XCTAssertEqual(CommitWriterSettings(agent: "claude").writer(among: agents)?.id, "codex")
+        XCTAssertEqual(try CommitWriter.agent(for: .init(agent: ""), among: agents).get().id, "codex")
         XCTAssertEqual(CommitWriter.agent(for: .init(), among: [agents[0]]), .failure(.noAgent))
     }
 

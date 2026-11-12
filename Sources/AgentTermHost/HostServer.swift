@@ -706,9 +706,9 @@ public final class HostServer {
         case .gitCommit(let path, let message):
             git(for: client, in: path) { GitActions.commit(message: message, in: path) }
         case .gitPush(let path):
-            git(for: client, in: path) { GitActions.push(in: path) }
+            git(for: client, in: path, sync: true) { GitActions.push(in: path) }
         case .gitPull(let path):
-            git(for: client, in: path) { GitActions.pull(in: path) }
+            git(for: client, in: path, sync: true) { GitActions.pull(in: path) }
         case .history(let path):
             let home = configuration.home
             work(
@@ -778,8 +778,10 @@ public final class HostServer {
     }
 
     /// Runs a git change, then answers with the folder's changes as they are
-    /// now, so the client's list is right whether it worked or not.
-    private func git(for client: Client, in path: String, _ action: @escaping () -> String?) {
+    /// now, so the client's list is right whether it worked or not. A push
+    /// or a pull (`sync`) takes long enough for other answers about the
+    /// folder to come in between, so its end is said in so many words.
+    private func git(for client: Client, in path: String, sync: Bool = false, _ action: @escaping () -> String?) {
         work(
             for: client,
             { () -> (String?, DiffSnapshot) in
@@ -790,6 +792,7 @@ public final class HostServer {
             server.diffCache[path] = (result.1, Date())
             if let problem = result.0 { server.send(.error(problem), to: client) }
             server.send(.diff(path: path, snapshot: result.1.withoutPatches), to: client)
+            if sync { server.send(.gitSynced(path: path), to: client) }
         }
     }
 

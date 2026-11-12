@@ -5,28 +5,53 @@ import SwiftUI
 /// the right, changed lines facing each other. The two panels scroll down
 /// together and sideways each on its own. Shared by the Mac and the iPhone.
 public struct SplitDiffView: View {
-    private let rows: [SplitDiffRow]
-    private let truncated: Bool
+    private let patch: String
     private let fontSize: CGFloat
-    /// Width in points of the longest line on each side.
-    private let leftWidth: CGFloat
-    private let rightWidth: CGFloat
-    private let numberWidth: CGFloat
 
     /// More rows than this are slow to lay out side by side.
     public static let maxRows = 2500
 
-    private static let added = Color(red: 0.36, green: 0.80, blue: 0.52)
-    private static let removed = Color(red: 0.96, green: 0.45, blue: 0.47)
-    private static let hunk = Color(red: 0.55, green: 0.67, blue: 0.98)
-
     public init(patch: String, fontSize: CGFloat = 11.5) {
-        // Tabs have no fixed width in SwiftUI text, which would put the columns off.
-        let all = SplitDiff.rows(for: patch.replacingOccurrences(of: "\t", with: "    "), limit: Self.maxRows + 1)
-        truncated = all.count > Self.maxRows
-        let shown = Array(all.prefix(Self.maxRows))
-        rows = shown
+        self.patch = patch
         self.fontSize = fontSize
+    }
+
+    public var body: some View {
+        // The views around a diff are drawn again every few seconds: the
+        // changes are read again, the Mac's figures arrive. A diff that is
+        // the same as before is then left as it is, rather than worked out
+        // and laid out again, thousands of rows each time.
+        SplitDiffPanels(patch: patch, fontSize: fontSize).equatable()
+    }
+}
+
+/// The two panels of one diff. Worked out from the patch when it is first
+/// shown and when the patch or the font size changes, not before.
+private struct SplitDiffPanels: View, Equatable {
+    let patch: String
+    let fontSize: CGFloat
+
+    var body: some View {
+        SplitDiffLayout(rows: Rows(patch: patch, fontSize: fontSize), fontSize: fontSize)
+    }
+}
+
+/// A patch as the rows of the two panels, with how wide they are.
+private struct Rows {
+    let rows: [SplitDiffRow]
+    let truncated: Bool
+    /// Width in points of the longest line on each side.
+    let leftWidth: CGFloat
+    let rightWidth: CGFloat
+    let numberWidth: CGFloat
+
+    init(patch: String, fontSize: CGFloat) {
+        let maxRows = SplitDiffView.maxRows
+        // Tabs have no fixed width in SwiftUI text, which would put the columns off.
+        let all = SplitDiff.rows(for: patch.replacingOccurrences(of: "\t", with: "    "), limit: maxRows + 1)
+        truncated = all.count > maxRows
+        let shown = Array(all.prefix(maxRows))
+        rows = shown
         // A monospaced character is about six tenths of the font size wide.
         let character = fontSize * 0.602
         let digits = max(3, String(shown.reduce(0) { max($0, $1.left?.number ?? 0, $1.right?.number ?? 0) }).count)
@@ -37,10 +62,29 @@ public struct SplitDiffView: View {
         leftWidth = CGFloat(longestLeft + 2) * character
         rightWidth = CGFloat(longestRight + 2) * character
     }
+}
 
+private struct SplitDiffLayout: View {
+    let content: Rows
+    let fontSize: CGFloat
+
+    private static let added = Color(red: 0.36, green: 0.80, blue: 0.52)
+    private static let removed = Color(red: 0.96, green: 0.45, blue: 0.47)
+    private static let hunk = Color(red: 0.55, green: 0.67, blue: 0.98)
+
+    init(rows: Rows, fontSize: CGFloat) {
+        content = rows
+        self.fontSize = fontSize
+    }
+
+    private var rows: [SplitDiffRow] { content.rows }
+    private var truncated: Bool { content.truncated }
+    private var leftWidth: CGFloat { content.leftWidth }
+    private var rightWidth: CGFloat { content.rightWidth }
+    private var numberWidth: CGFloat { content.numberWidth }
     private var rowHeight: CGFloat { (fontSize * 1.45).rounded() }
 
-    public var body: some View {
+    var body: some View {
         GeometryReader { viewport in
             let half = max(60, (viewport.size.width - 1) / 2)
             ScrollView(.vertical) {

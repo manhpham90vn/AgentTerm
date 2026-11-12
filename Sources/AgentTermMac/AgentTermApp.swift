@@ -339,13 +339,14 @@ private struct GitSettingsView: View {
                 settings.agent = $0.isEmpty ? nil : $0
                 // A model belongs to an agent: another agent starts on its own.
                 settings.model = nil
+                modelName = ""
                 model.setCommitWriter(settings)
             })
     }
 
     /// The agent that writes when none is chosen.
     private var firstInstalled: AgentInfo? { model.installedAgents.first }
-    private var writerID: String? { model.commitWriter.agent ?? firstInstalled?.id }
+    private var writerID: String? { model.commitWriter.writer(among: model.agents)?.id }
     private var isChanged: Bool {
         modelName.trimmingCharacters(in: .whitespaces) != (model.commitWriter.model ?? "") || prompt != model.commitWriter.effectivePrompt
     }
@@ -378,6 +379,11 @@ private struct GitSettingsView: View {
                             Text(firstInstalled.map { "First installed (\($0.name))" } ?? "First installed").tag("")
                             ForEach(model.installedAgents) { agent in
                                 Text(agent.name).tag(agent.id)
+                            }
+                            // One that was chosen and is gone since still has
+                            // to be among the choices, or the picker shows none.
+                            if let chosen = model.commitWriter.agent, !model.installedAgents.contains(where: { $0.id == chosen }) {
+                                Text("\(model.agents.first { $0.id == chosen }?.name ?? chosen) (not installed)").tag(chosen)
                             }
                         }
                         .labelsHidden()
@@ -474,7 +480,13 @@ private struct GitSettingsView: View {
         .frame(width: 600, alignment: .top)
         .fixedSize(horizontal: false, vertical: true)
         .onAppear(perform: load)
-        .onChange(of: model.commitWriter) { _, _ in load() }
+        .onChange(of: model.commitWriter) { old, new in
+            // The settings changed, here through the agent's picker or on
+            // the iPhone. What is being edited and not saved yet stays as
+            // it was typed; only a field that still showed the old value follows.
+            if modelName.trimmingCharacters(in: .whitespaces) == (old.model ?? "") { modelName = new.model ?? "" }
+            if prompt == old.effectivePrompt { prompt = new.effectivePrompt }
+        }
     }
 }
 

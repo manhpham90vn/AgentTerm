@@ -24,6 +24,21 @@ struct RootTabs: View {
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag("settings")
         }
+        // On the tabs, not on one of them: what the Mac answers to
+        // something asked in History or Settings has to be shown there too,
+        // and an alert attached to a tab that is not in front does not
+        // appear. For the same reason not on a list inside a tab, which
+        // another screen, such as a terminal, may be on top of.
+        .sheet(item: $model.sessionHandoff) { conversation in
+            ConversationSheet(conversation: conversation, showsResume: false)
+                .environmentObject(model)
+                .preferredColorScheme(.dark)
+        }
+        .alert("AgentTerm", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(model.message ?? "")
+        }
     }
 }
 

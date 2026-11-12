@@ -175,7 +175,7 @@ Client to host:
 | `addFolder(path)` / `removeFolder(path)` | Change the shared folder list. |
 | `diff(path)` / `diffFile(path, file, staged)` | A folder's uncommitted changes without the diffs, then one file's diff: its staged part, or what is only in the working tree. |
 | `gitStage(path, files)` / `gitUnstage(path, files)` / `gitCommit(path, message)` | Change what the next commit contains (no files means all), and commit it. Answered with `diff`, after an `error` carrying git's words if it failed. |
-| `gitPush(path)` / `gitPull(path)` | Push the checked out branch, or bring in what its upstream has. Answered the same way. |
+| `gitPush(path)` / `gitPull(path)` | Push the checked out branch, or bring in what its upstream has. Answered the same way, then with `gitSynced(path)`: a `diff` alone may answer something asked while git was still at work. |
 | `writeCommitMessage(path)` / `cancelCommitMessage(path)` | Have an agent write the message for what is staged, or stop it. Answered with `commitMessage(path, message)`, whose message is nil when it was stopped or failed. |
 | `setCommitWriter(settings)` | Which agent writes commit messages, on which model, with which prompt. |
 | `setKeepAwake(on)` / `setKeepAwakeOptions(options)` | Keep the Mac awake while sessions run, and how: the display too, only on power, for how long. |
@@ -612,6 +612,10 @@ the same folder can therefore be mixed up; the History tab is exact.
   is no camera (the simulator) the link can be entered as text, and the app
   also opens `agentterm://pair` links.
 - `TerminalScreen` stacks the terminal, the key bar and the compose field.
+  What is written in the compose field and not sent is kept per session on
+  the phone (`PhoneModel.composeDraft`), so it is there again after leaving
+  the terminal or closing the app. The Mac needs nothing for this: what is
+  typed there is already in the program's own input, in the session.
   The keyboard shrinks the terminal's frame, which resizes the PTY.
 - While the app is in front it reconnects after a drop, at once the first
   time and then every few seconds, and re-attaches to the session that was
@@ -620,7 +624,10 @@ the same folder can therefore be mixed up; the History tab is exact.
   and what is sent just goes nowhere. `AgentTermConnection` therefore asks
   a host that has been quiet for four seconds for a WebSocket pong, and
   closes a connection that does not answer within six, which is what lets
-  the app connect again. Coming back to the front asks at once.
+  the app connect again. Coming back to the front asks at once. Bytes that
+  keep arriving count as an answer: a large message over a slow link, a
+  replay or a file, holds the pong back behind it, and that link is slow,
+  not gone.
 
 ## Testing
 

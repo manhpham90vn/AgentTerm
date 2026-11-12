@@ -46,10 +46,10 @@ public enum SSHConfig {
     }
 
     /// A line as its words: `Keyword value value`, or `Keyword=value`.
-    /// Quotes group a value that has spaces. A line that starts with `#`
-    /// is a comment.
+    /// Quotes group a value that has spaces. A `#` where a word would
+    /// start makes the rest of the line a comment, as ssh reads it: without
+    /// that, the words of a comment after `Host` would be taken for hosts.
     static func words(of line: Substring) -> [String] {
-        guard line.drop(while: { $0 == " " || $0 == "\t" }).first != "#" else { return [] }
         var words: [String] = []
         var current = ""
         var quoted = false
@@ -58,6 +58,8 @@ public enum SSHConfig {
             if character == "\"" {
                 quoted.toggle()
                 started = true
+            } else if !quoted, !started, character == "#" {
+                break
             } else if !quoted, character == " " || character == "\t" || (character == "=" && words.isEmpty) {
                 if started { words.append(current) }
                 current = ""

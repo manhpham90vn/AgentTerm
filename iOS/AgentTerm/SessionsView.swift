@@ -89,11 +89,6 @@ struct SessionsView: View {
                     PatchScreen(folder: folder, file: file, staged: staged)
                 case .document(let path):
                     DocumentScreen(path: path)
-                case .allHistory:
-                    HistoryList(folder: nil)
-                        .background(Palette.canvas.ignoresSafeArea())
-                        .navigationTitle("All Conversations")
-                        .navigationBarTitleDisplayMode(.inline)
                 }
             }
             .sheet(isPresented: $model.showBrowser) {
@@ -101,19 +96,6 @@ struct SessionsView: View {
                     .environmentObject(model)
                     .preferredColorScheme(.dark)
             }
-        }
-        // On the stack, not on the list inside it: a sheet or alert attached
-        // to the list cannot appear while another screen, such as a
-        // terminal, is on top of it.
-        .sheet(item: $model.sessionHandoff) { conversation in
-            ConversationSheet(conversation: conversation, showsResume: false)
-                .environmentObject(model)
-                .preferredColorScheme(.dark)
-        }
-        .alert("AgentTerm", isPresented: Binding(get: { model.message != nil }, set: { if !$0 { model.message = nil } })) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(model.message ?? "")
         }
     }
 }
@@ -158,7 +140,7 @@ struct CommitWriterSheet: View {
     @State private var modelName = ""
     @State private var prompt = ""
 
-    private var writerID: String? { agent.isEmpty ? model.installedAgents.first?.id : agent }
+    private var writerID: String? { CommitWriterSettings(agent: agent.isEmpty ? nil : agent).writer(among: model.agents)?.id }
 
     private func save() {
         let name = modelName.trimmingCharacters(in: .whitespaces)
@@ -187,6 +169,11 @@ struct CommitWriterSheet: View {
                         Text(model.installedAgents.first.map { "First installed (\($0.name))" } ?? "First installed").tag("")
                         ForEach(model.installedAgents) { agent in
                             Text(agent.name).tag(agent.id)
+                        }
+                        // One that was chosen and is gone since still has to
+                        // be among the choices, or the picker shows none.
+                        if !agent.isEmpty, !model.installedAgents.contains(where: { $0.id == agent }) {
+                            Text("\(model.agents.first { $0.id == agent }?.name ?? agent) (not installed)").tag(agent)
                         }
                     }
                     TextField(writerID.flatMap(CommitWriterSettings.defaultModel) ?? "Agent's default model", text: $modelName)

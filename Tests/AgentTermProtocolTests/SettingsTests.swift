@@ -25,6 +25,7 @@ final class SettingsTests: XCTestCase {
             .commitMessage(path: "/Users/me/app", message: "feat: thêm dòng\n\nchi tiết"),
             .commitMessage(path: "/Users/me/app", message: nil),
             .sshHosts(["build-server", "web-1"]),
+            .gitSynced(path: "/Users/me/app"),
             .diff(
                 path: "/Users/me/app",
                 snapshot: DiffSnapshot(isRepository: true, branch: "main", files: [], upstream: "origin/main", ahead: 2, behind: 1)),

@@ -111,6 +111,20 @@ final class FlowTests: XCTestCase {
         sleep(2)
         capture("6b-bottom-row")
 
+        // What is written and not sent is kept for the session: it is there
+        // again when the terminal is opened the next time.
+        compose.tap()
+        compose.typeText("not sent yet")
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.staticTexts["zsh"].firstMatch.waitForExistence(timeout: 5))
+        app.staticTexts["zsh"].firstMatch.tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 10))
+        XCTAssertEqual(compose.value as? String, "not sent yet", "what was written and not sent was lost")
+        // Sent, it is no longer kept.
+        app.buttons["Send"].tap()
+        sleep(1)
+        XCTAssertNotEqual(compose.value as? String, "not sent yet")
+
         // Back in the list the session is there to return to.
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 5))
