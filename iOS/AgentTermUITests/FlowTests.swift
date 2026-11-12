@@ -123,8 +123,19 @@ final class FlowTests: XCTestCase {
                 app.buttons["Show as a flat list"].tap()
             }
             app.staticTexts["notes.txt"].tap()
-            XCTAssertTrue(app.staticTexts["+second line"].waitForExistence(timeout: 10), "the diff is not shown")
+            let firstChange = app.staticTexts["+second line"]
+            XCTAssertTrue(firstChange.waitForExistence(timeout: 10), "the diff is not shown")
             capture("7b-diff")
+            // The diff scrolls sideways, to the end of a long line, and down
+            // to its last line.
+            let left = firstChange.frame.minX
+            app.swipeLeft()
+            XCTAssertLessThan(firstChange.frame.minX, left, "the diff does not scroll sideways")
+            app.swipeRight()
+            let lastChange = app.staticTexts["+line 150"]
+            for _ in 0..<14 where !lastChange.exists { app.swipeUp() }
+            XCTAssertTrue(lastChange.exists, "the diff does not scroll down to its end")
+            capture("7b1-diff-end")
             app.navigationBars.buttons.firstMatch.tap()
 
             // Stage the file, take it back, stage it again and commit it.

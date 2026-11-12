@@ -51,7 +51,12 @@ git -C "$PROJECT" config user.email t@example.com
 git -C "$PROJECT" config commit.gpgsign false
 printf 'first line\n' > "$PROJECT/notes.txt"
 git -C "$PROJECT" add . && git -C "$PROJECT" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q -m init
-printf 'first line\nsecond line\n' > "$PROJECT/notes.txt"
+# A change long and wide enough that its diff has to scroll both ways.
+{
+    printf 'first line\nsecond line\n'
+    printf 'a wide line %s\n' "$(printf 'x%.0s' $(seq 1 300))"
+    for i in $(seq 1 150); do printf 'line %s\n' "$i"; done
+} > "$PROJECT/notes.txt"
 HISTORY="$FAKE_HOME/.claude/projects/$(printf '%s' "$PROJECT" | sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$HISTORY"
 printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"write tests for the parser"}}\n' "$PROJECT" > "$HISTORY/c-1.jsonl"

@@ -328,24 +328,7 @@ struct PatchScreen: View {
         Group {
             if let loaded = model.patches[key] {
                 if let diff = loaded {
-                    let lines = diff.patch.split(separator: "\n", omittingEmptySubsequences: false).prefix(4000)
-                        .map { $0.replacingOccurrences(of: "\t", with: "    ") }
-                    ScrollView([.vertical, .horizontal]) {
-                        LazyVStack(alignment: .leading, spacing: 0) {
-                            ForEach(Array(lines.enumerated()), id: \.offset) { line in
-                                Text(line.element.isEmpty ? " " : line.element)
-                                    .font(.system(size: 12, design: .monospaced))
-                                    .foregroundStyle(foreground(line.element))
-                                    .lineLimit(1)
-                                    .fixedSize(horizontal: true, vertical: false)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 1)
-                                    .frame(minWidth: UIScreen.main.bounds.width, alignment: .leading)
-                                    .background(background(line.element))
-                            }
-                        }
-                        .padding(.vertical, 8)
-                    }
+                    PatchLines(patch: diff.patch)
                 } else {
                     Placeholder(text: "This file no longer has changes.")
                 }
@@ -357,6 +340,53 @@ struct PatchScreen: View {
         .navigationTitle((file as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { model.loadPatch(folder: folder, file: file, staged: staged) }
+    }
+}
+
+/// The lines of a diff, scrolling both ways.
+private struct PatchLines: View {
+    private let lines: [String]
+    /// Width of the longest line. A lazy stack inside a view that scrolls
+    /// both ways has no width of its own, and without one it does not scroll.
+    private let contentWidth: CGFloat
+
+    private static let font = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+    private static let horizontalPadding: CGFloat = 10
+
+    init(patch: String) {
+        // Tabs have no fixed width in SwiftUI text, which would make the measured width wrong.
+        lines = patch.split(separator: "\n", omittingEmptySubsequences: false).prefix(4000)
+            .map { $0.replacingOccurrences(of: "\t", with: "    ") }
+        // Measuring every line would be slow on a large diff. The widest is
+        // almost always among the longest by character count.
+        let candidates = lines.sorted { $0.utf16.count > $1.utf16.count }.prefix(8)
+        let widest = candidates.map { ($0 as NSString).size(withAttributes: [.font: Self.font]).width }.max() ?? 0
+        contentWidth = ceil(widest) + Self.horizontalPadding * 2 + 8
+    }
+
+    var body: some View {
+        GeometryReader { viewport in
+            // At least as wide as the screen, so line tints reach the right edge.
+            let width = max(contentWidth, viewport.size.width)
+            ScrollView([.vertical, .horizontal]) {
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(lines.enumerated()), id: \.offset) { line in
+                        Text(line.element.isEmpty ? " " : line.element)
+                            .font(.system(size: 12, design: .monospaced))
+                            .foregroundStyle(foreground(line.element))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, Self.horizontalPadding)
+                            .padding(.vertical, 1)
+                            .frame(width: width, alignment: .leading)
+                            .background(background(line.element))
+                    }
+                }
+                .frame(width: width, alignment: .leading)
+                .padding(.vertical, 8)
+            }
+            .accessibilityIdentifier("patch")
+        }
     }
 
     private func foreground(_ line: String) -> Color {
