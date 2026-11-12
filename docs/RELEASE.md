@@ -84,11 +84,8 @@ make store-screenshots   # send fastlane/screenshots/en-US
 The "Store listing" workflow on GitHub does the same from CI, run by hand
 (`gh workflow run metadata.yml`, with `-f screenshots=true` for the
 screenshots too). Neither submits anything for review. App Store Connect takes the contact
-for App Review only together with a phone number. That is not kept in this
-repository: it is `APP_REVIEW_PHONE` in the dotfiles repo's
-`projects/agentterm/release.env`, which `scripts/release.sh` passes on and
-`sync-agentterm.sh` sets as a secret for the workflow. Without it the lane
-leaves the contact and the notes for App Review out.
+for App Review only together with a phone number, which is in
+`review_information/phone_number.txt`.
 
 ## Mac
 

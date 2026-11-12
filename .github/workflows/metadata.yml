@@ -45,8 +45,6 @@ jobs:
 
       - name: Send the listing
         env:
-          # The contact for App Review is sent only when this is set.
-          APP_REVIEW_PHONE: ${{ secrets.APP_REVIEW_PHONE }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
