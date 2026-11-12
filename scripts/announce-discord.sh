@@ -47,7 +47,8 @@ if [ -n "${DRY_RUN:-}" ]; then
     printf '%s\n' "$PAYLOAD" | python3 -m json.tool
     exit 0
 fi
-: "${DISCORD_WEBHOOK_URL:?announce-discord.sh: DISCORD_WEBHOOK_URL must hold the channel's webhook address}"
+# No apostrophe in this message: inside ${...:?} newer versions of bash take one for the start of a quote.
+: "${DISCORD_WEBHOOK_URL:?announce-discord.sh: DISCORD_WEBHOOK_URL must hold the webhook address of the channel}"
 # The address is not echoed, and curl's errors do not print it either.
 status=$(printf '%s' "$PAYLOAD" | curl -sS -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data-binary @- "$DISCORD_WEBHOOK_URL" 2>/dev/null || true)
 case "$status" in
