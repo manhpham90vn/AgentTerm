@@ -282,6 +282,38 @@ final class EndToEndTests: XCTestCase {
         waitUntil("kept") { layouts(late).last == layout }
     }
 
+    func testTheMacIsKeptAwakeOnlyWhileASessionRunsAndTheSettingIsOn() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-awake-\(UUID().uuidString)/folders.json")
+        defer { try? FileManager.default.removeItem(at: file.deletingLastPathComponent()) }
+        func awake(_ client: TestClient) -> Bool? {
+            client.messages.compactMap { if case .keepAwake(let on) = $0 { return on } else { return nil } }.last
+        }
+        do {
+            let host = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false, foldersFile: file))
+            let hostPort = try host.start()
+            defer { host.stop() }
+            let mac = TestClient(port: hostPort, token: token, name: "mac")
+            let phone = TestClient(port: hostPort, token: token, name: "phone")
+            waitUntil("off to begin with") { awake(mac) == false && awake(phone) == false }
+            // Switched on from the phone: the Mac's window hears of it, but
+            // with no session there is nothing to stay awake for.
+            phone.connection.send(.setKeepAwake(true))
+            waitUntil("both know") { awake(mac) == true && awake(phone) == true }
+            XCTAssertFalse(host.isKeepingAwake)
+            mac.connection.send(.create(CreateRequest(command: "sleep 30", cwd: nil, title: nil, size: .default)))
+            waitUntil("awake with a session") { host.isKeepingAwake }
+            let id = try XCTUnwrap(mac.attached?.id)
+            mac.connection.send(.kill(session: id))
+            waitUntil("asleep again without one") { !host.isKeepingAwake }
+        }
+        // The setting is kept across a restart of the host.
+        let again = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false, foldersFile: file))
+        let againPort = try again.start()
+        defer { again.stop() }
+        let late = TestClient(port: againPort, token: token, name: "late")
+        waitUntil("kept") { awake(late) == true }
+    }
+
     func testFoldersCanBePutInAnotherOrder() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-order-\(UUID().uuidString)").standardizedFileURL
         defer { try? FileManager.default.removeItem(at: root) }

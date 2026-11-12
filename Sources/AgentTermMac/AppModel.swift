@@ -124,6 +124,15 @@ final class AppModel: ObservableObject {
     var tabLayoutKnown = false
     private var applyingHostLayout = false
 
+    /// Whether the Mac is kept awake while sessions run. Nil until the host
+    /// has said, which an older host never does.
+    @Published private(set) var keepAwake: Bool?
+
+    func setKeepAwake(_ on: Bool) {
+        keepAwake = on
+        connection?.send(.setKeepAwake(on))
+    }
+
     /// True once the host has listed its sessions.
     var sessionsKnown = false
 
@@ -304,6 +313,7 @@ final class AppModel: ObservableObject {
             connection = nil
             controllers.removeAll()
             sessionsKnown = false
+            keepAwake = nil
             hostMatch = .same
             tabLayoutKnown = false
             sessions = []
@@ -355,6 +365,8 @@ final class AppModel: ObservableObject {
         case .agents(let list):
             agents = list
             agentsLoaded = true
+        case .keepAwake(let on):
+            keepAwake = on
         case .tabLayout(let layout):
             let first = !tabLayoutKnown
             tabLayoutKnown = true

@@ -83,6 +83,12 @@ struct SessionsView: View {
                         } label: {
                             Label("Check Agents Again", systemImage: "arrow.clockwise")
                         }
+                        if let keepAwake = model.keepAwake {
+                            // The same switch as in the Mac's Settings.
+                            Toggle(isOn: Binding(get: { keepAwake }, set: { model.setKeepAwake($0) })) {
+                                Label("Keep Mac Awake", systemImage: "cup.and.saucer")
+                            }
+                        }
                         Button {
                             showingPrivacy = true
                         } label: {

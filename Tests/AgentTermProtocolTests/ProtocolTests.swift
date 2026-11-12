@@ -32,6 +32,7 @@ final class ProtocolTests: XCTestCase {
             .gitCommit(path: "/Users/me/app", message: "feat: thêm dòng\n\nchi tiết"),
             .accountUsage(refresh: true),
             .setTabLayout(TabLayout()),
+            .setKeepAwake(true),
             .moveFolder(path: "/Users/me/app", before: "/Users/me/web"),
             .moveFolder(path: "/Users/me/app", before: nil),
             .files(path: "/Users/me/app"),

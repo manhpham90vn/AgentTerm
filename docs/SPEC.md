@@ -221,6 +221,15 @@ panel.
     subfolder belong to that subfolder. A switch at the top changes the list
     to **All**: every conversation on the Mac, each row naming its folder.
 
+### Keeping the Mac awake
+
+A switch in the Mac's Settings, and in the iPhone app's menu, keeps the Mac
+from going to sleep by itself while a session is open, so agents keep
+working and the phone can still reach them. The host holds the hold on
+sleep, so it works with the window closed, and lets go when the last
+session ends. The display may still turn off, and closing the lid still
+puts the Mac to sleep. Off by default.
+
 ### Menu bar (Mac)
 
 AgentTerm keeps an icon in the menu bar, and closing its window does not quit

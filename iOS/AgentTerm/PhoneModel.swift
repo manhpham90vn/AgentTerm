@@ -65,6 +65,15 @@ final class PhoneModel: ObservableObject {
             connection?.send(.setTabLayout(sessionLayout))
         }
     }
+    /// Whether the Mac is kept awake while sessions run. Nil until the Mac
+    /// has said, which an older version never does.
+    @Published private(set) var keepAwake: Bool?
+
+    func setKeepAwake(_ on: Bool) {
+        keepAwake = on
+        connection?.send(.setKeepAwake(on))
+    }
+
     /// How the version of AgentTerm on the Mac compares with this app's.
     @Published private(set) var hostMatch = ProtocolMatch.same
     /// The session being dragged in the list, from when it is picked up.
@@ -322,6 +331,7 @@ final class PhoneModel: ObservableObject {
 
     /// What was shown belongs to the Mac that is being left.
     private func clearHostState() {
+        keepAwake = nil
         hostMatch = .same
         sessions = []
         folders = []
@@ -462,6 +472,8 @@ final class PhoneModel: ObservableObject {
         case .agents(let list):
             agents = list
             agentsLoaded = true
+        case .keepAwake(let on):
+            keepAwake = on
         case .tabLayout(let layout):
             layoutKnown = true
             applyingHostLayout = true

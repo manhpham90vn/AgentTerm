@@ -71,6 +71,7 @@ struct AgentTermApp: App {
 
         Settings {
             SettingsTabs()
+                .environmentObject(model)
         }
     }
 }
@@ -161,6 +162,7 @@ private struct SettingsTabs: View {
 }
 
 private struct SettingsView: View {
+    @EnvironmentObject private var model: AppModel
     @AppStorage(MenuBarMode.key) private var staysInMenuBar = MenuBarMode.defaultValue
 
     var body: some View {
@@ -182,6 +184,23 @@ private struct SettingsView: View {
                     }
                 }
                 .toggleStyle(.switch)
+            }
+            if let keepAwake = model.keepAwake {
+                SettingsCard {
+                    Toggle(isOn: Binding(get: { keepAwake }, set: { model.setKeepAwake($0) })) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Keep the Mac awake while sessions are running")
+                                .font(.system(size: 13, weight: .medium))
+                            Text(
+                                "The Mac does not go to sleep by itself while a session is open, so agents keep working and your iPhone can still reach them. The display may still turn off, and closing the lid still puts the Mac to sleep. With no session open the Mac sleeps as usual."
+                            )
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                }
             }
             SettingsCard {
                 HStack {

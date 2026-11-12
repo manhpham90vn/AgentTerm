@@ -186,6 +186,8 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Replaces how the tabs are arranged: order, pins and groups. The host
     /// keeps it and passes it on, so the Mac and the phones show the same.
     case setTabLayout(TabLayout)
+    /// Keep the Mac awake while sessions are running, or stop doing so.
+    case setKeepAwake(Bool)
     /// Asks for the files and folders in a folder. Answered with `files`.
     case files(path: String)
     /// Asks for what a file holds. Answered with `file`.
@@ -252,6 +254,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case accountUsage([AccountUsage])
     /// How the tabs are arranged. Sent on connecting and when a client changes it.
     case tabLayout(TabLayout)
+    /// Whether the Mac is kept awake while sessions are running. Sent on
+    /// connecting and when a client changes it.
+    case keepAwake(Bool)
     /// The files and folders in a folder.
     case files(path: String, entries: [FileEntry])
     /// What a file holds. `data` carries the bytes of an image.

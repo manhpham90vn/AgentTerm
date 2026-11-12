@@ -143,12 +143,33 @@ public final class HostServer {
         {
             folders = saved
         }
+        if let file = settingsFile, let data = try? Data(contentsOf: file),
+            let saved = try? JSONDecoder().decode([String: Bool].self, from: data)
+        {
+            keepAwake = saved["keepAwake"] ?? false
+        }
         if let file = tabLayoutFile, let data = try? Data(contentsOf: file),
             let saved = try? JSONDecoder().decode(TabLayout.self, from: data)
         {
             tabLayout = saved
         }
     }
+
+    /// Whether to keep the Mac awake while sessions run. Kept next to the folders.
+    private var keepAwake = false
+    private let sleepGuard = SleepGuard()
+    private var settingsFile: URL? {
+        configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("settings.json")
+    }
+
+    /// The hold on sleep follows the setting and whether anything runs:
+    /// with no session there is nothing to stay awake for.
+    private func updateSleepGuard() {
+        sleepGuard.set(held: keepAwake && !sessions.isEmpty)
+    }
+
+    /// True while the Mac is being kept awake. For tests.
+    public var isKeepingAwake: Bool { queue.sync { sleepGuard.isHeld } }
 
     /// How the tabs are arranged, for every client. Kept next to the folders.
     private var tabLayout = TabLayout()
@@ -343,6 +364,7 @@ public final class HostServer {
     }
 
     private func broadcastSessions() {
+        updateSleepGuard()
         let list = sessions.values.map(\.info).sorted { $0.id < $1.id }
         for client in clients.values where client.authenticated {
             send(.sessions(list), to: client)
@@ -419,6 +441,15 @@ public final class HostServer {
             guard let session = sessions[id] else { return }
             session.process.hangUp()
             queue.asyncAfter(deadline: .now() + 3) { [weak session] in session?.process.forceKill() }
+        case .setKeepAwake(let wanted):
+            guard wanted != keepAwake else { return }
+            keepAwake = wanted
+            if let file = settingsFile, let data = try? JSONEncoder().encode(["keepAwake": wanted]) {
+                try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try? data.write(to: file, options: .atomic)
+            }
+            updateSleepGuard()
+            for other in clients.values where other.authenticated { send(.keepAwake(wanted), to: other) }
         case .setTabLayout(let layout):
             guard layout != tabLayout else { return }
             tabLayout = layout
@@ -788,6 +819,7 @@ public final class HostServer {
         if !accountUsage.isEmpty { send(.accountUsage(accountUsageList()), to: client) }
         send(.folders(folders), to: client)
         send(.tabLayout(tabLayout), to: client)
+        send(.keepAwake(keepAwake), to: client)
         if client.isAdmin {
             send(.devices(deviceList()), to: client)
         } else {
