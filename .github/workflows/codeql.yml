@@ -45,8 +45,11 @@ jobs:
         with:
           category: /language:${{ matrix.language }}
 
-  # Swift is analyzed while it is built. On its own: with the C tracer
-  # switched on as well, SwiftPM could not start the package manifest.
+  # Swift is analyzed while it is built. CodeQL builds it itself, as
+  # GitHub's default setup did: a `swift build` step of our own could not
+  # start the package manifest under CodeQL's tracing ("Bad CPU type in
+  # executable"). The dependencies land in .build inside the checkout that
+  # way, and the config file leaves that folder out of the results.
   swift:
     name: swift
     runs-on: xcode-27
@@ -59,12 +62,8 @@ jobs:
       - uses: github/codeql-action/init@v4
         with:
           languages: swift
-          build-mode: manual
+          build-mode: autobuild
           config-file: .github/codeql/codeql-config.yml
-      # The build folder is outside the checkout, so the dependencies'
-      # sources are not part of what is analyzed.
-      - name: Build
-        run: swift build --scratch-path "$RUNNER_TEMP/build"
       - uses: github/codeql-action/analyze@v4
         with:
           category: /language:swift
