@@ -10,6 +10,9 @@ struct SidebarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            MacSwitcher()
+                .padding(.horizontal, 14)
+                .padding(.top, 12)
             HStack {
                 Text("FOLDERS")
                     .font(.system(size: 11, weight: .semibold))
@@ -259,8 +262,11 @@ struct FolderRow: View {
         }
         .help(folder.path)
         .contextMenu {
-            Button("Show in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: folder.path) }
-            Divider()
+            // A folder of another Mac is not in this Mac's Finder.
+            if !model.isRemote {
+                Button("Show in Finder") { NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: folder.path) }
+                Divider()
+            }
             Button("Move Up") { model.moveFolder(folder, by: -1) }
                 .disabled(model.folders.first == folder)
             Button("Move Down") { model.moveFolder(folder, by: 1) }

@@ -143,6 +143,7 @@ private struct MenuBarMenu: View {
             showWindow()
             model.showPairing = true
         }
+        .disabled(model.isRemote)
         SettingsLink { Text("Settings and Permissions…") }
         Divider()
         Button("Quit \(AppChannel.current.appName)") { NSApp.terminate(nil) }

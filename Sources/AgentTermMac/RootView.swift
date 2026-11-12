@@ -55,7 +55,8 @@ struct RootView: View {
                 HStack(spacing: 10) {
                     LaunchBar()
                     Theme.hairline.frame(width: 1, height: 16)
-                    PairButton()
+                    // Pairing a phone is done on the Mac it is paired with.
+                    if !model.isRemote { PairButton() }
                 }
             }
             // Without this flexible space the items below sit right after
@@ -76,6 +77,12 @@ struct RootView: View {
         }
         .sheet(isPresented: $model.showPairing) {
             PairingView(port: model.hostPort)
+        }
+        .sheet(isPresented: $model.showPairMac) {
+            PairMacSheet()
+        }
+        .sheet(isPresented: $model.showBrowseFolders) {
+            BrowseFoldersSheet()
         }
         .confirmationDialog(
             "Save changes to \"\((files.pendingClose as NSString?)?.lastPathComponent ?? "")\"?",
@@ -268,8 +275,11 @@ private struct HostVersionBanner: View {
                 .lineLimit(2)
             }
             Spacer(minLength: 8)
-            Button("Restart Host…") { confirming = true }
-                .controlSize(.small)
+            // Another Mac's host is restarted on that Mac, by its own app.
+            if !model.isRemote {
+                Button("Restart Host…") { confirming = true }
+                    .controlSize(.small)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -334,14 +344,15 @@ struct CenterView: View {
             case .connecting:
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.small)
-                    Text("Starting the AgentTerm host…").foregroundStyle(.secondary)
+                    Text(model.remote.map { "Connecting to \($0.name)…" } ?? "Starting the AgentTerm host…").foregroundStyle(.secondary)
                 }
             case .failed(let reason):
                 VStack(spacing: 12) {
                     Image(systemName: "bolt.horizontal.circle").font(.system(size: 34)).foregroundStyle(.secondary)
-                    Text("Can't reach the AgentTerm host").font(.headline)
+                    Text(model.remote.map { "Can't reach \($0.name)" } ?? "Can't reach the AgentTerm host").font(.headline)
                     Text(reason).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     Button("Try Again") { model.reconnect() }
+                    if model.isRemote { Button("Use This Mac") { model.switchTo(nil) } }
                 }
                 .padding(40)
             case .connected:
@@ -494,7 +505,7 @@ struct WelcomeView: View {
             }
             if model.agentsLoaded && model.installedAgents.isEmpty {
                 VStack(spacing: 6) {
-                    Text("No agent CLI was found on this Mac.")
+                    Text("No agent CLI was found on \(model.macName).")
                         .font(.callout).foregroundStyle(.secondary)
                     Button("Check Again") { model.refreshAgents() }.controlSize(.small)
                 }

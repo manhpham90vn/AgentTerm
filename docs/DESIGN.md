@@ -612,6 +612,35 @@ the same folder can therefore be mixed up; the History tab is exact.
 - If the app cannot connect, it starts the `agenttermd` that sits next to its
   own executable, in a new session so it outlives the app, and retries.
 
+## Another Mac
+
+The Mac app can show another Mac instead of the one it runs on
+(`AppModel.remote`), the way the iPhone shows a Mac. The menu at the top of
+the sidebar switches between this Mac and the paired ones.
+
+- Pairing is by link: a Mac has no camera pointed at the other's screen, so
+  the link under the pairing code is pasted (`pairMac(link:)`). The code is
+  traded for a token of this Mac's own, as a phone's is. The paired Macs
+  are in the Keychain (`RemoteMacStore`); a host with a state folder of
+  its own keeps them in that folder, which leaves the Keychain to the
+  real app.
+- The terminals already went through the protocol. Changes, history,
+  handoff and files did not: on its own Mac the app reads them from disk,
+  which is faster and needs no host. For another Mac the same functions of
+  `AppModel` and `FilesModel` send the messages the iPhone sends (`diff`,
+  `diffFile`, `gitStage` …, `history`, `handoffPlan`, `handoff`, `files`,
+  `readFile` …) and take the answers in `handle`. A list of changes from
+  another Mac comes without the diffs, so the diff on show is asked for
+  by itself after each list.
+- What only this Mac's disk can do is not offered: Show in Finder, an
+  open panel (a sheet lists the other Mac's folders instead), dropping
+  folders from the Finder, pairing a phone, restarting the host. The app
+  never starts a host for another Mac; one that cannot be reached is
+  said so, with a way back to this Mac.
+- Switching Macs drops what was on screen and connects again. It is
+  refused while a file has unsaved changes: they are on the Mac that
+  would be left.
+
 ## iPhone app structure
 
 - `PhoneModel` holds the paired Macs, the connection and the single

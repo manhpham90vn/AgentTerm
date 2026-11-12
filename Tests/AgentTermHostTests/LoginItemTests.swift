@@ -31,6 +31,14 @@ final class LoginItemTests: XCTestCase {
         // The app starts the host again when it stops; launchd must not, or there would be two.
         XCTAssertNil(written["KeepAlive"])
         XCTAssertEqual(written["StandardOutPath"] as? String, item.log.path)
+        // And it is a property list launchd's own tool accepts.
+        let lint = Process()
+        lint.executableURL = URL(fileURLWithPath: "/usr/bin/plutil")
+        lint.arguments = ["-lint", item.file.path]
+        lint.standardOutput = FileHandle.nullDevice
+        try lint.run()
+        lint.waitUntilExit()
+        XCTAssertEqual(lint.terminationStatus, 0)
 
         try item.turnOff()
         XCTAssertFalse(item.isOn)

@@ -16,6 +16,8 @@ struct HandoffSheet: View {
     /// Made once when the sheet opens, so the file named in the prompt is
     /// the file that gets written.
     @State private var plan: Handoff.Plan?
+    /// On another Mac the plan is that Mac's host's: this names it.
+    @State private var remotePlan: String?
     @State private var prompt = ""
     @FocusState private var noteFocused: Bool
 
@@ -99,9 +101,12 @@ struct HandoffSheet: View {
                     .labelsHidden()
                     .fixedSize()
                     .help("The folder the receiving agent starts in")
-                    Button("Choose…") { chooseFolder() }
-                        .controlSize(.small)
-                        .help("Start it in any other folder")
+                    if !model.isRemote {
+                        // An open panel shows this Mac's disk.
+                        Button("Choose…") { chooseFolder() }
+                            .controlSize(.small)
+                            .help("Start it in any other folder")
+                    }
                 }
                 if destination != conversation.cwd {
                     Text("The agent starts in \((destination as NSString).abbreviatingWithTildeInPath), with the conversation so far. The folder is added to the list.")
@@ -170,11 +175,22 @@ struct HandoffSheet: View {
         .frame(width: 500)
         .onAppear {
             targetID = targets.contains { $0.id == rememberedTarget } ? rememberedTarget : (targets.first?.id ?? "")
+            noteFocused = true
+            if model.isRemote {
+                // The folders and the handoff file are on the other Mac.
+                model.requestRemoteHandoffPlan(for: conversation)
+                return
+            }
             nested = Self.repositories(in: conversation.cwd)
             let made = Handoff.plan(for: conversation)
             plan = made
             prompt = made.prompt
-            noteFocused = true
+        }
+        .onChange(of: model.remoteHandoffPlan) { _, made in
+            guard model.isRemote, let made, plan == nil else { return }
+            remotePlan = made.id
+            plan = Handoff.Plan(relativePath: "", prompt: made.prompt)
+            prompt = made.prompt
         }
     }
 
@@ -202,6 +218,13 @@ struct HandoffSheet: View {
     private func submit() {
         guard let target, let plan else { return }
         rememberedTarget = target.id
+        if model.isRemote {
+            guard let remotePlan else { return }
+            model.handoffOnRemote(
+                conversation, to: target, plan: remotePlan, prompt: promptIsEdited ? prompt : nil, note: note, in: folder.isEmpty ? nil : folder)
+            dismiss()
+            return
+        }
         model.handoff(conversation, to: target, plan: plan, prompt: prompt, note: note, in: folder.isEmpty ? nil : folder)
         dismiss()
     }

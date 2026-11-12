@@ -1,6 +1,7 @@
 import AgentTermEditor
 import AgentTermHost
 import AgentTermProtocol
+import AgentTermTerminal
 import Combine
 import SwiftUI
 
@@ -131,7 +132,9 @@ struct FilesView: View {
         Button("Rename…") { ask(.rename(entry)) }
         Button("Move to Trash", role: .destructive) { trashing = entry }
         Divider()
-        Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: entry.path)]) }
+        if !files.isRemote {
+            Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: entry.path)]) }
+        }
         Button("Copy Path") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(entry.path, forType: .string)
@@ -215,6 +218,11 @@ private struct FileTreeRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(entry.isDirectory ? "\(entry.name), folder, \(isExpanded ? "expanded" : "collapsed")" : entry.name)
         .accessibilityAddTraits(.isButton)
+        // Said to be a button, so it has to act as one for VoiceOver and
+        // for anything else that presses it without a pointer.
+        .accessibilityAction {
+            if entry.isDirectory { files.toggle(entry.path) } else { files.open(entry.path) }
+        }
     }
 
     private var nameColor: Color {
@@ -302,6 +310,8 @@ struct DocumentView: View {
     @ViewBuilder
     private var content: some View {
         switch document.content {
+        case .text where document.isLoading:
+            LoadingView("Opening the file…")
         case .text:
             if document.isMermaid, previewing {
                 ScrollView {
@@ -309,7 +319,10 @@ struct DocumentView: View {
                 }
                 .background(Theme.canvas)
             } else if document.isMarkdown, previewing {
-                MarkdownPreview(text: document.text, baseURL: URL(fileURLWithPath: (document.path as NSString).deletingLastPathComponent, isDirectory: true))
+                // Pictures a document on another Mac refers to are on that Mac, and are not shown.
+                MarkdownPreview(
+                    text: document.text,
+                    baseURL: files.isRemote ? nil : URL(fileURLWithPath: (document.path as NSString).deletingLastPathComponent, isDirectory: true))
             } else {
                 let path = document.path
                 CodeEditor(
@@ -318,7 +331,7 @@ struct DocumentView: View {
                 )
             }
         case .image:
-            if let image = NSImage(contentsOfFile: document.path) {
+            if let image = document.imageData.flatMap(NSImage.init(data:)) ?? (files.isRemote ? nil : NSImage(contentsOfFile: document.path)) {
                 // The whole picture, fitted to the pane and centered, never
                 // larger than it is. A view that scrolls both ways opens a
                 // tall picture scrolled part of the way down.

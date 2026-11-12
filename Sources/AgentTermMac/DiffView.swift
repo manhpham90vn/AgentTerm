@@ -132,12 +132,16 @@ struct DiffView: View {
                 case .file(let file):
                     FileRow(file: file, selected: file.id == selectedFile?.id, showsDirectory: false, depth: row.depth)
                         .onTapGesture { model.openDiff(file) }
+                        .accessibilityAddTraits(.isButton)
+                        .accessibilityAction { model.openDiff(file) }
                 }
             }
         } else {
             ForEach(files) { file in
                 FileRow(file: file, selected: file.id == selectedFile?.id)
                     .onTapGesture { model.openDiff(file) }
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction { model.openDiff(file) }
             }
         }
     }
@@ -490,7 +494,10 @@ struct DiffDocumentView: View {
             .padding(.vertical, 6)
             .background(Theme.panel)
             Theme.hairline.frame(height: 1)
-            if file.patch.isEmpty {
+            if file.patch.isEmpty, model.loadingDiffFile {
+                // From another Mac the diff comes after the list it was picked in.
+                LoadingView("Loading the diff…")
+            } else if file.patch.isEmpty {
                 Text("Nothing to show for this file: it is empty or not text.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
