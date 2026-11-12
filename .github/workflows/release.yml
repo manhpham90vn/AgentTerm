@@ -15,6 +15,8 @@ name: Release
 #   MATCH_GIT_URL                 the fastlane match repository, as an https address
 #   MATCH_PASSWORD                the passphrase match encrypts with
 #   MATCH_GIT_BASIC_AUTHORIZATION base64 of "user:token" with read access to that repository
+#   HOMEBREW_TAP_TOKEN            token with contents write access to manhpham90vn/homebrew-tap;
+#                                 without it the cask is not updated
 
 on:
   push:
@@ -99,6 +101,13 @@ jobs:
           files: |
             dist/AgentTerm-${{ steps.version.outputs.value }}.dmg
             dist/AgentTerm-${{ steps.version.outputs.value }}.sha256
+
+      # So "brew install --cask manhpham90vn/tap/agentterm" gets this version.
+      - name: Update the Homebrew tap
+        if: env.HOMEBREW_TAP_TOKEN != ''
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: scripts/publish-homebrew.sh "${{ steps.version.outputs.value }}"
 
       - name: Remove the signing files
         if: always()

@@ -80,6 +80,24 @@ for the verdict, staples the ticket to it and checks it with `spctl`.
 The app is built for the Mac it is built on (Apple silicon on an Apple
 silicon Mac). There is no universal build yet.
 
+## Homebrew
+
+The Mac app also installs with
+
+```sh
+brew tap manhpham90vn/tap
+brew trust manhpham90vn/tap     # Homebrew 7 and later: a tap outside Homebrew's own has to be trusted first
+brew install --cask agentterm
+```
+
+The cask lives in the tap repository, `manhpham90vn/homebrew-tap`, and is
+written from the template `packaging/homebrew/agentterm.rb`.
+`scripts/publish-homebrew.sh <version>` fills in the version and the checksum
+of that version's disk image and pushes it to the tap. The release workflow
+runs it after publishing the disk image, when the `HOMEBREW_TAP_TOKEN` secret
+is set. By hand it uses git's sign-in on your machine; `DRY_RUN=1` prints the
+cask and pushes nothing. Beta versions are published to the tap too.
+
 ## From GitHub Actions
 
 `.github/workflows/release.yml` runs the same lanes on GitHub's runners.
