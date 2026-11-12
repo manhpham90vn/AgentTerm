@@ -1,6 +1,7 @@
-@testable import AgentTermHost
 import AgentTermProtocol
 import XCTest
+
+@testable import AgentTermHost
 
 final class GitActionsTests: XCTestCase {
     private var root: URL!

@@ -36,7 +36,8 @@ struct PairingView: View {
                 paired(device)
             } else if let host {
                 if let code = model.pairingCode, code.expiresAt > now,
-                   let image = Self.qrCode(for: link(host: host, code: code)) {
+                    let image = Self.qrCode(for: link(host: host, code: code))
+                {
                     ready(host: host, code: code, image: image)
                 } else {
                     ProgressView().controlSize(.small).frame(height: 248)
@@ -162,29 +163,29 @@ struct PairingView: View {
             // A long list scrolls in place, so the sheet never grows past the
             // screen and hides what is under it.
             ScrollView {
-              VStack(spacing: 0) {
-                ForEach(model.devices) { device in
-                    HStack(spacing: 9) {
-                        Image(systemName: "iphone")
-                            .foregroundStyle(device.isConnected ? Theme.added : .secondary)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(device.name).font(.system(size: 12.5))
-                            Text(subtitle(for: device))
-                                .font(.system(size: 10.5))
-                                .foregroundStyle(.secondary)
+                VStack(spacing: 0) {
+                    ForEach(model.devices) { device in
+                        HStack(spacing: 9) {
+                            Image(systemName: "iphone")
+                                .foregroundStyle(device.isConnected ? Theme.added : .secondary)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(device.name).font(.system(size: 12.5))
+                                Text(subtitle(for: device))
+                                    .font(.system(size: 10.5))
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 6)
+                            Button("Remove", role: .destructive) { model.revoke(device) }
+                                .controlSize(.small)
+                                .help("Take this device's access away. It has to be paired again to come back.")
                         }
-                        Spacer(minLength: 6)
-                        Button("Remove", role: .destructive) { model.revoke(device) }
-                            .controlSize(.small)
-                            .help("Take this device's access away. It has to be paired again to come back.")
-                    }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    if device.id != model.devices.last?.id {
-                        Theme.hairline.frame(height: 1).padding(.leading, 34)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        if device.id != model.devices.last?.id {
+                            Theme.hairline.frame(height: 1).padding(.leading, 34)
+                        }
                     }
                 }
-              }
             }
             .defaultScrollAnchor(.top)
             .frame(height: min(CGFloat(model.devices.count) * Self.deviceRowHeight, Self.deviceRowHeight * 3.4))

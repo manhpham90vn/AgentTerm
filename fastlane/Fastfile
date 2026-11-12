@@ -29,11 +29,11 @@ def asc_key
   )
 end
 
-# "0.1.0", from the iPhone project unless VERSION says otherwise.
+# "0.2.0", from the VERSION file unless the environment says otherwise.
 def app_version
   return ENV["VERSION"] unless ENV["VERSION"].to_s.empty?
 
-  File.read(File.join(ROOT, "iOS/project.yml"))[/MARKETING_VERSION:\s*([\d.]+)/, 1] || "0.1.0"
+  File.read(File.join(ROOT, "VERSION")).strip
 end
 
 platform :ios do

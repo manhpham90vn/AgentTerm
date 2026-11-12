@@ -1,6 +1,7 @@
-@testable import AgentTermHost
 import AgentTermProtocol
 import XCTest
+
+@testable import AgentTermHost
 
 final class AccountUsageTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_794_380_000)
@@ -29,13 +30,13 @@ final class AccountUsageTests: XCTestCase {
     // MARK: Claude Code
 
     private let claudeAnswer = #"""
-    {"five_hour":{"utilization":56.0,"resets_at":"2026-11-11T11:50:00.351475+00:00"},
-     "limits":[
-      {"kind":"session","percent":58,"resets_at":"2026-11-11T11:50:00.920147+00:00","scope":null},
-      {"kind":"weekly_all","percent":30,"resets_at":"2026-11-13T21:00:00.920164+00:00","scope":null},
-      {"kind":"weekly_scoped","percent":41,"resets_at":"2026-11-13T21:00:00.920280+00:00","scope":{"model":{"id":null,"display_name":"Fable"}}}],
-     "extra_usage":{"is_enabled":false,"monthly_limit":10000,"used_credits":0.0,"currency":"USD","decimal_places":2}}
-    """#
+        {"five_hour":{"utilization":56.0,"resets_at":"2026-11-11T11:50:00.351475+00:00"},
+         "limits":[
+          {"kind":"session","percent":58,"resets_at":"2026-11-11T11:50:00.920147+00:00","scope":null},
+          {"kind":"weekly_all","percent":30,"resets_at":"2026-11-13T21:00:00.920164+00:00","scope":null},
+          {"kind":"weekly_scoped","percent":41,"resets_at":"2026-11-13T21:00:00.920280+00:00","scope":{"model":{"id":null,"display_name":"Fable"}}}],
+         "extra_usage":{"is_enabled":false,"monthly_limit":10000,"used_credits":0.0,"currency":"USD","decimal_places":2}}
+        """#
 
     func testClaudeListsItsLimitsAsItsUsageScreenDoes() {
         let usage = AccountUsageFetcher.parseClaude(json(claudeAnswer), now: now)
@@ -50,7 +51,10 @@ final class AccountUsageTests: XCTestCase {
     }
 
     func testClaudeUnderstandsTheOlderAnswerAndExtraUsage() {
-        let usage = AccountUsageFetcher.parseClaude(json(#"{"five_hour":{"utilization":62,"resets_at":"2026-09-20T22:20:00.095287+00:00"},"seven_day":{"utilization":48,"resets_at":null},"seven_day_opus":null,"extra_usage":{"is_enabled":true,"monthly_limit":10000,"used_credits":1250,"currency":"USD","decimal_places":2}}"#), now: now)
+        let usage = AccountUsageFetcher.parseClaude(
+            json(
+                #"{"five_hour":{"utilization":62,"resets_at":"2026-09-20T22:20:00.095287+00:00"},"seven_day":{"utilization":48,"resets_at":null},"seven_day_opus":null,"extra_usage":{"is_enabled":true,"monthly_limit":10000,"used_credits":1250,"currency":"USD","decimal_places":2}}"#
+            ), now: now)
         XCTAssertEqual(usage.limits.map(\.title), ["Current session", "Current week (all models)"])
         XCTAssertEqual(usage.limits.map(\.usedPercent), [62, 48])
         XCTAssertEqual(usage.notes, [AccountUsageNote(label: "Extra usage", value: "12.50 USD of 100.00 USD used")])
@@ -60,14 +64,16 @@ final class AccountUsageTests: XCTestCase {
         // What Claude Code's own sign-in is answered with: nothing to count, so nothing is said.
         let withheld = AccountUsageFetcher.parseClaude(json(#"{"limits":[{"kind":"session","percent":5}],"cedar_ember":{"eligible":false,"ineligible_reason":"surface","grants":[]}}"#), now: now)
         XCTAssertEqual(withheld.notes, [])
-        let reported = AccountUsageFetcher.parseClaude(json(#"""
-        {"limits":[{"kind":"session","percent":5}],"cedar_ember":{"eligible":true,"grants":[
-          {"resets_left":2,"resets_total":2,"starts_at":"2026-11-01T00:00:00Z","ends_at":"2026-12-05T00:00:00Z","paused":false},
-          {"resets_left":1,"resets_total":1,"ends_at":"2026-11-20T00:00:00Z","paused":false},
-          {"resets_left":4,"ends_at":"2026-11-30T00:00:00Z","paused":true},
-          {"resets_left":8,"ends_at":"2026-11-01T00:00:00Z","paused":false},
-          {"resets_left":9,"starts_at":"2027-01-01T00:00:00Z","paused":false}]}}
-        """#), now: now)
+        let reported = AccountUsageFetcher.parseClaude(
+            json(
+                #"""
+                {"limits":[{"kind":"session","percent":5}],"cedar_ember":{"eligible":true,"grants":[
+                  {"resets_left":2,"resets_total":2,"starts_at":"2026-11-01T00:00:00Z","ends_at":"2026-12-05T00:00:00Z","paused":false},
+                  {"resets_left":1,"resets_total":1,"ends_at":"2026-11-20T00:00:00Z","paused":false},
+                  {"resets_left":4,"ends_at":"2026-11-30T00:00:00Z","paused":true},
+                  {"resets_left":8,"ends_at":"2026-11-01T00:00:00Z","paused":false},
+                  {"resets_left":9,"starts_at":"2027-01-01T00:00:00Z","paused":false}]}}
+                """#), now: now)
         XCTAssertEqual(reported.notes.first?.label, "Limit resets")
         XCTAssertEqual(reported.notes.first?.value.hasPrefix("3 available, the first expires "), true, "paused, ended and not yet started ones are not counted")
         let none = AccountUsageFetcher.parseClaude(json(#"{"limits":[{"kind":"session","percent":5}],"cedar_ember":{"eligible":true,"grants":[]}}"#), now: now)
@@ -83,10 +89,12 @@ final class AccountUsageTests: XCTestCase {
     func testClaudeSendsItsSignInToAnthropicOnly() {
         var requests: [URLRequest] = []
         let login = #"{"claudeAiOauth":{"accessToken":"tok-claude","refreshToken":"never-used","expiresAt":1794390000000,"subscriptionType":"max","rateLimitTier":"default_claude_max_5x"}}"#
-        let usage = AccountUsageFetcher.fetch(agent: "claude", environment: environment(
-            keychain: ["Claude Code-credentials": login],
-            answers: ["https://api.anthropic.com/api/oauth/usage?cedar_ember=1": (200, claudeAnswer)], asked: { requests.append($0) }
-        ))
+        let usage = AccountUsageFetcher.fetch(
+            agent: "claude",
+            environment: environment(
+                keychain: ["Claude Code-credentials": login],
+                answers: ["https://api.anthropic.com/api/oauth/usage?cedar_ember=1": (200, claudeAnswer)], asked: { requests.append($0) }
+            ))
         XCTAssertEqual(usage?.plan, "Max 5x")
         XCTAssertEqual(usage?.limits.count, 3)
         XCTAssertEqual(requests.map { $0.url?.host }, ["api.anthropic.com"])
@@ -110,10 +118,12 @@ final class AccountUsageTests: XCTestCase {
         XCTAssertEqual(AccountUsageFetcher.fetch(agent: "agy", environment: environment())?.problem, "Antigravity is not signed in on this Mac.")
         XCTAssertEqual(AccountUsageFetcher.fetch(agent: "copilot", environment: environment())?.problem?.hasPrefix("No GitHub sign-in"), true)
         XCTAssertNil(AccountUsageFetcher.fetch(agent: "zsh", environment: environment()))
-        let refused = AccountUsageFetcher.fetch(agent: "codex", environment: environment(
-            files: ["/home/me/.codex/auth.json": #"{"tokens":{"access_token":"t"}}"#],
-            answers: ["https://chatgpt.com/backend-api/wham/usage": (401, "{}")]
-        ))
+        let refused = AccountUsageFetcher.fetch(
+            agent: "codex",
+            environment: environment(
+                files: ["/home/me/.codex/auth.json": #"{"tokens":{"access_token":"t"}}"#],
+                answers: ["https://chatgpt.com/backend-api/wham/usage": (401, "{}")]
+            ))
         XCTAssertEqual(refused?.problem, "ChatGPT did not accept the sign-in. Send a message in Codex to renew it.")
         let unreachable = AccountUsageFetcher.fetch(agent: "codex", environment: environment(files: ["/home/me/.codex/auth.json": #"{"tokens":{"access_token":"t"}}"#]))
         XCTAssertEqual(unreachable?.problem, "ChatGPT could not be reached.")
@@ -122,14 +132,14 @@ final class AccountUsageTests: XCTestCase {
     // MARK: Codex
 
     private let codexAnswer = #"""
-    {"plan_type":"plus","email":"me@example.com",
-     "rate_limit":{"allowed":true,"limit_reached":false,
-       "primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_after_seconds":8515,"reset_at":1794396857},
-       "secondary_window":{"used_percent":97,"limit_window_seconds":604800,"reset_after_seconds":568,"reset_at":1794388910}},
-     "code_review_rate_limit":null,"additional_rate_limits":null,
-     "credits":{"has_credits":false,"unlimited":false,"balance":0},
-     "rate_limit_reset_credits":{"available_count":2,"applicable_available_count":2}}
-    """#
+        {"plan_type":"plus","email":"me@example.com",
+         "rate_limit":{"allowed":true,"limit_reached":false,
+           "primary_window":{"used_percent":0,"limit_window_seconds":18000,"reset_after_seconds":8515,"reset_at":1794396857},
+           "secondary_window":{"used_percent":97,"limit_window_seconds":604800,"reset_after_seconds":568,"reset_at":1794388910}},
+         "code_review_rate_limit":null,"additional_rate_limits":null,
+         "credits":{"has_credits":false,"unlimited":false,"balance":0},
+         "rate_limit_reset_credits":{"available_count":2,"applicable_available_count":2}}
+        """#
 
     func testCodexListsItsLimitsAsItsStatusDoes() {
         let usage = AccountUsageFetcher.parseCodex(json(codexAnswer), now: now)
@@ -144,18 +154,23 @@ final class AccountUsageTests: XCTestCase {
 
     func testCodexSaysWhenTheFirstBankedResetExpires() throws {
         var hosts: [String] = []
-        let usage = AccountUsageFetcher.fetch(agent: "codex", environment: environment(
-            files: ["/elsewhere/auth.json": #"{"tokens":{"access_token":"tok-codex","account_id":"acct-1","refresh_token":"never-used"}}"#],
-            variables: ["CODEX_HOME": "/elsewhere"],
-            answers: [
-                "https://chatgpt.com/backend-api/wham/usage": (200, codexAnswer),
-                "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits": (200, #"{"credits":[{"status":"redeemed","expires_at":"2026-11-12T00:00:00Z"},{"status":"available","expires_at":"2026-12-05T00:00:00Z"},{"status":"available","expires_at":"2026-11-20T00:00:00Z"}],"available_count":2}"#),
-            ],
-            asked: { request in
-                hosts.append(request.url?.host ?? "")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "ChatGPT-Account-Id"), "acct-1")
-            }
-        ))
+        let usage = AccountUsageFetcher.fetch(
+            agent: "codex",
+            environment: environment(
+                files: ["/elsewhere/auth.json": #"{"tokens":{"access_token":"tok-codex","account_id":"acct-1","refresh_token":"never-used"}}"#],
+                variables: ["CODEX_HOME": "/elsewhere"],
+                answers: [
+                    "https://chatgpt.com/backend-api/wham/usage": (200, codexAnswer),
+                    "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits": (
+                        200,
+                        #"{"credits":[{"status":"redeemed","expires_at":"2026-11-12T00:00:00Z"},{"status":"available","expires_at":"2026-12-05T00:00:00Z"},{"status":"available","expires_at":"2026-11-20T00:00:00Z"}],"available_count":2}"#
+                    ),
+                ],
+                asked: { request in
+                    hosts.append(request.url?.host ?? "")
+                    XCTAssertEqual(request.value(forHTTPHeaderField: "ChatGPT-Account-Id"), "acct-1")
+                }
+            ))
         XCTAssertEqual(hosts, ["chatgpt.com", "chatgpt.com"])
         let note = try XCTUnwrap(usage?.notes.first)
         XCTAssertTrue(note.value.hasPrefix("2 available, the first expires "), note.value)
@@ -165,11 +180,13 @@ final class AccountUsageTests: XCTestCase {
     // MARK: Copilot
 
     func testCopilotListsPremiumRequests() {
-        let usage = AccountUsageFetcher.parseCopilot(json(#"""
-        {"copilot_plan":"individual","access_type_sku":"free_engaged_oss_quota","quota_reset_date":"2026-12-01","quota_reset_date_utc":"2026-12-01T00:00:00.000Z",
-         "quota_snapshots":{"chat":{"unlimited":true,"percent_remaining":100.0},"completions":{"unlimited":true,"percent_remaining":100.0},
-          "premium_interactions":{"unlimited":false,"percent_remaining":98.5,"remaining":1477,"entitlement":1500,"overage_permitted":false,"overage_count":0}}}
-        """#), now: now)
+        let usage = AccountUsageFetcher.parseCopilot(
+            json(
+                #"""
+                {"copilot_plan":"individual","access_type_sku":"free_engaged_oss_quota","quota_reset_date":"2026-12-01","quota_reset_date_utc":"2026-12-01T00:00:00.000Z",
+                 "quota_snapshots":{"chat":{"unlimited":true,"percent_remaining":100.0},"completions":{"unlimited":true,"percent_remaining":100.0},
+                  "premium_interactions":{"unlimited":false,"percent_remaining":98.5,"remaining":1477,"entitlement":1500,"overage_permitted":false,"overage_count":0}}}
+                """#), now: now)
         XCTAssertEqual(usage.plan, "Individual, free")
         XCTAssertEqual(usage.limits.map(\.title), ["Premium requests"])
         XCTAssertEqual(usage.limits.first?.detail, "1477 of 1500 left")
@@ -180,11 +197,13 @@ final class AccountUsageTests: XCTestCase {
 
     func testCopilotUsesTheGitHubSignIn() {
         var authorization: String?
-        let usage = AccountUsageFetcher.fetch(agent: "copilot", environment: environment(
-            shell: ["gh auth token 2>/dev/null": "some shell greeting\ngho_abc\n"],
-            answers: ["https://api.github.com/copilot_internal/user": (200, #"{"quota_snapshots":{"premium_interactions":{"percent_remaining":50,"remaining":150,"entitlement":300}}}"#)],
-            asked: { authorization = $0.value(forHTTPHeaderField: "Authorization") }
-        ))
+        let usage = AccountUsageFetcher.fetch(
+            agent: "copilot",
+            environment: environment(
+                shell: ["gh auth token 2>/dev/null": "some shell greeting\ngho_abc\n"],
+                answers: ["https://api.github.com/copilot_internal/user": (200, #"{"quota_snapshots":{"premium_interactions":{"percent_remaining":50,"remaining":150,"entitlement":300}}}"#)],
+                asked: { authorization = $0.value(forHTTPHeaderField: "Authorization") }
+            ))
         XCTAssertEqual(authorization, "token gho_abc")
         XCTAssertEqual(usage?.limits.first?.detail, "150 of 300 left")
     }
@@ -193,31 +212,37 @@ final class AccountUsageTests: XCTestCase {
 
     func testAntigravityListsEachGroupOfModels() {
         let summary = #"""
-        {"groups":[
-          {"displayName":"Gemini Models","description":"Models within this group: Gemini Flash, Gemini Pro","buckets":[
-            {"bucketId":"gemini-weekly","displayName":"Weekly Limit Remaining","window":"weekly","resetTime":"2026-11-18T09:17:13Z","remainingFraction":0.5317},
-            {"bucketId":"gemini-5h","displayName":"Five Hour Limit Remaining","window":"5h","resetTime":"2026-11-11T14:17:13Z","remainingFraction":1}]},
-          {"displayName":"Claude and GPT models","buckets":[
-            {"bucketId":"3p-weekly","displayName":"Weekly Limit Remaining","window":"weekly","resetTime":"2026-11-18T09:17:13Z","remainingFraction":1},
-            {"bucketId":"off","displayName":"Unused","window":"5h","disabled":true,"remainingFraction":1}]}]}
-        """#
+            {"groups":[
+              {"displayName":"Gemini Models","description":"Models within this group: Gemini Flash, Gemini Pro","buckets":[
+                {"bucketId":"gemini-weekly","displayName":"Weekly Limit Remaining","window":"weekly","resetTime":"2026-11-18T09:17:13Z","remainingFraction":0.5317},
+                {"bucketId":"gemini-5h","displayName":"Five Hour Limit Remaining","window":"5h","resetTime":"2026-11-11T14:17:13Z","remainingFraction":1}]},
+              {"displayName":"Claude and GPT models","buckets":[
+                {"bucketId":"3p-weekly","displayName":"Weekly Limit Remaining","window":"weekly","resetTime":"2026-11-18T09:17:13Z","remainingFraction":1},
+                {"bucketId":"off","displayName":"Unused","window":"5h","disabled":true,"remainingFraction":1}]}]}
+            """#
         var bodies: [String: [String: Any]] = [:]
         // go-keyring wraps what it stores.
-        let login = "go-keyring-base64:" + Data(#"{"token":{"access_token":"tok-agy","refresh_token":"never-used","expiry":"2026-11-11T17:14:36.636828+07:00"},"auth_method":"oauth"}"#.utf8).base64EncodedString()
-        let usage = AccountUsageFetcher.fetch(agent: "agy", environment: environment(
-            keychain: ["gemini/antigravity": login],
-            shell: ["agy --version 2>/dev/null": "1.6.0\n"],
-            answers: [
-                "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist": (200, #"{"cloudaicompanionProject":"proj-1","currentTier":{"name":"Antigravity"},"paidTier":{"name":"Google AI Pro"}}"#),
-                "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary": (200, summary),
-            ],
-            asked: { request in
-                XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer tok-agy")
-                XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "antigravity/cli/1.6.0 darwin/arm64")
-                XCTAssertTrue(request.url?.host?.hasSuffix("cloudcode-pa.googleapis.com") == true)
-                bodies[request.url?.absoluteString ?? ""] = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-            }
-        ))
+        let login =
+            "go-keyring-base64:"
+            + Data(#"{"token":{"access_token":"tok-agy","refresh_token":"never-used","expiry":"2026-11-11T17:14:36.636828+07:00"},"auth_method":"oauth"}"#.utf8).base64EncodedString()
+        let usage = AccountUsageFetcher.fetch(
+            agent: "agy",
+            environment: environment(
+                keychain: ["gemini/antigravity": login],
+                shell: ["agy --version 2>/dev/null": "1.6.0\n"],
+                answers: [
+                    "https://cloudcode-pa.googleapis.com/v1internal:loadCodeAssist": (
+                        200, #"{"cloudaicompanionProject":"proj-1","currentTier":{"name":"Antigravity"},"paidTier":{"name":"Google AI Pro"}}"#
+                    ),
+                    "https://daily-cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary": (200, summary),
+                ],
+                asked: { request in
+                    XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer tok-agy")
+                    XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), "antigravity/cli/1.6.0 darwin/arm64")
+                    XCTAssertTrue(request.url?.host?.hasSuffix("cloudcode-pa.googleapis.com") == true)
+                    bodies[request.url?.absoluteString ?? ""] = request.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+                }
+            ))
         XCTAssertEqual(usage?.plan, "Google AI Pro")
         XCTAssertEqual(usage?.groups.map(\.title), ["Gemini Models", "Claude and GPT models"])
         XCTAssertEqual(usage?.groups.first?.limits.map(\.title), ["Five Hour Limit", "Weekly Limit"], "the short limit comes before the week")

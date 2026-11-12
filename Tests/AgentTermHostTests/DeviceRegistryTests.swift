@@ -1,5 +1,6 @@
-@testable import AgentTermHost
 import XCTest
+
+@testable import AgentTermHost
 
 final class DeviceRegistryTests: XCTestCase {
     private var clock = Date(timeIntervalSince1970: 1_800_000_000)

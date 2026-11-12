@@ -306,8 +306,10 @@ public struct MarkdownPreview: View {
 
     public var body: some View {
         ScrollView {
-            Markdown(text, baseURL: baseURL)
+            // HTML mixed into the Markdown is turned into Markdown first.
+            Markdown(MarkdownHTML.flatten(text), baseURL: baseURL)
                 .markdownTheme(Self.theme)
+                .markdownImageProvider(PreviewImageProvider())
                 .markdownCodeSyntaxHighlighter(PreviewCodeHighlighter())
                 .textSelection(.enabled)
                 .padding(16)

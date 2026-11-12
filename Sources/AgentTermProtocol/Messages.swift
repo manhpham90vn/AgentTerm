@@ -3,6 +3,20 @@ import Foundation
 /// Version of the wire protocol. Bumped on incompatible changes.
 public let agenttermProtocolVersion = 5
 
+/// How the version a host speaks compares with this build's. The two apps
+/// of one release speak the same; anything else is not supported together.
+public enum ProtocolMatch: Equatable, Sendable {
+    case same
+    /// The host is from an older release than this app.
+    case hostOlder
+    /// The host is from a newer release than this app.
+    case hostNewer
+
+    public init(host: Int, own: Int = agenttermProtocolVersion) {
+        self = host == own ? .same : (host < own ? .hostOlder : .hostNewer)
+    }
+}
+
 /// Default TCP port the host daemon listens on.
 public var agenttermDefaultPort: UInt16 { AppChannel.current.defaultPort }
 

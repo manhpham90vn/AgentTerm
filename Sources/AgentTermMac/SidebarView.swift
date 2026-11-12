@@ -15,7 +15,9 @@ struct SidebarView: View {
                     .font(.system(size: 11, weight: .semibold))
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button { model.addFolder() } label: {
+                Button {
+                    model.addFolder()
+                } label: {
                     Image(systemName: "plus").font(.system(size: 12, weight: .semibold))
                 }
                 .buttonStyle(.plain)
@@ -307,7 +309,9 @@ struct SessionRow: View {
                     .help("Sized for another device")
             }
             if hovering, let agent = model.agentID(of: session), !model.handoffTargets(from: agent).isEmpty {
-                Button { model.requestHandoff(session: session) } label: {
+                Button {
+                    model.requestHandoff(session: session)
+                } label: {
                     Image(systemName: "arrowshape.turn.up.right.fill").font(.system(size: 9.5))
                 }
                 .buttonStyle(.plain)
@@ -315,7 +319,9 @@ struct SessionRow: View {
                 .help("Give this session's work to another agent")
             }
             if hovering {
-                Button { model.close(session.id) } label: {
+                Button {
+                    model.close(session.id)
+                } label: {
                     Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
                 }
                 .buttonStyle(.plain)
@@ -348,9 +354,10 @@ private struct SettingsRowLabel: View {
             Text("Settings")
                 .font(.system(size: 13, weight: .medium))
             Spacer(minLength: 0)
-            Text("⌘,")
+            Text(AppVersion.current == "dev" ? "dev" : "v" + AppVersion.current)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundStyle(.tertiary)
+                .help("\(AppVersion.label), protocol \(agenttermProtocolVersion)")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 7)

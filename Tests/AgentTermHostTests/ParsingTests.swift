@@ -1,15 +1,16 @@
 import AgentTermProtocol
-@testable import AgentTermHost
 import XCTest
+
+@testable import AgentTermHost
 
 final class ParsingTests: XCTestCase {
     func testAgentDetectionOutput() {
         let output = """
-        some shell startup noise
-        AGENTTERM_AGENT:claude=/Users/me/.local/bin/claude
-        AGENTTERM_AGENT:codex=
-        AGENTTERM_AGENT:agy=/opt/homebrew/bin/agy
-        """
+            some shell startup noise
+            AGENTTERM_AGENT:claude=/Users/me/.local/bin/claude
+            AGENTTERM_AGENT:codex=
+            AGENTTERM_AGENT:agy=/opt/homebrew/bin/agy
+            """
         let agents = AgentDetector.parse(output)
         XCTAssertEqual(agents.map(\.id), ["claude", "codex", "agy", "copilot"])
         XCTAssertEqual(agents[0].path, "/Users/me/.local/bin/claude")
@@ -20,28 +21,28 @@ final class ParsingTests: XCTestCase {
 
     func testDiffIsSplitPerFile() {
         let text = """
-        diff --git a/Sources/App.swift b/Sources/App.swift
-        index 1111111..2222222 100644
-        --- a/Sources/App.swift
-        +++ b/Sources/App.swift
-        @@ -1,3 +1,4 @@
-         import Foundation
-        -let a = 1
-        +let a = 2
-        +let b = 3
-        diff --git a/old.txt b/old.txt
-        deleted file mode 100644
-        index 3333333..0000000
-        --- a/old.txt
-        +++ /dev/null
-        @@ -1,2 +0,0 @@
-        -one
-        -two
-        diff --git a/logo.png b/logo.png
-        index 4444444..5555555 100644
-        Binary files a/logo.png and b/logo.png differ
+            diff --git a/Sources/App.swift b/Sources/App.swift
+            index 1111111..2222222 100644
+            --- a/Sources/App.swift
+            +++ b/Sources/App.swift
+            @@ -1,3 +1,4 @@
+             import Foundation
+            -let a = 1
+            +let a = 2
+            +let b = 3
+            diff --git a/old.txt b/old.txt
+            deleted file mode 100644
+            index 3333333..0000000
+            --- a/old.txt
+            +++ /dev/null
+            @@ -1,2 +0,0 @@
+            -one
+            -two
+            diff --git a/logo.png b/logo.png
+            index 4444444..5555555 100644
+            Binary files a/logo.png and b/logo.png differ
 
-        """
+            """
         let files = GitDiff.parse(text)
         XCTAssertEqual(files.map(\.path), ["Sources/App.swift", "old.txt", "logo.png"])
         XCTAssertEqual(files[0].added, 2)
@@ -96,17 +97,19 @@ final class ParsingTests: XCTestCase {
             file("docs/guide/deep/notes.md"),
         ]
         let rows = DiffTree.rows(for: files)
-        XCTAssertEqual(rows.map(\.id), [
-            "docs/guide/deep/",
-            "docs/guide/deep/notes.md",
-            "Sources/",
-            "Sources/AgentTermHost/",
-            "Sources/AgentTermHost/DiffTree.swift",
-            "Sources/AgentTermHost/GitDiff.swift",
-            "Sources/AgentTermMac/",
-            "Sources/AgentTermMac/DiffView.swift",
-            "README.md",
-        ])
+        XCTAssertEqual(
+            rows.map(\.id),
+            [
+                "docs/guide/deep/",
+                "docs/guide/deep/notes.md",
+                "Sources/",
+                "Sources/AgentTermHost/",
+                "Sources/AgentTermHost/DiffTree.swift",
+                "Sources/AgentTermHost/GitDiff.swift",
+                "Sources/AgentTermMac/",
+                "Sources/AgentTermMac/DiffView.swift",
+                "README.md",
+            ])
         XCTAssertEqual(rows.map(\.depth), [0, 1, 0, 1, 2, 2, 1, 2, 0])
         // A chain of single folders is one row.
         XCTAssertEqual(rows[0].name, "docs/guide/deep")
@@ -151,34 +154,34 @@ final class ParsingTests: XCTestCase {
     func testEmulatorAnswersAreToldApartFromTyping() {
         func data(_ text: String) -> Data { Data(text.replacingOccurrences(of: "ESC", with: "\u{1b}").utf8) }
         let answers = [
-            "ESC[24;80R",            // cursor position
-            "ESC[?1;2c",             // primary device attributes
-            "ESC[>0;276;0c",         // secondary device attributes
-            "ESC[0n",                // status ok
-            "ESC[?2026;2$y",         // mode report
-            "ESC[?1u",               // keyboard protocol flags
-            "ESC[8;50;112t",         // window size in cells
-            "ESC[I", "ESC[O",        // focus in and out
-            "ESC[<35;10;5M",         // the pointer moving with no button held
-            "ESC]11;rgb:1313/1414/1919ESC\\",   // background color, ST terminated
-            "ESC]10;rgb:dcdc/dede/e6e6\u{07}",   // foreground color, BEL terminated
-            "ESCP>|SwiftTerm 1.0ESC\\",          // terminal version
-            "ESC[?1;2cESC[24;80RESC]11;rgb:0/0/0\u{07}", // several at once
+            "ESC[24;80R",  // cursor position
+            "ESC[?1;2c",  // primary device attributes
+            "ESC[>0;276;0c",  // secondary device attributes
+            "ESC[0n",  // status ok
+            "ESC[?2026;2$y",  // mode report
+            "ESC[?1u",  // keyboard protocol flags
+            "ESC[8;50;112t",  // window size in cells
+            "ESC[I", "ESC[O",  // focus in and out
+            "ESC[<35;10;5M",  // the pointer moving with no button held
+            "ESC]11;rgb:1313/1414/1919ESC\\",  // background color, ST terminated
+            "ESC]10;rgb:dcdc/dede/e6e6\u{07}",  // foreground color, BEL terminated
+            "ESCP>|SwiftTerm 1.0ESC\\",  // terminal version
+            "ESC[?1;2cESC[24;80RESC]11;rgb:0/0/0\u{07}",  // several at once
         ]
         for answer in answers {
             XCTAssertTrue(TerminalReply.isReply(data(answer)), answer)
         }
         let typing = [
             "a", "\r", "ESC", "ESC[A", "ESC[1;5C", "ESC[3~", "ESC[Z", "ESCOR", "ESC[R",
-            "ESC[<0;10;5M",          // mouse press
-            "ESC[<0;10;5m",          // mouse release
-            "ESC[<32;10;5M",         // dragging with the left button held
-            "ESC[<64;10;5M",         // scroll wheel
-            "ESC[97u",               // a key in the kitty protocol
+            "ESC[<0;10;5M",  // mouse press
+            "ESC[<0;10;5m",  // mouse release
+            "ESC[<32;10;5M",  // dragging with the left button held
+            "ESC[<64;10;5M",  // scroll wheel
+            "ESC[97u",  // a key in the kitty protocol
             "ESC[200~pasted textESC[201~",
             "xin chào",
-            "ESC[24;80Rx",           // an answer followed by a real key
-            "ESC]11;rgb:0/0/0",      // unterminated
+            "ESC[24;80Rx",  // an answer followed by a real key
+            "ESC]11;rgb:0/0/0",  // unterminated
             "",
         ]
         for input in typing {
@@ -189,8 +192,9 @@ final class ParsingTests: XCTestCase {
     // MARK: Naming sessions after their conversations
 
     private func conversation(_ id: String, agent: String = "claude", cwd: String = "/p", started: TimeInterval?, updated: TimeInterval, title: String? = nil) -> Conversation {
-        Conversation(agent: agent, sessionID: id, title: title ?? "about \(id)", updatedAt: Date(timeIntervalSince1970: updated), cwd: cwd,
-                     startedAt: started.map(Date.init(timeIntervalSince1970:)))
+        Conversation(
+            agent: agent, sessionID: id, title: title ?? "about \(id)", updatedAt: Date(timeIntervalSince1970: updated), cwd: cwd,
+            startedAt: started.map(Date.init(timeIntervalSince1970:)))
     }
 
     private func running(_ id: SessionID, agent: String = "claude", cwd: String = "/p", created: TimeInterval, known: String? = nil) -> SessionSummaries.Running {
@@ -209,7 +213,7 @@ final class ParsingTests: XCTestCase {
 
     func testASessionGetsTheConversationThatBeganAfterIt() {
         let conversations = [
-            conversation("old", started: 100, updated: 5_000),   // touched lately, but began long before
+            conversation("old", started: 100, updated: 5_000),  // touched lately, but began long before
             conversation("mine", started: 1_010, updated: 1_500),
             conversation("other-agent", agent: "codex", started: 1_005, updated: 1_400),
             conversation("other-folder", cwd: "/q", started: 1_005, updated: 1_400),

@@ -32,3 +32,15 @@ public enum AppChannel: String, Sendable {
 
     public static let linkSchemes: Set<String> = [AppChannel.release.linkScheme, AppChannel.dev.linkScheme]
 }
+
+/// The version of the app that is running, as its bundle states it. Every
+/// build takes it from the `VERSION` file at the root of the repository.
+public enum AppVersion {
+    /// "0.2.0", or "dev" for a program run outside an app bundle.
+    public static var current: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "dev"
+    }
+
+    /// "AgentTerm 0.2.0".
+    public static var label: String { "\(AppChannel.current.appName) \(current)" }
+}

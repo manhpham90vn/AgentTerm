@@ -14,13 +14,17 @@ struct SessionsView: View {
                 LazyVStack(alignment: .leading, spacing: 22) {
                     if model.status != .connected {
                         StatusCard()
+                    } else if model.hostMatch != .same {
+                        VersionCard(match: model.hostMatch)
                     }
                     ForEach(model.groups) { group in
                         FolderSection(group: group)
                     }
                     if model.status == .connected {
                         // Any folder on the Mac, not only the listed ones.
-                        Button { model.showBrowser = true } label: {
+                        Button {
+                            model.showBrowser = true
+                        } label: {
                             Label("Open Another Folder…", systemImage: "folder.badge.plus")
                                 .font(.subheadline.weight(.medium))
                                 .frame(maxWidth: .infinity)
@@ -40,6 +44,12 @@ struct SessionsView: View {
                             .foregroundStyle(.secondary)
                             .padding(.horizontal, 4)
                     }
+                    Text("\(AppVersion.label) · protocol \(agenttermProtocolVersion)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 4)
+                        .accessibilityIdentifier("app-version")
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 8)
@@ -53,15 +63,29 @@ struct SessionsView: View {
                         // Every paired Mac, to switch between them.
                         Section("Macs") {
                             ForEach(model.hosts) { host in
-                                Button { model.select(host) } label: {
+                                Button {
+                                    model.select(host)
+                                } label: {
                                     Label(host.name, systemImage: host.id == model.pairing?.id ? "checkmark" : "desktopcomputer")
                                 }
                             }
-                            Button { model.showPairSheet = true } label: { Label("Pair Another Mac…", systemImage: "plus") }
+                            Button {
+                                model.showPairSheet = true
+                            } label: {
+                                Label("Pair Another Mac…", systemImage: "plus")
+                            }
                         }
                         NavigationLink(value: Route.allHistory) { Label("All Conversations", systemImage: "clock.arrow.circlepath") }
-                        Button { model.refreshAgents() } label: { Label("Check Agents Again", systemImage: "arrow.clockwise") }
-                        Button(role: .destructive) { confirmingForget = true } label: { Label("Forget This Mac", systemImage: "xmark.circle") }
+                        Button {
+                            model.refreshAgents()
+                        } label: {
+                            Label("Check Agents Again", systemImage: "arrow.clockwise")
+                        }
+                        Button(role: .destructive) {
+                            confirmingForget = true
+                        } label: {
+                            Label("Forget This Mac", systemImage: "xmark.circle")
+                        }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
@@ -124,6 +148,36 @@ struct SessionsView: View {
     }
 }
 
+/// Shown when the Mac's AgentTerm and this app are of different versions.
+private struct VersionCard: View {
+    @EnvironmentObject private var model: PhoneModel
+    let match: ProtocolMatch
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(match == .hostOlder ? "AgentTerm on \(model.pairing?.name ?? "the Mac") is an older version" : "This app is older than AgentTerm on \(model.pairing?.name ?? "the Mac")")
+                    .font(.subheadline.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(
+                    match == .hostOlder
+                        ? "Update AgentTerm on the Mac. If it was just updated, restart its host there. Until then some things will not work."
+                        : "Update this app to the version that goes with the Mac's. Until then some things will not work."
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.yellow.opacity(0.12)))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("version-card")
+    }
+}
+
 private struct StatusCard: View {
     @EnvironmentObject private var model: PhoneModel
 
@@ -170,30 +224,52 @@ private struct FolderSection: View {
     private func arrangeMenu(_ session: SessionInfo) -> some View {
         let id = session.layoutID
         let layout = model.sessionLayout
-        Button { withAnimation { model.sessionLayout.setPinned(id, !layout.isPinned(id)) } } label: {
+        Button {
+            withAnimation { model.sessionLayout.setPinned(id, !layout.isPinned(id)) }
+        } label: {
             Label(layout.isPinned(id) ? "Unpin" : "Pin", systemImage: layout.isPinned(id) ? "pin.slash" : "pin")
         }
-        Button { withAnimation { _ = model.sessionLayout.newGroup(with: id) } } label: { Label("Add to New Group", systemImage: "plus.rectangle.on.rectangle") }
+        Button {
+            withAnimation { _ = model.sessionLayout.newGroup(with: id) }
+        } label: {
+            Label("Add to New Group", systemImage: "plus.rectangle.on.rectangle")
+        }
         let others = layout.groups.filter { $0.id != layout.group(of: id)?.id }
         if !others.isEmpty {
             Menu {
                 ForEach(others) { other in
                     Button(other.name.isEmpty ? "Group" : other.name) { withAnimation { model.sessionLayout.add(id, toGroup: other.id) } }
                 }
-            } label: { Label("Add to Group", systemImage: "rectangle.stack") }
+            } label: {
+                Label("Add to Group", systemImage: "rectangle.stack")
+            }
         }
         if layout.group(of: id) != nil {
-            Button { withAnimation { model.sessionLayout.removeFromGroup(id) } } label: { Label("Remove from Group", systemImage: "rectangle.stack.badge.minus") }
+            Button {
+                withAnimation { model.sessionLayout.removeFromGroup(id) }
+            } label: {
+                Label("Remove from Group", systemImage: "rectangle.stack.badge.minus")
+            }
         }
-        Button { withAnimation { model.move(session, by: -1, in: group) } } label: { Label("Move Up", systemImage: "arrow.up") }
-            .disabled(!model.canMove(session, by: -1, in: group))
-        Button { withAnimation { model.move(session, by: 1, in: group) } } label: { Label("Move Down", systemImage: "arrow.down") }
-            .disabled(!model.canMove(session, by: 1, in: group))
+        Button {
+            withAnimation { model.move(session, by: -1, in: group) }
+        } label: {
+            Label("Move Up", systemImage: "arrow.up")
+        }
+        .disabled(!model.canMove(session, by: -1, in: group))
+        Button {
+            withAnimation { model.move(session, by: 1, in: group) }
+        } label: {
+            Label("Move Down", systemImage: "arrow.down")
+        }
+        .disabled(!model.canMove(session, by: 1, in: group))
     }
 
     private func groupLabel(_ tabGroup: TabGroup, count: Int) -> some View {
         let color = GroupColor.color(tabGroup.color)
-        return Button { withAnimation { model.sessionLayout.toggleCollapsed(tabGroup.id) } } label: {
+        return Button {
+            withAnimation { model.sessionLayout.toggleCollapsed(tabGroup.id) }
+        } label: {
             HStack(spacing: 8) {
                 Image(systemName: tabGroup.isCollapsed ? "chevron.right" : "chevron.down")
                     .font(.system(size: 10, weight: .bold))
@@ -217,16 +293,28 @@ private struct FolderSection: View {
             Button {
                 newName = tabGroup.name
                 renaming = tabGroup
-            } label: { Label("Rename Group…", systemImage: "pencil") }
+            } label: {
+                Label("Rename Group…", systemImage: "pencil")
+            }
             // A picker, so the menu ticks the color in use. The dots are
             // images with their own color; a menu tints symbols otherwise.
             Picker(selection: Binding(get: { tabGroup.color }, set: { model.sessionLayout.setColor($0, of: tabGroup.id) })) {
                 ForEach(TabLayout.colors, id: \.self) { name in
-                    Label { Text(name.capitalized) } icon: { Image(uiImage: GroupColor.swatch(name)) }.tag(name)
+                    Label {
+                        Text(name.capitalized)
+                    } icon: {
+                        Image(uiImage: GroupColor.swatch(name))
+                    }.tag(name)
                 }
-            } label: { Label("Color", systemImage: "paintpalette") }
+            } label: {
+                Label("Color", systemImage: "paintpalette")
+            }
             .pickerStyle(.menu)
-            Button { withAnimation { model.sessionLayout.ungroup(tabGroup.id) } } label: { Label("Ungroup", systemImage: "rectangle.stack.badge.minus") }
+            Button {
+                withAnimation { model.sessionLayout.ungroup(tabGroup.id) }
+            } label: {
+                Label("Ungroup", systemImage: "rectangle.stack.badge.minus")
+            }
         }
     }
 
@@ -265,36 +353,44 @@ private struct FolderSection: View {
 
             VStack(spacing: 0) {
                 ForEach(model.items(for: group)) { item in
-                  switch item {
-                  case .label(let tabGroup, let count):
-                    groupLabel(tabGroup, count: count)
-                        .onDrop(of: [.text], delegate: SessionDropDelegate(place: .group(tabGroup.id), model: model, dropTarget: $dropTarget))
-                    Palette.hairline.frame(height: 1)
-                  case .session(let session):
-                    NavigationLink(value: Route.session(session.id)) {
-                        SessionRow(session: session)
-                    }
-                    .buttonStyle(.plain)
-                    .overlay(alignment: .top) {
-                        // Where a dragged session will land.
-                        if dropTarget == session.layoutID { Palette.tint.frame(height: 2.5) }
-                    }
-                    .onDrag {
-                        model.draggedFolder = nil
-                        model.draggedSession = session.layoutID
-                        return NSItemProvider(object: session.layoutID as NSString)
-                    }
-                    .onDrop(of: [.text], delegate: SessionDropDelegate(place: .before(session.layoutID), model: model, dropTarget: $dropTarget))
-                    .contextMenu {
-                        arrangeMenu(session)
-                        Divider()
-                        if model.canHandOff(session) {
-                            Button { model.requestHandoff(session: session) } label: { Label("Hand Off…", systemImage: "arrowshape.turn.up.right") }
+                    switch item {
+                    case .label(let tabGroup, let count):
+                        groupLabel(tabGroup, count: count)
+                            .onDrop(of: [.text], delegate: SessionDropDelegate(place: .group(tabGroup.id), model: model, dropTarget: $dropTarget))
+                        Palette.hairline.frame(height: 1)
+                    case .session(let session):
+                        NavigationLink(value: Route.session(session.id)) {
+                            SessionRow(session: session)
                         }
-                        Button(role: .destructive) { model.end(session.id) } label: { Label("End Session", systemImage: "xmark.circle") }
+                        .buttonStyle(.plain)
+                        .overlay(alignment: .top) {
+                            // Where a dragged session will land.
+                            if dropTarget == session.layoutID { Palette.tint.frame(height: 2.5) }
+                        }
+                        .onDrag {
+                            model.draggedFolder = nil
+                            model.draggedSession = session.layoutID
+                            return NSItemProvider(object: session.layoutID as NSString)
+                        }
+                        .onDrop(of: [.text], delegate: SessionDropDelegate(place: .before(session.layoutID), model: model, dropTarget: $dropTarget))
+                        .contextMenu {
+                            arrangeMenu(session)
+                            Divider()
+                            if model.canHandOff(session) {
+                                Button {
+                                    model.requestHandoff(session: session)
+                                } label: {
+                                    Label("Hand Off…", systemImage: "arrowshape.turn.up.right")
+                                }
+                            }
+                            Button(role: .destructive) {
+                                model.end(session.id)
+                            } label: {
+                                Label("End Session", systemImage: "xmark.circle")
+                            }
+                        }
+                        Palette.hairline.frame(height: 1).padding(.leading, 38)
                     }
-                    Palette.hairline.frame(height: 1).padding(.leading, 38)
-                  }
                 }
                 LaunchRow(folder: group.path)
             }
@@ -367,11 +463,23 @@ private struct FolderArranging: ViewModifier {
                 }
                 .onDrop(of: [.text], delegate: FolderDropDelegate(before: path, model: model, dropTarget: $dropTarget))
                 .contextMenu {
-                    Button { model.moveFolder(path, by: -1) } label: { Label("Move Up", systemImage: "arrow.up") }
-                        .disabled(!model.canMoveFolder(path, by: -1))
-                    Button { model.moveFolder(path, by: 1) } label: { Label("Move Down", systemImage: "arrow.down") }
-                        .disabled(!model.canMoveFolder(path, by: 1))
-                    Button(role: .destructive) { model.removeFolder(path) } label: { Label("Remove from List", systemImage: "minus.circle") }
+                    Button {
+                        model.moveFolder(path, by: -1)
+                    } label: {
+                        Label("Move Up", systemImage: "arrow.up")
+                    }
+                    .disabled(!model.canMoveFolder(path, by: -1))
+                    Button {
+                        model.moveFolder(path, by: 1)
+                    } label: {
+                        Label("Move Down", systemImage: "arrow.down")
+                    }
+                    .disabled(!model.canMoveFolder(path, by: 1))
+                    Button(role: .destructive) {
+                        model.removeFolder(path)
+                    } label: {
+                        Label("Remove from List", systemImage: "minus.circle")
+                    }
                 }
         } else {
             content

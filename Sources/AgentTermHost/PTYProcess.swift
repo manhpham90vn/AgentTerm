@@ -18,8 +18,8 @@ public enum PTYError: Error, CustomStringConvertible {
 
 // These ioctl request codes are function-like macros in C and are not
 // imported into Swift.
-private let ioctlSetWindowSize: UInt = 0x8008_7467 // TIOCSWINSZ
-private let ioctlGetWindowSize: UInt = 0x4008_7468 // TIOCGWINSZ
+private let ioctlSetWindowSize: UInt = 0x8008_7467  // TIOCSWINSZ
+private let ioctlGetWindowSize: UInt = 0x4008_7468  // TIOCGWINSZ
 
 /// A child process attached to a pseudo terminal.
 ///

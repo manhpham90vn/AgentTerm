@@ -6,6 +6,7 @@ DerivedData/
 .DS_Store
 dist/
 iOS/AgentTerm/Info.plist
+iOS/Version.xcconfig
 
 # fastlane
 fastlane/report.xml

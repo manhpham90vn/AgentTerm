@@ -52,14 +52,30 @@ struct TerminalScreen: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button { model.changeFontSize(by: 1) } label: { Label("Larger Text", systemImage: "textformat.size.larger") }
-                    Button { model.changeFontSize(by: -1) } label: { Label("Smaller Text", systemImage: "textformat.size.smaller") }
+                    Button {
+                        model.changeFontSize(by: 1)
+                    } label: {
+                        Label("Larger Text", systemImage: "textformat.size.larger")
+                    }
+                    Button {
+                        model.changeFontSize(by: -1)
+                    } label: {
+                        Label("Smaller Text", systemImage: "textformat.size.smaller")
+                    }
                     if let info = model.session(session), model.canHandOff(info) {
                         Divider()
-                        Button { model.requestHandoff(session: info) } label: { Label("Hand Off…", systemImage: "arrowshape.turn.up.right") }
+                        Button {
+                            model.requestHandoff(session: info)
+                        } label: {
+                            Label("Hand Off…", systemImage: "arrowshape.turn.up.right")
+                        }
                     }
                     Divider()
-                    Button(role: .destructive) { confirmingEnd = true } label: { Label("End Session", systemImage: "xmark.circle") }
+                    Button(role: .destructive) {
+                        confirmingEnd = true
+                    } label: {
+                        Label("End Session", systemImage: "xmark.circle")
+                    }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }

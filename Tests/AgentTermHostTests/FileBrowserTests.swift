@@ -1,5 +1,6 @@
-@testable import AgentTermHost
 import XCTest
+
+@testable import AgentTermHost
 
 final class FileBrowserTests: XCTestCase {
     private var root: URL!

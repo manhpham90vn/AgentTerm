@@ -96,35 +96,36 @@ private struct MermaidWebView: WebViewRepresentable {
                 return
             }
             // As text in the page: "<" in a diagram must not become a tag.
-            let escaped = code
+            let escaped =
+                code
                 .replacingOccurrences(of: "&", with: "&amp;")
                 .replacingOccurrences(of: "<", with: "&lt;")
                 .replacingOccurrences(of: ">", with: "&gt;")
             let html = """
-            <!doctype html>
-            <html><head><meta charset="utf-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1">
-            <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data:; font-src data:">
-            <style>
-              html, body { margin: 0; background: transparent; color: #d9dbe2; font: 13px -apple-system, sans-serif; }
-              #diagram { padding: 8px 0; text-align: center; }
-              #diagram svg { max-width: 100%; height: auto; }
-              #error { color: #f5787a; white-space: pre-wrap; text-align: left; font: 12px ui-monospace, monospace; }
-            </style></head>
-            <body>
-            <pre id="source" hidden>\(escaped)</pre>
-            <div id="diagram"></div>
-            <script>\(library)</script>
-            <script>
-              const report = () => window.webkit.messageHandlers.size.postMessage(Math.ceil(document.documentElement.scrollHeight));
-              const target = document.getElementById('diagram');
-              mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' });
-              mermaid.render('graph', document.getElementById('source').textContent)
-                .then(result => { target.innerHTML = result.svg; report(); })
-                .catch(error => { target.innerHTML = '<div id="error"></div>'; document.getElementById('error').textContent = 'This diagram has an error:\\n' + (error.message || error); report(); });
-            </script>
-            </body></html>
-            """
+                <!doctype html>
+                <html><head><meta charset="utf-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1">
+                <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data:; font-src data:">
+                <style>
+                  html, body { margin: 0; background: transparent; color: #d9dbe2; font: 13px -apple-system, sans-serif; }
+                  #diagram { padding: 8px 0; text-align: center; }
+                  #diagram svg { max-width: 100%; height: auto; }
+                  #error { color: #f5787a; white-space: pre-wrap; text-align: left; font: 12px ui-monospace, monospace; }
+                </style></head>
+                <body>
+                <pre id="source" hidden>\(escaped)</pre>
+                <div id="diagram"></div>
+                <script>\(library)</script>
+                <script>
+                  const report = () => window.webkit.messageHandlers.size.postMessage(Math.ceil(document.documentElement.scrollHeight));
+                  const target = document.getElementById('diagram');
+                  mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'strict' });
+                  mermaid.render('graph', document.getElementById('source').textContent)
+                    .then(result => { target.innerHTML = result.svg; report(); })
+                    .catch(error => { target.innerHTML = '<div id="error"></div>'; document.getElementById('error').textContent = 'This diagram has an error:\\n' + (error.message || error); report(); });
+                </script>
+                </body></html>
+                """
             webView.loadHTMLString(html, baseURL: nil)
         }
 

@@ -43,7 +43,8 @@ public enum Tailscale {
         var backendState: String?
         var dnsName: String?
         if let cli, let result = Subprocess.run(cli, ["status", "--json"], timeout: 4),
-           let json = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any] {
+            let json = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any]
+        {
             backendState = json["BackendState"] as? String
             dnsName = (json["Self"] as? [String: Any])?["DNSName"] as? String
         }
@@ -71,7 +72,7 @@ public enum Tailscale {
         while let entry = cursor {
             defer { cursor = entry.pointee.ifa_next }
             guard let address = entry.pointee.ifa_addr, address.pointee.sa_family == sa_family_t(AF_INET),
-                  entry.pointee.ifa_flags & UInt32(IFF_UP) != 0
+                entry.pointee.ifa_flags & UInt32(IFF_UP) != 0
             else { continue }
             let raw = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { UInt32(bigEndian: $0.pointee.sin_addr.s_addr) }
             if raw & 0xFFC0_0000 == 0x6440_0000 {
@@ -85,9 +86,9 @@ public enum Tailscale {
     /// Tailscale CLI, which ships inside the app.
     public static func dnsName() -> String? {
         guard let cli, let result = Subprocess.run(cli, ["status", "--json"], timeout: 4), result.status == 0,
-              let json = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any],
-              let me = json["Self"] as? [String: Any],
-              let name = me["DNSName"] as? String
+            let json = try? JSONSerialization.jsonObject(with: result.output) as? [String: Any],
+            let me = json["Self"] as? [String: Any],
+            let name = me["DNSName"] as? String
         else { return nil }
         let trimmed = name.hasSuffix(".") ? String(name.dropLast()) : name
         return trimmed.isEmpty ? nil : trimmed

@@ -6,6 +6,10 @@ and protocol [DESIGN.md](DESIGN.md), and for releasing [RELEASE.md](RELEASE.md).
 
 ## Build and run
 
+`make` lists shortcuts for everything below (`make run`, `make test`,
+`make test-ios`, `make release`, ...). The version of both apps is the one
+line in the `VERSION` file; `make bump V=0.3.0` changes it.
+
 You need Xcode 16 or later (Swift 5.10+), and
 [XcodeGen](https://github.com/yonaskolb/XcodeGen) for the iPhone app.
 
@@ -37,6 +41,17 @@ brew install xcodegen
 The simulator has no camera, so `pair-ios.sh` pairs with a link instead of the
 QR code. On a real iPhone, run `xcodegen` in `iOS/`, open
 `iOS/AgentTerm.xcodeproj`, pick your team under Signing and run.
+
+## Formatting and lint
+
+The code is formatted with [swift-format](https://github.com/swiftlang/swift-format),
+which comes with Xcode; its settings are in `.swift-format`.
+
+```sh
+make format     # rewrite the Swift files in place
+make lint       # report what is off, change nothing; CI runs this and fails on any finding
+make check      # lint, build and test
+```
 
 ## Tests
 
@@ -72,6 +87,6 @@ paired there has to pair again.
 ## Contributing
 
 Issues and pull requests are welcome. Before opening a pull request, run
-`swift build` and `swift test`, and `./scripts/test-ios.sh` if you touched the
+`make check` (lint, build and test), and `./scripts/test-ios.sh` if you touched the
 iPhone app. Commit messages follow
 [Conventional Commits](https://www.conventionalcommits.org).

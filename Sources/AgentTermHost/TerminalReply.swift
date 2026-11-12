@@ -88,7 +88,7 @@ public enum TerminalReply {
             // window is not use of it; a click or a scroll is. Bit 32 marks
             // movement, and the low bits say 3 when no button is held.
             guard marker == nil, parameters.first == UInt8(ascii: "<"),
-                  let code = Int(String(decoding: parameters.dropFirst().prefix { $0 != UInt8(ascii: ";") }, as: UTF8.self))
+                let code = Int(String(decoding: parameters.dropFirst().prefix { $0 != UInt8(ascii: ";") }, as: UTF8.self))
             else { isReply = false; break }
             isReply = code & 32 != 0 && code & 3 == 3 && code & 64 == 0
         default:

@@ -23,6 +23,8 @@ struct RootView: View {
             VStack(spacing: 0) {
                 if let path = model.otherHost {
                     OtherHostBanner(path: path)
+                } else if model.hostMatch != .same {
+                    HostVersionBanner(match: model.hostMatch)
                 }
                 CenterView()
             }
@@ -37,7 +39,9 @@ struct RootView: View {
         .toolbar {
             // Far left: the folder list's toggle, next to the list it hides.
             ToolbarItem(placement: .navigation) {
-                Button { model.showSidebar.toggle() } label: {
+                Button {
+                    model.showSidebar.toggle()
+                } label: {
                     Label("Folders", systemImage: "sidebar.leading")
                 }
                 .help(model.showSidebar ? "Hide the folder list" : "Show the folder list")
@@ -60,7 +64,9 @@ struct RootView: View {
             // Far right: the side panel's toggle, in the corner above the
             // panel it hides.
             ToolbarItemGroup(placement: .primaryAction) {
-                Button { model.showDiff.toggle() } label: {
+                Button {
+                    model.showDiff.toggle()
+                } label: {
                     Label("Side Panel", systemImage: "sidebar.trailing")
                 }
                 .help(model.showDiff ? "Hide the side panel" : "Show the side panel")
@@ -125,7 +131,9 @@ struct PairButton: View {
     private static let tint = Color(red: 0.33, green: 0.52, blue: 0.96)
 
     var body: some View {
-        Button { model.showPairing = true } label: {
+        Button {
+            model.showPairing = true
+        } label: {
             HStack(spacing: 6) {
                 Image(systemName: "qrcode").font(.system(size: 11, weight: .bold))
                 Text("Pair iPhone").font(.system(size: 12, weight: .semibold))
@@ -180,6 +188,48 @@ struct LaunchButton: View {
 }
 
 /// Shown when the host in use belongs to another copy of the app.
+/// Shown when the host that is running speaks another version of the
+/// protocol than this app: most often the old host, still running after the
+/// app was updated.
+private struct HostVersionBanner: View {
+    @EnvironmentObject private var model: AppModel
+    let match: ProtocolMatch
+    @State private var confirming = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(match == .hostOlder ? "The host that is running is from an older version of AgentTerm." : "The host that is running is from a newer version of AgentTerm.")
+                    .font(.system(size: 12, weight: .medium))
+                Text(
+                    match == .hostOlder
+                        ? "It kept running when the app was updated. Some things will not work until it is restarted."
+                        : "Update this app, or restart the host to use this app's own. Some things will not work until then."
+                )
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Button("Restart Host…") { confirming = true }
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.yellow.opacity(0.12))
+        .confirmationDialog(
+            model.sessions.isEmpty ? "Restart the host?" : "Restart the host and end \(model.sessions.count) \(model.sessions.count == 1 ? "session" : "sessions")?",
+            isPresented: $confirming, titleVisibility: .visible
+        ) {
+            Button("Restart Host", role: .destructive) { model.restartHost() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("The running host is stopped and this app's own is started. Whatever runs in its sessions stops.")
+        }
+    }
+}
+
 private struct OtherHostBanner: View {
     @EnvironmentObject private var model: AppModel
     let path: String
@@ -354,10 +404,12 @@ struct WelcomeView: View {
             VStack(spacing: 6) {
                 Text(model.selectedFolder.map { ($0 as NSString).lastPathComponent } ?? "AgentTerm")
                     .font(.system(size: 22, weight: .semibold))
-                Text(model.selectedFolder == nil
-                     ? "Add a project folder, then start an agent in it."
-                     : "Start an agent in this folder.")
-                    .foregroundStyle(.secondary)
+                Text(
+                    model.selectedFolder == nil
+                        ? "Add a project folder, then start an agent in it."
+                        : "Start an agent in this folder."
+                )
+                .foregroundStyle(.secondary)
             }
             if model.selectedFolder == nil {
                 Button("Add Folder…") { model.addFolder() }

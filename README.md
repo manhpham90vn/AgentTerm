@@ -20,7 +20,7 @@ AgentTerm runs each agent in a real terminal owned by a small host daemon, so
 sessions keep running when the window is closed and your iPhone can attach to
 them over [Tailscale](https://tailscale.com).
 
-> **Status: beta.** Use the Mac and iPhone apps of the same release together.
+> **Status: beta.** Use matching versions of the Mac and iPhone apps; see [Compatibility](#compatibility).
 
 ## Features
 
@@ -81,6 +81,19 @@ outside your desk. At least one agent CLI installed on the Mac.
 macOS asks for permissions on behalf of what the agents do (files, automation,
 screen recording and so on). **Settings → Permissions** lists them and where to
 grant each.
+
+## Compatibility
+
+The Mac and iPhone apps talk over a versioned protocol, so use versions from
+the same row.
+
+| Mac app | iPhone app | Protocol |
+|---|---|---|
+| 0.2.x | 0.2.x | 5 |
+| 0.1.x | 0.1.x | 4 |
+
+Versions from different rows are not supported together. Update both apps
+when you update one.
 
 ## Security and privacy
 

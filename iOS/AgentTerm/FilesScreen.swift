@@ -59,11 +59,15 @@ struct FilesList: View {
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                             Spacer()
-                            Button { ask(.newFile, folder) } label: {
+                            Button {
+                                ask(.newFile, folder)
+                            } label: {
                                 Image(systemName: "doc.badge.plus").font(.system(size: 16, weight: .medium))
                             }
                             .accessibilityLabel("New File")
-                            Button { ask(.newFolder, folder) } label: {
+                            Button {
+                                ask(.newFolder, folder)
+                            } label: {
                                 Image(systemName: "folder.badge.plus").font(.system(size: 16, weight: .medium))
                             }
                             .accessibilityLabel("New Folder")
@@ -129,7 +133,9 @@ struct FilesList: View {
         let entry = row.entry
         Group {
             if entry.isDirectory {
-                Button { toggle(entry.path) } label: {
+                Button {
+                    toggle(entry.path)
+                } label: {
                     FileTreeRow(entry: entry, depth: row.depth, isExpanded: expanded.contains(entry.path), marker: nil)
                 }
                 .buttonStyle(.plain)
@@ -142,12 +148,32 @@ struct FilesList: View {
         }
         .contextMenu {
             if entry.isDirectory {
-                Button { ask(.newFile, entry.path) } label: { Label("New File…", systemImage: "doc.badge.plus") }
-                Button { ask(.newFolder, entry.path) } label: { Label("New Folder…", systemImage: "folder.badge.plus") }
+                Button {
+                    ask(.newFile, entry.path)
+                } label: {
+                    Label("New File…", systemImage: "doc.badge.plus")
+                }
+                Button {
+                    ask(.newFolder, entry.path)
+                } label: {
+                    Label("New Folder…", systemImage: "folder.badge.plus")
+                }
             }
-            Button { ask(.rename, entry.path, name: entry.name) } label: { Label("Rename…", systemImage: "pencil") }
-            Button { UIPasteboard.general.string = entry.path } label: { Label("Copy Path", systemImage: "doc.on.doc") }
-            Button(role: .destructive) { trashing = entry } label: { Label("Move to Trash", systemImage: "trash") }
+            Button {
+                ask(.rename, entry.path, name: entry.name)
+            } label: {
+                Label("Rename…", systemImage: "pencil")
+            }
+            Button {
+                UIPasteboard.general.string = entry.path
+            } label: {
+                Label("Copy Path", systemImage: "doc.on.doc")
+            }
+            Button(role: .destructive) {
+                trashing = entry
+            } label: {
+                Label("Move to Trash", systemImage: "trash")
+            }
         }
     }
 
@@ -269,8 +295,12 @@ struct DocumentScreen: View {
         .toolbar {
             if isDirty {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button { askingToLeave = true } label: { Image(systemName: "chevron.left").fontWeight(.semibold) }
-                        .accessibilityLabel("Back")
+                    Button {
+                        askingToLeave = true
+                    } label: {
+                        Image(systemName: "chevron.left").fontWeight(.semibold)
+                    }
+                    .accessibilityLabel("Back")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     if isSaving {
@@ -315,11 +345,14 @@ struct DocumentScreen: View {
                 }
             case .image:
                 if let data = file.data, let image = UIImage(data: data) {
-                    ScrollView([.vertical, .horizontal]) {
+                    // As wide as the screen and scrolling down only, so a
+                    // tall picture opens at its top.
+                    ScrollView(.vertical) {
                         Image(uiImage: image)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
-                            .frame(maxWidth: UIScreen.main.bounds.width - 32)
+                            .frame(maxWidth: min(image.size.width, UIScreen.main.bounds.width - 32))
+                            .frame(maxWidth: .infinity)
                             .padding(16)
                     }
                 } else {

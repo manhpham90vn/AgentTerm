@@ -79,7 +79,9 @@ private struct ChangesList: View {
                                 }
                                 Spacer()
                                 DiffCount(added: diff.files.reduce(0) { $0 + $1.added }, deleted: diff.files.reduce(0) { $0 + $1.deleted })
-                                Button { viewMode = isTree ? "list" : "tree" } label: {
+                                Button {
+                                    viewMode = isTree ? "list" : "tree"
+                                } label: {
                                     Image(systemName: isTree ? "list.bullet" : "list.bullet.indent")
                                         .font(.system(size: 15, weight: .semibold))
                                         .padding(.leading, 6)
@@ -191,7 +193,9 @@ private struct CommitBox: View {
                 .padding(.vertical, 10)
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.panel))
                 .accessibilityIdentifier("commit-message")
-            Button { model.commit(in: folder) } label: {
+            Button {
+                model.commit(in: folder)
+            } label: {
                 HStack(spacing: 8) {
                     if isCommitting { ProgressView().controlSize(.small) }
                     Text(stagedCount > 0 ? "Commit \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Stage Changes to Commit")
@@ -442,18 +446,20 @@ struct HistoryList: View {
                                     .padding(.horizontal, 6)
                                     .accessibilityLabel("\(section.name), \(expanded ? "expanded" : "collapsed")")
                                     if expanded {
-                                    VStack(spacing: 0) {
-                                        ForEach(section.conversations) { conversation in
-                                            Button { selected = conversation } label: {
-                                                ConversationRow(conversation: conversation, showsFolder: showsAll)
-                                            }
-                                            .buttonStyle(.plain)
-                                            if conversation.id != section.conversations.last?.id {
-                                                Palette.hairline.frame(height: 1).padding(.leading, 14)
+                                        VStack(spacing: 0) {
+                                            ForEach(section.conversations) { conversation in
+                                                Button {
+                                                    selected = conversation
+                                                } label: {
+                                                    ConversationRow(conversation: conversation, showsFolder: showsAll)
+                                                }
+                                                .buttonStyle(.plain)
+                                                if conversation.id != section.conversations.last?.id {
+                                                    Palette.hairline.frame(height: 1).padding(.leading, 14)
+                                                }
                                             }
                                         }
-                                    }
-                                    .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
+                                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
                                     }
                                 }
                             }
@@ -636,7 +642,9 @@ struct ConversationSheet: View {
                                 HStack(spacing: 8) {
                                     ForEach(targets) { agent in
                                         let selected = agent.id == target?.id
-                                        Button { targetID = agent.id } label: {
+                                        Button {
+                                            targetID = agent.id
+                                        } label: {
                                             HStack(spacing: 6) {
                                                 Image(systemName: AgentStyle.symbol(for: agent.id))
                                                     .font(.system(size: 12, weight: .semibold))

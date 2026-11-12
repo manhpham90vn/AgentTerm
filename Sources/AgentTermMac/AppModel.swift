@@ -1,9 +1,9 @@
-import Combine
 import AgentTermClient
 import AgentTermHost
 import AgentTermProtocol
 import AgentTermTerminal
 import AppKit
+import Combine
 import SwiftUI
 
 struct PairingCode: Equatable {
@@ -49,6 +49,25 @@ final class AppModel: ObservableObject {
     /// Asks the agents' services again.
     func refreshAccountUsage() {
         connection?.send(.accountUsage(refresh: true))
+    }
+
+    /// How the running host's version compares with this app's. A host
+    /// keeps running across an update of the app, so after one it can be
+    /// the old version's.
+    @Published private(set) var hostMatch = ProtocolMatch.same
+
+    /// Stops the host that is running and starts this app's own in its
+    /// place. Its sessions end with it.
+    func restartHost() {
+        let port = port
+        hostMatch = .same
+        otherHost = nil
+        otherHostPID = nil
+        launchedDaemon = false
+        connectAttempts = 0
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let listener = DaemonLauncher.listener(onPort: port) { DaemonLauncher.stop(listener.pid) }
+        }
     }
 
     /// Set when the host that answered is not the one this app ships with:
@@ -265,6 +284,7 @@ final class AppModel: ObservableObject {
             connection = nil
             controllers.removeAll()
             sessionsKnown = false
+            hostMatch = .same
             tabLayoutKnown = false
             sessions = []
             foreignSizes = [:]
@@ -301,8 +321,8 @@ final class AppModel: ObservableObject {
 
     private func handle(_ message: ServerMessage) {
         switch message {
-        case .welcome:
-            break
+        case .welcome(let version, _):
+            hostMatch = ProtocolMatch(host: version)
         case .sessions(let list):
             sessionsKnown = true
             sessions = list
@@ -585,7 +605,8 @@ final class AppModel: ObservableObject {
             let conversations = AgentHistory.conversations(in: session.cwd).filter { $0.agent == agent }
             // The host already worked out which conversation the session is
             // having; without that, the newest one since it started.
-            let newest = conversations.first { $0.sessionID == session.conversationID }
+            let newest =
+                conversations.first { $0.sessionID == session.conversationID }
                 ?? conversations.first { $0.updatedAt >= session.createdAt.addingTimeInterval(-5) }
             DispatchQueue.main.async {
                 guard let self else { return }
@@ -647,7 +668,7 @@ final class AppModel: ObservableObject {
             let found = everywhere ? AgentHistory.allConversations() : AgentHistory.conversations(in: directory ?? "")
             DispatchQueue.main.async {
                 guard let self, generation == self.historyGeneration,
-                      self.historyShowsAll == everywhere, everywhere || self.selectedFolder == directory
+                    self.historyShowsAll == everywhere, everywhere || self.selectedFolder == directory
                 else { return }
                 if self.history != found { self.history = found }
             }

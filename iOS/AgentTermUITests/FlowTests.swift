@@ -260,6 +260,10 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["Second Mac"].waitForExistence(timeout: 15), "the second Mac did not pair")
         XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["zsh"].exists, "the first Mac's session must not show under the second")
+        // The second Mac's host says it is of an older release: the phone says so.
+        let versionCard = app.descendants(matching: .any)["version-card"].firstMatch
+        XCTAssertTrue(versionCard.waitForExistence(timeout: 5), "a Mac of another version is not pointed out")
+        XCTAssertTrue(versionCard.label.contains("Second Mac is an older version"), versionCard.label)
         capture("8-second-mac")
 
         // The menu lists both, and switching goes back to the first Mac and
@@ -270,6 +274,7 @@ final class FlowTests: XCTestCase {
         app.buttons["First Mac"].tap()
         XCTAssertTrue(app.staticTexts["First Mac"].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts["zsh"].firstMatch.waitForExistence(timeout: 10), "the first Mac's session is back")
+        XCTAssertFalse(versionCard.exists, "the warning about the second Mac's version is still shown on the first")
         capture("10-back-on-first")
 
         // Sessions can be arranged: grouped, pinned, dragged. Three in the

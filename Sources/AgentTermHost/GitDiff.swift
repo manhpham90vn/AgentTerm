@@ -11,7 +11,7 @@ public enum GitDiff {
     /// Blocks while git runs. Call off the main thread.
     public static func snapshot(directory: String) -> DiffSnapshot {
         guard let inside = run(["rev-parse", "--is-inside-work-tree"], in: directory),
-              inside.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+            inside.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
         else { return .notARepository }
 
         let branch = run(["branch", "--show-current"], in: directory)?
@@ -60,9 +60,13 @@ public enum GitDiff {
             var path = ""
             for line in header {
                 // git ends a name that has a space in it with a tab.
-                if line.hasPrefix("+++ b/") { path = Self.name(line.dropFirst(6)) }
-                else if line.hasPrefix("--- a/") && path.isEmpty { path = Self.name(line.dropFirst(6)) }
-                else if line.hasPrefix("rename to ") { path = String(line.dropFirst(10)) }
+                if line.hasPrefix("+++ b/") {
+                    path = Self.name(line.dropFirst(6))
+                } else if line.hasPrefix("--- a/") && path.isEmpty {
+                    path = Self.name(line.dropFirst(6))
+                } else if line.hasPrefix("rename to ") {
+                    path = String(line.dropFirst(10))
+                }
             }
             if path.isEmpty, let first = header.first, let range = first.range(of: " b/", options: .backwards) {
                 path = String(first[range.upperBound...])
@@ -102,7 +106,7 @@ public enum GitDiff {
 
     private static func run(_ arguments: [String], in directory: String, acceptStatus: Set<Int32> = [0]) -> String? {
         guard let result = Subprocess.run(git, ["-C", directory, "-c", "core.quotepath=false"] + arguments, timeout: 15),
-              acceptStatus.contains(result.status)
+            acceptStatus.contains(result.status)
         else { return nil }
         return String(decoding: result.output, as: UTF8.self)
     }

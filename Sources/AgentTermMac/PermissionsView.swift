@@ -1,8 +1,8 @@
-import Combine
-import AgentTermProtocol
 import AVFoundation
+import AgentTermProtocol
 import AppKit
 import ApplicationServices
+import Combine
 import SwiftUI
 
 /// What macOS lets the programs in AgentTerm's sessions do.
@@ -49,7 +49,8 @@ enum Permission: String, CaseIterable, Identifiable {
         case .accessibility: return "Lets an agent click, type and read what is on screen in other apps: computer use in Claude Code and Codex, the browser agent in Antigravity."
         case .screenRecording: return "Lets an agent take screenshots, which is how it sees an app or a web page it is working on."
         case .automation: return "Lets an agent script another app, such as Chrome, Safari, Finder or Xcode. macOS asks once for each app the first time."
-        case .fullDiskAccess: return "Lets agents read folders macOS protects, such as Mail, Messages and other apps' data. Most projects do not need it: Desktop, Documents and Downloads are asked about on their own."
+        case .fullDiskAccess:
+            return "Lets agents read folders macOS protects, such as Mail, Messages and other apps' data. Most projects do not need it: Desktop, Documents and Downloads are asked about on their own."
         case .microphone: return "Voice dictation in Claude Code and Antigravity."
         case .camera: return "Only when a program in a session uses the camera."
         }

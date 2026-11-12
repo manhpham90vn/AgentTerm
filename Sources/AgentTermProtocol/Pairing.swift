@@ -37,12 +37,12 @@ public struct PairingInfo: Equatable, Sendable {
         // A link of either channel is understood: a development app can be
         // paired with a released Mac app and the other way round.
         guard let scheme = url.scheme, AppChannel.linkSchemes.contains(scheme), url.host == "pair",
-              let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
+            let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems
         else { return nil }
         func value(_ name: String) -> String? { items.first { $0.name == name }?.value }
         guard let host = value("host"), !host.isEmpty,
-              let port = value("port").flatMap(UInt16.init),
-              let code = value("code"), !code.isEmpty
+            let port = value("port").flatMap(UInt16.init),
+            let code = value("code"), !code.isEmpty
         else { return nil }
         self.init(host: host, port: port, code: code, name: value("name") ?? host)
     }

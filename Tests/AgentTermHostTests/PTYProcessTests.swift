@@ -1,6 +1,7 @@
-@testable import AgentTermHost
 import AgentTermProtocol
 import XCTest
+
+@testable import AgentTermHost
 
 final class PTYProcessTests: XCTestCase {
     private let queue = DispatchQueue(label: "test.pty")
@@ -31,7 +32,9 @@ final class PTYProcessTests: XCTestCase {
         )
         queue.sync {
             process.onOutput = { output.append($0) }
-            process.onExit = { status = $0; exited.fulfill() }
+            process.onExit = {
+                status = $0; exited.fulfill()
+            }
         }
         during?(process) { self.queue.sync { String(decoding: output, as: UTF8.self) } }
         wait(for: [exited], timeout: 10)
@@ -138,9 +141,10 @@ final class PTYProcessTests: XCTestCase {
     }
 
     func testMissingExecutableThrows() {
-        XCTAssertThrowsError(try PTYProcess(
-            executable: "/nonexistent/program", arguments: ["x"], environment: [:],
-            cwd: "/tmp", size: .default, queue: queue
-        ))
+        XCTAssertThrowsError(
+            try PTYProcess(
+                executable: "/nonexistent/program", arguments: ["x"], environment: [:],
+                cwd: "/tmp", size: .default, queue: queue
+            ))
     }
 }

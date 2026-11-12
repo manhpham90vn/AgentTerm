@@ -8,6 +8,9 @@ struct SessionTabs: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var files: FilesModel
 
+    /// A tab's 25 points and 6 above and below.
+    private static let stripHeight: CGFloat = 37
+
     /// What a dragged tab is over: a tab's id, a group's id, or "end".
     @State private var dropTarget: String?
 
@@ -46,8 +49,13 @@ struct SessionTabs: View {
                                 .onDrop(of: [TabDrag.type], delegate: TabDropDelegate(place: .end, model: model, dropTarget: $dropTarget))
                         }
                         .padding(.horizontal, 8)
-                        .padding(.vertical, 6)
+                        // One fixed height for the row and for the strip:
+                        // the strip scrolls sideways only, and with nothing
+                        // taller than it there is nothing to move up or down.
+                        .frame(height: Self.stripHeight)
                     }
+                    .frame(height: Self.stripHeight)
+                    .scrollBounceBehavior(.basedOnSize, axes: .vertical)
                     .onChange(of: model.frontTabID) { _, front in
                         if let front { withAnimation(.easeOut(duration: 0.15)) { proxy.scrollTo(front) } }
                     }
@@ -429,7 +437,11 @@ private struct GroupLabel: View {
             // swatch, because a menu shows symbols in its own one color.
             Picker("Color", selection: Binding(get: { group.color }, set: { model.tabLayout.setColor($0, of: group.id) })) {
                 ForEach(TabLayout.colors, id: \.self) { name in
-                    Label { Text(name.capitalized) } icon: { Image(nsImage: TabColors.swatch(name)) }.tag(name)
+                    Label {
+                        Text(name.capitalized)
+                    } icon: {
+                        Image(nsImage: TabColors.swatch(name))
+                    }.tag(name)
                 }
             }
             .pickerStyle(.menu)

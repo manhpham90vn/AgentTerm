@@ -42,7 +42,8 @@ public enum HostEnvironment {
             if FileManager.default.isExecutableFile(atPath: path) { return path }
         }
         if let shell = ProcessInfo.processInfo.environment["SHELL"],
-           FileManager.default.isExecutableFile(atPath: shell) {
+            FileManager.default.isExecutableFile(atPath: shell)
+        {
             return shell
         }
         return "/bin/zsh"
@@ -87,8 +88,9 @@ public enum HostEnvironment {
     public static func loadOrCreateToken() throws -> String {
         let fm = FileManager.default
         if let data = fm.contents(atPath: tokenFile.path),
-           let token = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-           token.count >= 32 {
+            let token = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+            token.count >= 32
+        {
             return token
         }
         try fm.createDirectory(at: supportDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])

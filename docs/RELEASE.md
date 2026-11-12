@@ -17,9 +17,11 @@ scripts/release.sh mac sign       # build AgentTerm.app, sign with Developer ID,
 scripts/release.sh mac release    # ... and notarize it
 ```
 
-`VERSION=0.2.0` in front of a command sets the version. Otherwise it is
-`APP_VERSION` of the project's `release.env`, or the one in
-`iOS/project.yml`.
+The version of both apps is the one line of the `VERSION` file at the root
+of the repository; `make bump V=0.3.0` changes it. `VERSION=0.3.0-beta.1` in
+front of a command builds another one without changing the file. When the
+protocol version changes with it, add a row to the compatibility table in
+the README.
 
 ## Released builds and development builds
 

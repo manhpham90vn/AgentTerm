@@ -1,6 +1,6 @@
-import AppKit
 import AgentTermHost
 import AgentTermProtocol
+import AppKit
 import SwiftUI
 
 /// Asks who should take over a conversation and what they should know.

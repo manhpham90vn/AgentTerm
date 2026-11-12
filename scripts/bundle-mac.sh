@@ -14,7 +14,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-VERSION="${VERSION:-0.2.0}"
+VERSION="${VERSION:-$(tr -d '[:space:]' < VERSION)}"
 CONFIG="${CONFIG:-release}"
 CHANNEL="${CHANNEL:-dev}"
 case "$CHANNEL" in

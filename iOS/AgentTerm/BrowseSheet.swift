@@ -24,14 +24,18 @@ struct BrowseSheet: View {
                 if let listing {
                     List {
                         if let parent = listing.parent {
-                            Button { model.browse(parent) } label: {
+                            Button {
+                                model.browse(parent)
+                            } label: {
                                 Label("Up to \(parent == "/" ? "Macintosh HD" : (parent as NSString).lastPathComponent)", systemImage: "arrow.up")
                                     .foregroundStyle(.secondary)
                             }
                             .listRowBackground(Palette.panel)
                         }
                         ForEach(listing.folders, id: \.self) { folder in
-                            Button { model.browse((listing.path as NSString).appendingPathComponent(folder)) } label: {
+                            Button {
+                                model.browse((listing.path as NSString).appendingPathComponent(folder))
+                            } label: {
                                 HStack(spacing: 10) {
                                     Image(systemName: "folder.fill").foregroundStyle(Palette.tint)
                                     Text(folder).foregroundStyle(.primary).lineLimit(1)
@@ -62,8 +66,12 @@ struct BrowseSheet: View {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button { model.browse(nil) } label: { Image(systemName: "house") }
-                        .accessibilityLabel("Home folder")
+                    Button {
+                        model.browse(nil)
+                    } label: {
+                        Image(systemName: "house")
+                    }
+                    .accessibilityLabel("Home folder")
                 }
             }
             .safeAreaInset(edge: .bottom) {

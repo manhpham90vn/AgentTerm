@@ -12,7 +12,7 @@
 # to let match make the provisioning profile the first time.
 #
 #   DOTFILES   the dotfiles repo (default: ../dotfiles next to this repo)
-#   VERSION    version to build (default: the one in iOS/project.yml)
+#   VERSION    version to build (default: the one in the VERSION file)
 set -euo pipefail
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -44,7 +44,6 @@ export ASC_KEY_PATH=$key_file
 : "${ASC_KEY_ID:=$(basename "$key_file" .p8 | sed 's/^AuthKey_//')}"
 export ASC_KEY_ID
 export DEVELOPER_ID_P12=$APPLE_DIR/certs/developer_id_application.p12
-[ -z "${APP_VERSION:-}" ] || export VERSION=${VERSION:-$APP_VERSION}
 
 if [ "${1:-}" = "--check" ]; then
     # Names only: whether each is there, never what it is.

@@ -56,10 +56,11 @@ final class EndToEndTests: XCTestCase {
     private let token = "test-token-0123456789abcdef0123456789"
 
     override func setUpWithError() throws {
-        server = HostServer(configuration: .init(
-            port: 0, token: token, listenOnTailscale: false,
-            detectAgents: { [AgentInfo(id: "claude", name: "Claude Code", path: "/bin/claude"), AgentInfo(id: "codex", name: "Codex", path: nil)] }
-        ))
+        server = HostServer(
+            configuration: .init(
+                port: 0, token: token, listenOnTailscale: false,
+                detectAgents: { [AgentInfo(id: "claude", name: "Claude Code", path: "/bin/claude"), AgentInfo(id: "codex", name: "Codex", path: nil)] }
+            ))
         port = try server.start()
         XCTAssertNotEqual(port, 0)
     }

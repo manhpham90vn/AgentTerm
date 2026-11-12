@@ -164,7 +164,10 @@ public enum AccountUsageFetcher {
         }
         if limits.isEmpty {
             // The older shape of the answer.
-            for (key, title, short) in [("five_hour", "Current session", "Session"), ("seven_day", "Current week (all models)", "Week"), ("seven_day_opus", "Current week (Opus)", "Week Opus"), ("seven_day_sonnet", "Current week (Sonnet)", "Week Sonnet")] {
+            for (key, title, short) in [
+                ("five_hour", "Current session", "Session"), ("seven_day", "Current week (all models)", "Week"), ("seven_day_opus", "Current week (Opus)", "Week Opus"),
+                ("seven_day_sonnet", "Current week (Sonnet)", "Week Sonnet"),
+            ] {
                 guard let entry = body[key] as? [String: Any], let percent = number(entry["utilization"]) else { continue }
                 limits.append(AccountLimit(id: key, title: title, shortTitle: short, usedPercent: percent, resetsAt: date(entry["resets_at"])))
             }
@@ -200,8 +203,9 @@ public enum AccountUsageFetcher {
             if let first = expiries.min() { value += ", the first expires \(first.formatted(.dateTime.month(.abbreviated).day()))" }
             notes.insert(AccountUsageNote(label: "Limit resets", value: value), at: 0)
         }
-        return AccountUsage(agent: "claude", showsRemaining: false, groups: limits.isEmpty ? [] : [AccountUsageGroup(limits: limits)], notes: notes, fetchedAt: now,
-                            problem: limits.isEmpty ? "Anthropic reported no limits for this account." : nil)
+        return AccountUsage(
+            agent: "claude", showsRemaining: false, groups: limits.isEmpty ? [] : [AccountUsageGroup(limits: limits)], notes: notes, fetchedAt: now,
+            problem: limits.isEmpty ? "Anthropic reported no limits for this account." : nil)
     }
 
     // MARK: Codex
@@ -209,7 +213,7 @@ public enum AccountUsageFetcher {
     private static func codex(_ environment: Environment) -> AccountUsage {
         let directory = environment.variables["CODEX_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? environment.home + "/.codex"
         guard let tokens = object(environment.file(directory + "/auth.json"))?["tokens"] as? [String: Any],
-              let token = tokens["access_token"] as? String, !token.isEmpty
+            let token = tokens["access_token"] as? String, !token.isEmpty
         else { return failed("codex", "Codex is not signed in with a ChatGPT account on this Mac.", environment) }
         var headers = ["originator": "codex_cli_rs", "User-Agent": "codex_cli_rs"]
         if let account = tokens["account_id"] as? String, !account.isEmpty { headers["ChatGPT-Account-Id"] = account }
@@ -221,8 +225,9 @@ public enum AccountUsageFetcher {
         var usage = parseCodex(body, now: environment.now())
         // Reset credits that are banked run out; say when the first one does.
         if number((body["rate_limit_reset_credits"] as? [String: Any])?["available_count"]) ?? 0 > 0,
-           let request = self.request("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", bearer: token, headers: headers),
-           let answer = environment.http(request), answer.status == 200, let credits = object(answer.body)?["credits"] as? [[String: Any]] {
+            let request = self.request("https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", bearer: token, headers: headers),
+            let answer = environment.http(request), answer.status == 200, let credits = object(answer.body)?["credits"] as? [[String: Any]]
+        {
             let expiries = credits.filter { ($0["status"] as? String)?.lowercased() == "available" }.compactMap { date($0["expires_at"]) }
             if let first = expiries.min(), let index = usage.notes.firstIndex(where: { $0.label == "Limit resets" }) {
                 usage.notes[index].value += ", the first expires \(first.formatted(.dateTime.month(.abbreviated).day()))"
@@ -313,8 +318,9 @@ public enum AccountUsageFetcher {
         }
         var plan = (body["copilot_plan"] as? String).map { $0.prefix(1).uppercased() + $0.dropFirst() }
         if let sku = body["access_type_sku"] as? String, sku.contains("free") { plan = (plan.map { $0 + ", " } ?? "") + "free" }
-        return AccountUsage(agent: "copilot", plan: plan, showsRemaining: true, groups: limits.isEmpty ? [] : [AccountUsageGroup(limits: limits)], notes: notes, fetchedAt: now,
-                            problem: limits.isEmpty && notes.isEmpty ? "GitHub reported no Copilot quota for this account." : nil)
+        return AccountUsage(
+            agent: "copilot", plan: plan, showsRemaining: true, groups: limits.isEmpty ? [] : [AccountUsageGroup(limits: limits)], notes: notes, fetchedAt: now,
+            problem: limits.isEmpty && notes.isEmpty ? "GitHub reported no Copilot quota for this account." : nil)
     }
 
     // MARK: Antigravity
@@ -353,7 +359,7 @@ public enum AccountUsageFetcher {
         // The summary is served by the daily host; the main one is the fallback.
         for host in ["https://daily-cloudcode-pa.googleapis.com/v1internal:", base] {
             guard let request = request(host + "retrieveUserQuotaSummary", bearer: token, headers: headers, body: body),
-                  let answer = environment.http(request), answer.status == 200, let summary = object(answer.body)
+                let answer = environment.http(request), answer.status == 200, let summary = object(answer.body)
             else { continue }
             var usage = parseAntigravity(summary, now: environment.now())
             usage.plan = plan
@@ -371,7 +377,7 @@ public enum AccountUsageFetcher {
             let name = group["displayName"] as? String ?? group["name"] as? String
             let limits = ((group["buckets"] as? [[String: Any]]) ?? []).compactMap { bucket -> AccountLimit? in
                 guard bucket["disabled"] as? Bool != true,
-                      let left = number(bucket["remainingFraction"]) ?? number((bucket["remaining"] as? [String: Any])?["remainingFraction"])
+                    let left = number(bucket["remainingFraction"]) ?? number((bucket["remaining"] as? [String: Any])?["remainingFraction"])
                 else { return nil }
                 let window = bucket["window"] as? String ?? ""
                 let short = window == "weekly" ? "Week" : window.isEmpty ? "Quota" : window
@@ -410,7 +416,9 @@ public enum AccountUsageFetcher {
     }
 
     private final class NoRedirects: NSObject, URLSessionTaskDelegate {
-        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        func urlSession(
+            _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
+        ) {
             completionHandler(nil)
         }
     }

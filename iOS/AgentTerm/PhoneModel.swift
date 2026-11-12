@@ -64,6 +64,8 @@ final class PhoneModel: ObservableObject {
             connection?.send(.setTabLayout(sessionLayout))
         }
     }
+    /// How the version of AgentTerm on the Mac compares with this app's.
+    @Published private(set) var hostMatch = ProtocolMatch.same
     /// The session being dragged in the list, from when it is picked up.
     var draggedSession: String?
     /// The folder being dragged in the list.
@@ -319,6 +321,7 @@ final class PhoneModel: ObservableObject {
 
     /// What was shown belongs to the Mac that is being left.
     private func clearHostState() {
+        hostMatch = .same
         sessions = []
         folders = []
         agents = []
@@ -431,7 +434,8 @@ final class PhoneModel: ObservableObject {
 
     private func handle(_ message: ServerMessage) {
         switch message {
-        case .welcome:
+        case .welcome(let version, _):
+            hostMatch = ProtocolMatch(host: version)
             status = .connected
             reattachAfterConnect = true
             connection?.send(.agents(refresh: false))
@@ -541,7 +545,8 @@ final class PhoneModel: ObservableObject {
                 // The Mac already worked out which conversation the session
                 // is having; without that, the newest one since it started.
                 if let found = own.first(where: { $0.sessionID == current.conversationID })
-                    ?? own.first(where: { $0.updatedAt >= session.createdAt.addingTimeInterval(-5) }) {
+                    ?? own.first(where: { $0.updatedAt >= session.createdAt.addingTimeInterval(-5) })
+                {
                     sessionHandoff = found
                 } else {
                     self.message = "\(session.title) has no conversation to hand off in this session yet. It saves one after your first message."
@@ -706,10 +711,11 @@ final class PhoneModel: ObservableObject {
         openCreatedSession = true
         let plan = handoffPlan
         let edited = plan.map { prompt != $0.prompt } ?? false
-        connection?.send(.handoff(
-            agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd,
-            target: target.id, plan: plan?.id, prompt: edited ? prompt : nil, note: note, size: startingSize, folder: folder
-        ))
+        connection?.send(
+            .handoff(
+                agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd,
+                target: target.id, plan: plan?.id, prompt: edited ? prompt : nil, note: note, size: startingSize, folder: folder
+            ))
         handoffPlan = nil
     }
 

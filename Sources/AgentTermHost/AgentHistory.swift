@@ -65,9 +65,10 @@ public enum AgentHistory {
 
     /// Session ids end up in a shell command line, so only plain ones pass.
     static func isSafeIdentifier(_ id: String) -> Bool {
-        !id.isEmpty && id.count <= 128 && id.unicodeScalars.allSatisfy {
-            CharacterSet.alphanumerics.contains($0) && $0.isASCII || $0 == "-" || $0 == "_" || $0 == "."
-        } && !id.hasPrefix("-")
+        !id.isEmpty && id.count <= 128
+            && id.unicodeScalars.allSatisfy {
+                CharacterSet.alphanumerics.contains($0) && $0.isASCII || $0 == "-" || $0 == "_" || $0 == "."
+            } && !id.hasPrefix("-")
     }
 
     // MARK: Claude Code
@@ -99,7 +100,7 @@ public enum AgentHistory {
                 let data = read(file.url, head: headBytes)
                 head = data
                 guard let recorded = lines(of: data, containing: "\"cwd\"", limit: 1).first?["cwd"] as? String,
-                      scope.contains(recorded)
+                    scope.contains(recorded)
                 else { return nil }
                 cwd = recorded
             }
@@ -108,7 +109,8 @@ public enum AgentHistory {
                 .lazy.compactMap { $0["aiTitle"] as? String }.first
             if title == nil {
                 let data = head ?? read(file.url, head: headBytes)
-                title = lines(of: data, containing: "\"summary\"").lazy.compactMap { $0["summary"] as? String }.first
+                title =
+                    lines(of: data, containing: "\"summary\"").lazy.compactMap { $0["summary"] as? String }.first
                     ?? lines(of: data, containing: "\"user\"").lazy.compactMap(claudePrompt).first
             }
             guard let title else { return nil }
@@ -117,14 +119,15 @@ public enum AgentHistory {
     }
 
     static func claudeProjectName(for directory: String) -> String {
-        String(directory.unicodeScalars.map { scalar -> Character in
-            scalar.isASCII && CharacterSet.alphanumerics.contains(scalar) ? Character(scalar) : "-"
-        })
+        String(
+            directory.unicodeScalars.map { scalar -> Character in
+                scalar.isASCII && CharacterSet.alphanumerics.contains(scalar) ? Character(scalar) : "-"
+            })
     }
 
     static func claudePrompt(_ line: [String: Any]) -> String? {
         guard line["type"] as? String == "user", line["isMeta"] as? Bool != true, line["isSidechain"] as? Bool != true,
-              let message = line["message"] as? [String: Any]
+            let message = line["message"] as? [String: Any]
         else { return nil }
         var text: String?
         if let content = message["content"] as? String {
@@ -161,14 +164,16 @@ public enum AgentHistory {
         return files.compactMap { file in
             let head = read(file.url, head: headBytes)
             guard let meta = lines(of: head, containing: "\"session_meta\"", limit: 1).first?["payload"] as? [String: Any],
-                  let id = meta["id"] as? String, let cwd = meta["cwd"] as? String, scope.contains(cwd)
+                let id = meta["id"] as? String, let cwd = meta["cwd"] as? String, scope.contains(cwd)
             else { return nil }
             // Sessions an agent started for a sub-task are not the user's conversations.
             if let source = meta["source"] as? [String: Any], source["subagent"] != nil { return nil }
-            let title = prompts[id] ?? lines(of: head, containing: "\"user_message\"").lazy.compactMap { line -> String? in
-                guard let payload = line["payload"] as? [String: Any], payload["type"] as? String == "user_message" else { return nil }
-                return payload["message"] as? String
-            }.first
+            let title =
+                prompts[id]
+                ?? lines(of: head, containing: "\"user_message\"").lazy.compactMap { line -> String? in
+                    guard let payload = line["payload"] as? [String: Any], payload["type"] as? String == "user_message" else { return nil }
+                    return payload["message"] as? String
+                }.first
             guard let title else { return nil }
             return Conversation(agent: "codex", sessionID: id, title: clean(title), updatedAt: file.modified, cwd: cwd, source: file.url.path, startedAt: created(file.url))
         }
@@ -180,13 +185,13 @@ public enum AgentHistory {
     private static func antigravity(_ scope: Scope, _ home: URL) -> [Conversation] {
         let file = home.appendingPathComponent(".gemini/antigravity-cli/cache/conversation_metadata.json")
         guard let data = try? Data(contentsOf: file),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let conversations = root["conversations"] as? [String: Any]
+            let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+            let conversations = root["conversations"] as? [String: Any]
         else { return [] }
         return conversations.compactMap { id, value in
             guard let entry = value as? [String: Any], entry["is_internal"] as? Bool != true,
-                  let summary = entry["summary"] as? [String: Any], summary["Internal"] as? Bool != true,
-                  let workspaces = summary["WorkspaceURIs"] as? [String]
+                let summary = entry["summary"] as? [String: Any], summary["Internal"] as? Bool != true,
+                let workspaces = summary["WorkspaceURIs"] as? [String]
             else { return nil }
             let paths = workspaces.compactMap { URL(string: $0)?.standardizedFileURL.path }
             guard let cwd = paths.first(where: scope.contains) else { return nil }
@@ -225,7 +230,8 @@ public enum AgentHistory {
             let id = fields["id"] ?? folder.lastPathComponent
             var title = fields["name"]
             if title?.isEmpty != false {
-                title = lines(of: read(folder.appendingPathComponent("events.jsonl"), head: headBytes), containing: "\"user.message\"")
+                title =
+                    lines(of: read(folder.appendingPathComponent("events.jsonl"), head: headBytes), containing: "\"user.message\"")
                     .lazy.compactMap { ($0["data"] as? [String: Any])?["content"] as? String }.first
             }
             let modified = (try? workspace.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate

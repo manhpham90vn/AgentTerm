@@ -319,12 +319,18 @@ struct DocumentView: View {
             }
         case .image:
             if let image = NSImage(contentsOfFile: document.path) {
-                ScrollView([.vertical, .horizontal]) {
+                // The whole picture, fitted to the pane and centered, never
+                // larger than it is. A view that scrolls both ways opens a
+                // tall picture scrolled part of the way down.
+                GeometryReader { area in
                     Image(nsImage: image)
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: min(image.size.width, 900))
-                        .padding(16)
+                        .frame(
+                            maxWidth: min(image.size.width, max(1, area.size.width - 32)),
+                            maxHeight: min(image.size.height, max(1, area.size.height - 32))
+                        )
+                        .frame(width: area.size.width, height: area.size.height)
                 }
             } else {
                 message("This image cannot be shown.")

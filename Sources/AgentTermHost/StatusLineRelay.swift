@@ -44,9 +44,9 @@ public enum StatusLineRelay {
         files.append(configuration + "/settings.json")
         for file in files {
             guard let data = FileManager.default.contents(atPath: file),
-                  let settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-                  let statusLine = settings["statusLine"] as? [String: Any],
-                  let command = statusLine["command"] as? String, !command.isEmpty
+                let settings = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                let statusLine = settings["statusLine"] as? [String: Any],
+                let command = statusLine["command"] as? String, !command.isEmpty
             else { continue }
             // Never ourselves: that would run without end.
             if command.contains("agenttermd") && command.contains("statusline") { continue }

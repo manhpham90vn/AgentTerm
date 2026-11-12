@@ -145,15 +145,28 @@ private struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Stay in the menu bar when the window is closed")
                             .font(.system(size: 13, weight: .medium))
-                        Text(staysInMenuBar
-                            ? "Closing the window leaves the app running, with an icon in the menu bar to open it again. Quit from that menu or with ⌘Q."
-                            : "Closing the window quits the app. Sessions keep running either way: the host that holds them is a separate program.")
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                        Text(
+                            staysInMenuBar
+                                ? "Closing the window leaves the app running, with an icon in the menu bar to open it again. Quit from that menu or with ⌘Q."
+                                : "Closing the window quits the app. Sessions keep running either way: the host that holds them is a separate program."
+                        )
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 .toggleStyle(.switch)
+            }
+            SettingsCard {
+                HStack {
+                    Text("Version").font(.system(size: 13, weight: .medium))
+                    Spacer()
+                    // The iPhone app has to be of a version that speaks the same protocol.
+                    Text("\(AppVersion.current) · protocol \(agenttermProtocolVersion)")
+                        .font(.system(size: 12.5, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
             }
         }
         .padding(24)
@@ -283,10 +296,11 @@ private struct TabCommands: View {
             .keyboardShortcut("w", modifiers: [.command, .shift])
             .disabled(files.documents.isEmpty && model.diffTabFile == nil)
         Button("Close Other Tabs…") {
-            model.closeTabs(.init(
-                keepSession: model.diffInFront || files.active != nil ? nil : model.selectedSession,
-                keepFile: model.diffInFront ? nil : files.active, keepDiff: model.diffInFront
-            ))
+            model.closeTabs(
+                .init(
+                    keepSession: model.diffInFront || files.active != nil ? nil : model.selectedSession,
+                    keepFile: model.diffInFront ? nil : files.active, keepDiff: model.diffInFront
+                ))
         }
         .disabled(model.tabCount < 2)
         Button(model.sessions.isEmpty ? "Close All Tabs" : "Close All Tabs…") { model.closeTabs() }

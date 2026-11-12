@@ -50,8 +50,8 @@ public enum AgentUsage {
             return nil
         case "agy":
             guard let data = FileManager.default.contents(atPath: home + "/.gemini/antigravity-cli/settings.json"),
-                  let settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let model = settings["model"] as? String, !model.isEmpty
+                let settings = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let model = settings["model"] as? String, !model.isEmpty
             else { return nil }
             return model
         default:
@@ -68,7 +68,7 @@ public enum AgentUsage {
         let wanted = URL(fileURLWithPath: cwd).standardizedFileURL.path
         return folders.compactMap { folder -> (String, Date)? in
             guard let created = (try? folder.resourceValues(forKeys: [.creationDateKey]))?.creationDate, created >= start.addingTimeInterval(-5),
-                  let workspace = try? String(contentsOf: folder.appendingPathComponent("workspace.yaml"), encoding: .utf8)
+                let workspace = try? String(contentsOf: folder.appendingPathComponent("workspace.yaml"), encoding: .utf8)
             else { return nil }
             let recorded = workspace.split(whereSeparator: \.isNewline).first { $0.hasPrefix("cwd:") }
                 .map { $0.dropFirst(4).trimmingCharacters(in: CharacterSet(charactersIn: " \"'")) }
@@ -101,8 +101,8 @@ public enum AgentUsage {
         for line in newest(data, containing: "\"usage\"") {
             // Sub-agents have a context of their own.
             guard line["isSidechain"] as? Bool != true,
-                  let message = line["message"] as? [String: Any],
-                  let usage = message["usage"] as? [String: Any]
+                let message = line["message"] as? [String: Any],
+                let usage = message["usage"] as? [String: Any]
             else { continue }
             let model = message["model"] as? String
             if model == "<synthetic>" { continue }
@@ -126,8 +126,8 @@ public enum AgentUsage {
             if usage.limits.isEmpty, let limits = payload["rate_limits"] as? [String: Any] {
                 usage.limits = ["primary", "secondary"].compactMap { key -> UsageLimit? in
                     guard let limit = limits[key] as? [String: Any],
-                          let used = (limit["used_percent"] as? NSNumber)?.doubleValue,
-                          let minutes = int(limit["window_minutes"])
+                        let used = (limit["used_percent"] as? NSNumber)?.doubleValue,
+                        let minutes = int(limit["window_minutes"])
                     else { return nil }
                     let resets = (limit["resets_at"] as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) }
                     return UsageLimit(windowMinutes: minutes, usedPercent: used, resetsAt: resets)
@@ -159,7 +159,7 @@ public enum AgentUsage {
         var usage = SessionUsage()
         for line in newest(data, containing: "session.usage_record") {
             guard line["type"] as? String == "session.usage_record",
-                  let record = (line["data"] as? [String: Any])?["usage"] as? [String: Any]
+                let record = (line["data"] as? [String: Any])?["usage"] as? [String: Any]
             else { continue }
             usage.model = record["modelDisplayName"] as? String ?? record["model"] as? String
             usage.contextTokens = int(record["inputTokens"])

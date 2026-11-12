@@ -87,7 +87,10 @@ public struct UsageBar: View {
         // that is not known yet shows as a dash, not as a missing cell.
         if let usage, let tokens = usage.contextTokens {
             if let fraction = usage.contextFraction {
-                cells.append(Cell(id: "context", label: "Context", value: "\(Int((fraction * 100).rounded()))%", fill: fraction, used: fraction * 100, note: usage.contextWindow.map { "of \(SessionUsage.short($0))" }))
+                cells.append(
+                    Cell(
+                        id: "context", label: "Context", value: "\(Int((fraction * 100).rounded()))%", fill: fraction, used: fraction * 100,
+                        note: usage.contextWindow.map { "of \(SessionUsage.short($0))" }))
             } else {
                 cells.append(Cell(id: "context", label: "Context", value: SessionUsage.short(tokens), fill: 0, used: 0, note: "tokens"))
             }
@@ -97,17 +100,21 @@ public struct UsageBar: View {
         if let account, let limits = account.groups.first?.limits, !limits.isEmpty {
             // The account's own limits, as its service reports them.
             for limit in limits {
-                cells.append(Cell(
-                    id: limit.id, label: limit.shortTitle, value: account.percentText(limit),
-                    fill: (account.showsRemaining ? limit.leftPercent : limit.usedPercent) / 100, used: limit.usedPercent,
-                    note: limit.resetsAt.map { UsageStyle.shortReset($0) }
-                ))
+                cells.append(
+                    Cell(
+                        id: limit.id, label: limit.shortTitle, value: account.percentText(limit),
+                        fill: (account.showsRemaining ? limit.leftPercent : limit.usedPercent) / 100, used: limit.usedPercent,
+                        note: limit.resetsAt.map { UsageStyle.shortReset($0) }
+                    ))
             }
         } else if let usage {
             // What the session itself recorded, until the service has answered.
             for (index, limit) in usage.limits.enumerated() {
                 let left = max(0, 100 - limit.usedPercent)
-                cells.append(Cell(id: "recorded-\(index)", label: limit.label, value: "\(Int(left.rounded()))% left", fill: left / 100, used: limit.usedPercent, note: limit.resetsAt.map { UsageStyle.shortReset($0) }))
+                cells.append(
+                    Cell(
+                        id: "recorded-\(index)", label: limit.label, value: "\(Int(left.rounded()))% left", fill: left / 100, used: limit.usedPercent,
+                        note: limit.resetsAt.map { UsageStyle.shortReset($0) }))
             }
         }
         return cells
@@ -258,7 +265,8 @@ public struct UsageDetails: View {
                     if let model = usage.model { fact("Model", model) }
                     if let tokens = usage.contextTokens {
                         if let fraction = usage.contextFraction, let window = usage.contextWindow {
-                            row(title: "Context", text: "\(Int((fraction * 100).rounded()))% used", used: fraction * 100,
+                            row(
+                                title: "Context", text: "\(Int((fraction * 100).rounded()))% used", used: fraction * 100,
                                 caption: "\(SessionUsage.short(tokens)) of \(SessionUsage.short(window)) tokens")
                         } else {
                             fact("Context", "\(SessionUsage.short(tokens)) tokens")
@@ -274,7 +282,8 @@ public struct UsageDetails: View {
                             Text(note).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                         }
                         ForEach(group.limits) { limit in
-                            row(title: limit.title, text: account.percentText(limit), used: limit.usedPercent, fillsWithLeft: account.showsRemaining,
+                            row(
+                                title: limit.title, text: account.percentText(limit), used: limit.usedPercent, fillsWithLeft: account.showsRemaining,
                                 caption: [limit.detail, limit.resetsAt.map { UsageStyle.longReset($0, now: now) }].compactMap { $0 }.joined(separator: " · "))
                         }
                     }
@@ -296,7 +305,8 @@ public struct UsageDetails: View {
             } else if let usage, !usage.limits.isEmpty {
                 section("Account limits") {
                     ForEach(Array(usage.limits.enumerated()), id: \.offset) { _, limit in
-                        row(title: limit.label + " limit", text: "\(Int(max(0, 100 - limit.usedPercent).rounded()))% left", used: limit.usedPercent, fillsWithLeft: true,
+                        row(
+                            title: limit.label + " limit", text: "\(Int(max(0, 100 - limit.usedPercent).rounded()))% left", used: limit.usedPercent, fillsWithLeft: true,
                             caption: limit.resetsAt.map { UsageStyle.longReset($0, now: now) } ?? "")
                     }
                 }

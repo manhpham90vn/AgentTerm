@@ -1,5 +1,5 @@
-import AgentTermProtocol
 import AgentTermHost
+import AgentTermProtocol
 import SwiftUI
 
 struct DiffView: View {
@@ -38,7 +38,9 @@ struct DiffView: View {
             if let files = model.diff?.files, !files.isEmpty {
                 DiffCount(added: files.reduce(0) { $0 + $1.added }, deleted: files.reduce(0) { $0 + $1.deleted })
             }
-            Button { viewMode = isTree ? "list" : "tree" } label: {
+            Button {
+                viewMode = isTree ? "list" : "tree"
+            } label: {
                 Image(systemName: isTree ? "list.bullet" : "list.bullet.indent")
                     .font(.system(size: 11, weight: .semibold))
             }
@@ -46,7 +48,9 @@ struct DiffView: View {
             .foregroundStyle(.secondary)
             .help(isTree ? "Show as a flat list" : "Group by folder")
             .accessibilityLabel(isTree ? "Show as a flat list" : "Group by folder")
-            Button { model.refreshDiff() } label: {
+            Button {
+                model.refreshDiff()
+            } label: {
                 Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
             }
             .buttonStyle(.plain)
@@ -158,7 +162,9 @@ private struct CommitBox: View {
                 .padding(.vertical, 6)
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Theme.raised))
                 .accessibilityLabel("Commit message")
-            Button { model.commit() } label: {
+            Button {
+                model.commit()
+            } label: {
                 HStack(spacing: 6) {
                     if model.isCommitting { ProgressView().controlSize(.mini) }
                     Text(stagedCount > 0 ? "Commit \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Commit")

@@ -12,6 +12,7 @@ signal(SIGPIPE, SIG_IGN)
 var port = agenttermDefaultPort
 var listenOnTailscale = true
 var askServices = true
+var protocolVersion = agenttermProtocolVersion
 var home = NSHomeDirectory()
 var arguments = CommandLine.arguments.dropFirst()
 
@@ -62,28 +63,33 @@ while let argument = arguments.popFirst() {
         listenOnTailscale = false
     case "--no-account-usage":
         askServices = false
+    case "--protocol-version":
+        // For testing the apps against a host of another release. Not in the help.
+        guard let value = arguments.popFirst().flatMap(Int.init) else { fail("--protocol-version needs a number", status: 2) }
+        protocolVersion = value
     case "--home":
         guard let value = arguments.popFirst() else { fail("--home needs a folder", status: 2) }
         home = value
     case "--help", "-h":
-        print("""
-        Usage: agenttermd [--port N] [--local-only]
-               agenttermd pairing-link [--port N] [--host NAME] [--name LABEL]
+        print(
+            """
+            Usage: agenttermd [--port N] [--local-only]
+                   agenttermd pairing-link [--port N] [--host NAME] [--name LABEL]
 
-          --port N       TCP port to listen on, or of the daemon to ask (default \(agenttermDefaultPort))
-          --local-only   Listen on 127.0.0.1 only, not on the Tailscale address
-          --no-account-usage
-                         Do not ask the agents' services what their accounts
-                         have left. Their sign-ins are then never read.
-          --home DIR     Read agent history from DIR instead of the home folder,
-                         and start the folder picker there (for tests)
+              --port N       TCP port to listen on, or of the daemon to ask (default \(agenttermDefaultPort))
+              --local-only   Listen on 127.0.0.1 only, not on the Tailscale address
+              --no-account-usage
+                             Do not ask the agents' services what their accounts
+                             have left. Their sign-ins are then never read.
+              --home DIR     Read agent history from DIR instead of the home folder,
+                             and start the folder picker there (for tests)
 
-        pairing-link prints a link that pairs one device with the running
-        daemon. It works once and for five minutes. --host sets the name the
-        device should connect to (default: this Mac's Tailscale name, or
-        127.0.0.1 when Tailscale is not connected). --name sets what the device
-        calls this Mac (default: the Mac's name).
-        """)
+            pairing-link prints a link that pairs one device with the running
+            daemon. It works once and for five minutes. --host sets the name the
+            device should connect to (default: this Mac's Tailscale name, or
+            127.0.0.1 when Tailscale is not connected). --name sets what the device
+            calls this Mac (default: the Mac's name).
+            """)
         exit(0)
     default:
         FileHandle.standardError.write(Data("agenttermd: unknown option \(argument)\n".utf8))
@@ -94,7 +100,11 @@ while let argument = arguments.popFirst() {
 let server: HostServer
 do {
     let token = try HostEnvironment.loadOrCreateToken()
-    server = HostServer(configuration: .init(port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home, statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil))
+    var configuration = HostServer.Configuration(
+        port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home,
+        statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil)
+    configuration.protocolVersion = protocolVersion
+    server = HostServer(configuration: configuration)
     let bound = try server.start()
     print("agenttermd listening on 127.0.0.1:\(bound)")
 } catch {

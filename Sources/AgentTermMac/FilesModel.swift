@@ -1,6 +1,6 @@
-import AgentTermProtocol
 import AgentTermEditor
 import AgentTermHost
+import AgentTermProtocol
 import AppKit
 import SwiftUI
 

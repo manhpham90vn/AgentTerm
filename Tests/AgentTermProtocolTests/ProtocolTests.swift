@@ -2,6 +2,12 @@ import AgentTermProtocol
 import XCTest
 
 final class ProtocolTests: XCTestCase {
+    func testAHostOfAnotherVersionIsToldApart() {
+        XCTAssertEqual(ProtocolMatch(host: agenttermProtocolVersion), .same)
+        XCTAssertEqual(ProtocolMatch(host: agenttermProtocolVersion - 1), .hostOlder)
+        XCTAssertEqual(ProtocolMatch(host: agenttermProtocolVersion + 1), .hostNewer)
+    }
+
     func testClientMessagesRoundTrip() {
         let messages: [ClientMessage] = [
             .hello(token: "secret", client: "iPhone"),
@@ -38,7 +44,9 @@ final class ProtocolTests: XCTestCase {
             .history(path: "/Users/me/app"),
             .resume(agent: "codex", sessionID: "id-1", cwd: "/Users/me/app", size: .default),
             .handoffPlan(agent: "claude"),
-            .handoff(agent: "claude", sessionID: "id-1", cwd: "/Users/me/app", target: "codex", plan: "p-1", prompt: "Đọc file rồi làm tiếp", note: "chỉ viết test", size: .default, folder: "/Users/me/other"),
+            .handoff(
+                agent: "claude", sessionID: "id-1", cwd: "/Users/me/app", target: "codex", plan: "p-1", prompt: "Đọc file rồi làm tiếp", note: "chỉ viết test", size: .default,
+                folder: "/Users/me/other"),
             .handoff(agent: "claude", sessionID: "id-1", cwd: "/Users/me/app", target: "codex", plan: nil, prompt: nil, note: "", size: .default, folder: nil),
             .listDirectory(path: nil),
             .addFolder(path: "/Users/me/dự án"),
@@ -71,11 +79,18 @@ final class ProtocolTests: XCTestCase {
             .file(path: "/Users/me/app/big.bin", content: .tooLarge(bytes: 3_000_000), data: nil),
             .fileSaved(path: "/Users/me/app/a.txt"),
             .replayed(session: 7),
-            .accountUsage([AccountUsage(
-                agent: "claude", plan: "Max 5x", showsRemaining: false,
-                groups: [AccountUsageGroup(title: nil, note: "ghi chú", limits: [AccountLimit(id: "session-0", title: "Current session", shortTitle: "Session", usedPercent: 55, resetsAt: Date(timeIntervalSince1970: 1_794_397_800), detail: nil)])],
-                notes: [AccountUsageNote(label: "Extra usage", value: "Off")], fetchedAt: Date(timeIntervalSince1970: 1_794_380_000), problem: nil
-            )]),
+            .accountUsage([
+                AccountUsage(
+                    agent: "claude", plan: "Max 5x", showsRemaining: false,
+                    groups: [
+                        AccountUsageGroup(
+                            title: nil, note: "ghi chú",
+                            limits: [AccountLimit(id: "session-0", title: "Current session", shortTitle: "Session", usedPercent: 55, resetsAt: Date(timeIntervalSince1970: 1_794_397_800), detail: nil)]
+                        )
+                    ],
+                    notes: [AccountUsageNote(label: "Extra usage", value: "Off")], fetchedAt: Date(timeIntervalSince1970: 1_794_380_000), problem: nil
+                )
+            ]),
             .fileCreated(path: "/Users/me/app/mới.txt", isDirectory: false),
             .history(path: nil, conversations: [Conversation(agent: "agy", sessionID: "c-1", title: "Rà soát", updatedAt: Date(timeIntervalSince1970: 1_800_000_000), cwd: "/Users/me/app")]),
             .handoffPlan(id: "p-1", prompt: "You are taking over…"),

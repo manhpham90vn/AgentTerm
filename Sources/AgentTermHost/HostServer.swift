@@ -11,6 +11,9 @@ public final class HostServer {
         public var port: UInt16
         public var token: String
         /// Also listen on the Mac's Tailscale address so paired phones can connect.
+        /// The protocol version the host says it speaks. Only tests change
+        /// it, to see what a client does with a host of another release.
+        public var protocolVersion = agenttermProtocolVersion
         public var listenOnTailscale: Bool
         /// Bytes of recent output kept per session and replayed on attach.
         public var scrollbackLimit: Int
@@ -136,11 +139,13 @@ public final class HostServer {
         self.configuration = configuration
         registry = DeviceRegistry(localToken: configuration.token, file: configuration.devicesFile)
         if let file = configuration.foldersFile, let data = try? Data(contentsOf: file),
-           let saved = try? JSONDecoder().decode([String].self, from: data) {
+            let saved = try? JSONDecoder().decode([String].self, from: data)
+        {
             folders = saved
         }
         if let file = tabLayoutFile, let data = try? Data(contentsOf: file),
-           let saved = try? JSONDecoder().decode(TabLayout.self, from: data) {
+            let saved = try? JSONDecoder().decode(TabLayout.self, from: data)
+        {
             tabLayout = saved
         }
     }
@@ -248,7 +253,7 @@ public final class HostServer {
             listeners[host] = nil
         }
         guard let address, listeners[address] == nil,
-              let listener = try? makeListener(host: address, port: boundPort)
+            let listener = try? makeListener(host: address, port: boundPort)
         else { return }
         listeners[address] = listener
         listener.stateUpdateHandler = { [weak self, weak listener] state in
@@ -470,27 +475,38 @@ public final class HostServer {
                 server.send(.files(path: path, entries: entries), to: client)
             }
         case .readFile(let path):
-            work(for: client, { () -> (FileContent, Data?) in
-                let content = FileBrowser.read(path)
-                guard content == .image else { return (content, nil) }
-                // The client cannot read the Mac's disk, so the picture travels.
-                if let data = FileBrowser.imageData(path) { return (.image, data) }
-                let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
-                return (.tooLarge(bytes: size), nil)
-            }) { server, client, result in
+            work(
+                for: client,
+                { () -> (FileContent, Data?) in
+                    let content = FileBrowser.read(path)
+                    guard content == .image else { return (content, nil) }
+                    // The client cannot read the Mac's disk, so the picture travels.
+                    if let data = FileBrowser.imageData(path) { return (.image, data) }
+                    let size = (try? FileManager.default.attributesOfItem(atPath: path)[.size] as? Int) ?? 0
+                    return (.tooLarge(bytes: size), nil)
+                }
+            ) { server, client, result in
                 server.send(.file(path: path, content: result.0, data: result.1), to: client)
             }
         case .writeFile(let path, let text):
-            files(for: client, in: nil, { try FileBrowser.write(text, to: path); return .fileSaved(path: path) })
+            files(
+                for: client, in: nil,
+                {
+                    try FileBrowser.write(text, to: path); return .fileSaved(path: path)
+                })
         case .createFile(let directory, let name, let isDirectory):
             files(for: client, in: directory) {
                 let path = isDirectory ? try FileBrowser.createFolder(named: name, in: directory) : try FileBrowser.createFile(named: name, in: directory)
                 return .fileCreated(path: path, isDirectory: isDirectory)
             }
         case .renameFile(let path, let name):
-            files(for: client, in: (path as NSString).deletingLastPathComponent) { try FileBrowser.rename(path, to: name); return nil }
+            files(for: client, in: (path as NSString).deletingLastPathComponent) {
+                try FileBrowser.rename(path, to: name); return nil
+            }
         case .trashFile(let path):
-            files(for: client, in: (path as NSString).deletingLastPathComponent) { try FileBrowser.trash(path); return nil }
+            files(for: client, in: (path as NSString).deletingLastPathComponent) {
+                try FileBrowser.trash(path); return nil
+            }
         case .gitStage(let path, let files):
             git(for: client, in: path) { GitActions.stage(files, in: path) }
         case .gitUnstage(let path, let files):
@@ -499,9 +515,12 @@ public final class HostServer {
             git(for: client, in: path) { GitActions.commit(message: message, in: path) }
         case .history(let path):
             let home = configuration.home
-            work(for: client, {
-                path.map { AgentHistory.conversations(in: $0, home: home) } ?? AgentHistory.allConversations(home: home)
-            }) { server, client, conversations in
+            work(
+                for: client,
+                {
+                    path.map { AgentHistory.conversations(in: $0, home: home) } ?? AgentHistory.allConversations(home: home)
+                }
+            ) { server, client, conversations in
                 server.send(.history(path: path, conversations: conversations), to: client)
             }
         case .resume(let agent, let sessionID, let cwd, let size):
@@ -528,17 +547,21 @@ public final class HostServer {
             // Only a plan this host made is honored, so a client names a
             // plan and never a path to write to.
             let plan = planID.flatMap { handoffPlans.removeValue(forKey: $0) }?.plan
-            work(for: client, { () -> Result<(Handoff.Prepared, String), Error> in
-                // Looked up again here: the conversation's files are on this
-                // machine, and what the client holds is only a description.
-                let found = AgentHistory.conversations(in: cwd, home: home).first { $0.agent == agent && $0.sessionID == sessionID }
-                    ?? AgentHistory.allConversations(home: home).first { $0.agent == agent && $0.sessionID == sessionID }
-                guard let found else { return .failure(HandoffRequestError.notFound) }
-                return Result {
-                    let prepared = try Handoff.prepare(found, to: target, plan: plan, prompt: prompt, note: note, in: folder)
-                    return (prepared, prepared.directory)
+            work(
+                for: client,
+                { () -> Result<(Handoff.Prepared, String), Error> in
+                    // Looked up again here: the conversation's files are on this
+                    // machine, and what the client holds is only a description.
+                    let found =
+                        AgentHistory.conversations(in: cwd, home: home).first { $0.agent == agent && $0.sessionID == sessionID }
+                        ?? AgentHistory.allConversations(home: home).first { $0.agent == agent && $0.sessionID == sessionID }
+                    guard let found else { return .failure(HandoffRequestError.notFound) }
+                    return Result {
+                        let prepared = try Handoff.prepare(found, to: target, plan: plan, prompt: prompt, note: note, in: folder)
+                        return (prepared, prepared.directory)
+                    }
                 }
-            }) { server, client, result in
+            ) { server, client, result in
                 switch result {
                 case .success(let (prepared, directory)):
                     server.create(CreateRequest(command: prepared.command, cwd: directory, title: Handoff.name(of: target), size: size), for: client)
@@ -561,10 +584,13 @@ public final class HostServer {
     /// Runs a git change, then answers with the folder's changes as they are
     /// now, so the client's list is right whether it worked or not.
     private func git(for client: Client, in path: String, _ action: @escaping () -> String?) {
-        work(for: client, { () -> (String?, DiffSnapshot) in
-            let problem = action()
-            return (problem, GitDiff.snapshot(directory: path))
-        }) { server, client, result in
+        work(
+            for: client,
+            { () -> (String?, DiffSnapshot) in
+                let problem = action()
+                return (problem, GitDiff.snapshot(directory: path))
+            }
+        ) { server, client, result in
             server.diffCache[path] = (result.1, Date())
             if let problem = result.0 { server.send(.error(problem), to: client) }
             server.send(.diff(path: path, snapshot: result.1.withoutPatches), to: client)
@@ -574,11 +600,14 @@ public final class HostServer {
     /// Runs a change to the files, answers with what it returns or with the
     /// problem, then with the folder's listing as it is now.
     private func files(for client: Client, in directory: String?, _ action: @escaping () throws -> ServerMessage?) {
-        work(for: client, { () -> (ServerMessage?, [FileEntry]?) in
-            var answer: ServerMessage?
-            do { answer = try action() } catch { answer = .error("\(error)") }
-            return (answer, directory.map { FileBrowser.list($0) })
-        }) { server, client, result in
+        work(
+            for: client,
+            { () -> (ServerMessage?, [FileEntry]?) in
+                var answer: ServerMessage?
+                do { answer = try action() } catch { answer = .error("\(error)") }
+                return (answer, directory.map { FileBrowser.list($0) })
+            }
+        ) { server, client, result in
             if let answer = result.0 { server.send(answer, to: client) }
             if let directory, let entries = result.1 { server.send(.files(path: directory, entries: entries), to: client) }
         }
@@ -605,10 +634,13 @@ public final class HostServer {
     /// The folders inside `path`, hidden ones left out.
     static func listing(of path: String, home: String) -> DirectoryListing? {
         let url = URL(fileURLWithPath: path).standardizedFileURL
-        guard let entries = try? FileManager.default.contentsOfDirectory(
-            at: url, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
-        ) else { return nil }
-        let folders = entries
+        guard
+            let entries = try? FileManager.default.contentsOfDirectory(
+                at: url, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+            )
+        else { return nil }
+        let folders =
+            entries
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
             .map(\.lastPathComponent)
             .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
@@ -751,7 +783,7 @@ public final class HostServer {
 
     private func admit(_ client: Client, as identity: DeviceRegistry.Identity) {
         client.identity = identity
-        send(.welcome(version: agenttermProtocolVersion, host: Host.current().localizedName ?? "Mac"), to: client)
+        send(.welcome(version: configuration.protocolVersion, host: Host.current().localizedName ?? "Mac"), to: client)
         send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
         if !accountUsage.isEmpty { send(.accountUsage(accountUsageList()), to: client) }
         send(.folders(folders), to: client)
@@ -764,10 +796,11 @@ public final class HostServer {
     }
 
     private func deviceList() -> [DeviceInfo] {
-        let connected = Set(clients.values.compactMap { client -> String? in
-            if case .device(let id) = client.identity { return id }
-            return nil
-        })
+        let connected = Set(
+            clients.values.compactMap { client -> String? in
+                if case .device(let id) = client.identity { return id }
+                return nil
+            })
         return registry.devices(connected: connected)
     }
 
@@ -791,7 +824,7 @@ public final class HostServer {
 
     private func handle(_ frame: DataFrame, from client: Client) {
         guard client.authenticated, frame.kind == .input,
-              client.attached.contains(frame.session), let session = sessions[frame.session]
+            client.attached.contains(frame.session), let session = sessions[frame.session]
         else { return }
         if TerminalReply.isReply(frame.payload) {
             // An emulator answering the program's question, not a person
@@ -860,7 +893,8 @@ public final class HostServer {
         }
 
         nextSessionID += 1
-        let fallbackTitle = request.command?.split(separator: " ").first.map(String.init)
+        let fallbackTitle =
+            request.command?.split(separator: " ").first.map(String.init)
             ?? (HostEnvironment.shell as NSString).lastPathComponent
         let info = SessionInfo(
             id: id, title: request.title ?? fallbackTitle, cwd: cwd, size: size, createdAt: Date(),

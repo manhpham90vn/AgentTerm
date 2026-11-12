@@ -1,6 +1,7 @@
 import AgentTermProtocol
-@testable import AgentTermHost
 import XCTest
+
+@testable import AgentTermHost
 
 final class HandoffTests: XCTestCase {
     private var root: URL!
@@ -32,64 +33,80 @@ final class HandoffTests: XCTestCase {
     }
 
     func testClaudeTranscriptKeepsWhatWasSaidAndDropsToolTraffic() throws {
-        let source = try write("claude.jsonl", [
-            #"{"type":"user","message":{"role":"user","content":"thêm màn hình đăng nhập"}}"#,
-            #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"Tôi sẽ tạo LoginView."},{"type":"tool_use","name":"Write","input":{}}]}}"#,
-            #"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"file written"}]}}"#,
-            #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{}}]}}"#,
-            #"{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"sub agent chatter"}]}}"#,
-            #"{"type":"user","isMeta":true,"message":{"role":"user","content":"meta"}}"#,
-            #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Xong LoginView, còn thiếu test."}]}}"#,
-        ])
-        XCTAssertEqual(AgentHistory.transcript(of: conversation("claude", source: source)), [
-            TranscriptMessage(role: .user, text: "thêm màn hình đăng nhập"),
-            TranscriptMessage(role: .agent, text: "Tôi sẽ tạo LoginView."),
-            TranscriptMessage(role: .agent, text: "Xong LoginView, còn thiếu test."),
-        ])
+        let source = try write(
+            "claude.jsonl",
+            [
+                #"{"type":"user","message":{"role":"user","content":"thêm màn hình đăng nhập"}}"#,
+                #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm"},{"type":"text","text":"Tôi sẽ tạo LoginView."},{"type":"tool_use","name":"Write","input":{}}]}}"#,
+                #"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"file written"}]}}"#,
+                #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{}}]}}"#,
+                #"{"type":"assistant","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"sub agent chatter"}]}}"#,
+                #"{"type":"user","isMeta":true,"message":{"role":"user","content":"meta"}}"#,
+                #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Xong LoginView, còn thiếu test."}]}}"#,
+            ])
+        XCTAssertEqual(
+            AgentHistory.transcript(of: conversation("claude", source: source)),
+            [
+                TranscriptMessage(role: .user, text: "thêm màn hình đăng nhập"),
+                TranscriptMessage(role: .agent, text: "Tôi sẽ tạo LoginView."),
+                TranscriptMessage(role: .agent, text: "Xong LoginView, còn thiếu test."),
+            ])
     }
 
     func testCodexTranscriptSkipsInjectedContext() throws {
-        let source = try write("codex.jsonl", [
-            #"{"type":"session_meta","payload":{"id":"s-1","cwd":"/x"}}"#,
-            #"{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"rules"}]}}"#,
-            #"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd</environment_context>"}]}}"#,
-            #"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"fix the parser"}]}}"#,
-            #"{"type":"response_item","payload":{"type":"custom_tool_call","name":"shell","input":"ls"}}"#,
-            #"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Parser fixed."}]}}"#,
-        ])
-        XCTAssertEqual(AgentHistory.transcript(of: conversation("codex", source: source)), [
-            TranscriptMessage(role: .user, text: "fix the parser"),
-            TranscriptMessage(role: .agent, text: "Parser fixed."),
-        ])
+        let source = try write(
+            "codex.jsonl",
+            [
+                #"{"type":"session_meta","payload":{"id":"s-1","cwd":"/x"}}"#,
+                #"{"type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"rules"}]}}"#,
+                #"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd</environment_context>"}]}}"#,
+                #"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"fix the parser"}]}}"#,
+                #"{"type":"response_item","payload":{"type":"custom_tool_call","name":"shell","input":"ls"}}"#,
+                #"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Parser fixed."}]}}"#,
+            ])
+        XCTAssertEqual(
+            AgentHistory.transcript(of: conversation("codex", source: source)),
+            [
+                TranscriptMessage(role: .user, text: "fix the parser"),
+                TranscriptMessage(role: .agent, text: "Parser fixed."),
+            ])
     }
 
     func testCopilotTranscript() throws {
-        let source = try write("events.jsonl", [
-            #"{"type":"session.start","data":{}}"#,
-            #"{"type":"user.message","data":{"content":"explain this repo"}}"#,
-            #"{"type":"assistant.message","data":{"content":"","toolRequests":[{}]}}"#,
-            #"{"type":"assistant.message","data":{"content":"It is a terminal app."}}"#,
-        ])
-        XCTAssertEqual(AgentHistory.transcript(of: conversation("copilot", source: source)), [
-            TranscriptMessage(role: .user, text: "explain this repo"),
-            TranscriptMessage(role: .agent, text: "It is a terminal app."),
-        ])
+        let source = try write(
+            "events.jsonl",
+            [
+                #"{"type":"session.start","data":{}}"#,
+                #"{"type":"user.message","data":{"content":"explain this repo"}}"#,
+                #"{"type":"assistant.message","data":{"content":"","toolRequests":[{}]}}"#,
+                #"{"type":"assistant.message","data":{"content":"It is a terminal app."}}"#,
+            ])
+        XCTAssertEqual(
+            AgentHistory.transcript(of: conversation("copilot", source: source)),
+            [
+                TranscriptMessage(role: .user, text: "explain this repo"),
+                TranscriptMessage(role: .agent, text: "It is a terminal app."),
+            ])
     }
 
     func testAntigravityTranscript() throws {
-        let source = try write("transcript_full.jsonl", [
-            #"{"source":"SYSTEM","type":"SYSTEM_MESSAGE","content":"rules"}"#,
-            #"{"source":"USER_EXPLICIT","type":"USER_INPUT","content":"<ADDITIONAL_METADATA>time</ADDITIONAL_METADATA>\n<USER_REQUEST>\nrà soát file N5\n</USER_REQUEST>"}"#,
-            #"{"source":"MODEL","type":"PLANNER_RESPONSE","content":null,"tool_calls":[{}]}"#,
-            #"{"source":"MODEL","type":"GENERIC","content":"tool output"}"#,
-            #"{"source":"MODEL","type":"PLANNER_RESPONSE","content":"Đã rà soát xong."}"#,
-            #"{"source":"USER_EXPLICIT","type":"USER_INPUT","content":"no tag here"}"#,
-        ])
-        XCTAssertEqual(AgentHistory.transcript(of: conversation("agy", source: source)), [
-            TranscriptMessage(role: .user, text: "rà soát file N5"),
-            TranscriptMessage(role: .agent, text: "Đã rà soát xong."),
-            TranscriptMessage(role: .user, text: "no tag here"),
-        ])
+        let source = try write(
+            "transcript_full.jsonl",
+            [
+                #"{"source":"SYSTEM","type":"SYSTEM_MESSAGE","content":"rules"}"#,
+                #"{"source":"USER_EXPLICIT","type":"USER_INPUT","content":"<ADDITIONAL_METADATA>time</ADDITIONAL_METADATA>\n<USER_REQUEST>\nrà soát file N5\n</USER_REQUEST>"}"#,
+                #"{"source":"MODEL","type":"PLANNER_RESPONSE","content":null,"tool_calls":[{}]}"#,
+                #"{"source":"MODEL","type":"GENERIC","content":"tool output"}"#,
+                #"{"source":"MODEL","type":"PLANNER_RESPONSE","content":"Đã rà soát xong."}"#,
+                #"{"source":"USER_EXPLICIT","type":"USER_INPUT","content":"no tag here"}"#,
+            ])
+        XCTAssertEqual(
+            AgentHistory.transcript(of: conversation("agy", source: source)),
+            [
+                TranscriptMessage(role: .user, text: "rà soát file N5"),
+                TranscriptMessage(role: .agent, text: "Đã rà soát xong."),
+                TranscriptMessage(role: .user, text: "no tag here"),
+            ])
     }
 
     func testNoReadableSourceMeansNoTranscript() {
@@ -171,10 +188,12 @@ final class HandoffTests: XCTestCase {
         git("add", ".", in: root)
         git("commit", "-q", "-m", "init", in: root)
         _ = try write("app.txt", ["one", "two"])
-        let source = try write("../\(root.lastPathComponent)-claude.jsonl", [
-            #"{"type":"user","message":{"role":"user","content":"add a second line"}}"#,
-            #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Added it."}]}}"#,
-        ])
+        let source = try write(
+            "../\(root.lastPathComponent)-claude.jsonl",
+            [
+                #"{"type":"user","message":{"role":"user","content":"add a second line"}}"#,
+                #"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Added it."}]}}"#,
+            ])
         defer { try? FileManager.default.removeItem(atPath: source) }
 
         let now = Date(timeIntervalSince1970: 1_800_000_000)

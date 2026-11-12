@@ -22,11 +22,11 @@ public enum AgentDetector {
         // `whence -p` / `type -P` print the executable path and ignore aliases
         // and functions; `command -v` is the portable fallback.
         let script = """
-        for a in \(names); do
-          p=$(whence -p "$a" 2>/dev/null || type -P "$a" 2>/dev/null || command -v "$a" 2>/dev/null)
-          printf '\(marker)%s=%s\\n' "$a" "$p"
-        done
-        """
+            for a in \(names); do
+              p=$(whence -p "$a" 2>/dev/null || type -P "$a" 2>/dev/null || command -v "$a" 2>/dev/null)
+              printf '\(marker)%s=%s\\n' "$a" "$p"
+            done
+            """
         let result = Subprocess.run(HostEnvironment.shell, ["-l", "-i", "-c", script], cwd: HostEnvironment.homeDirectory, timeout: 8)
         let output = String(data: result?.output ?? Data(), encoding: .utf8) ?? ""
         return parse(output)

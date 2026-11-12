@@ -42,7 +42,7 @@ public enum SessionSummaries {
         // Conversations that are already known keep their session.
         for session in sessions {
             guard let known = session.conversationID,
-                  let conversation = conversations.first(where: { $0.agent == session.agent && $0.sessionID == known })
+                let conversation = conversations.first(where: { $0.agent == session.agent && $0.sessionID == known })
             else { continue }
             result[session.id] = conversation
             taken.insert(conversation.id)
@@ -58,12 +58,14 @@ public enum SessionSummaries {
                     && URL(fileURLWithPath: $0.cwd).standardizedFileURL.path == folder
             }
             let earliest = session.createdAt.addingTimeInterval(-slack)
-            let began = candidates
+            let began =
+                candidates
                 .filter { ($0.startedAt ?? .distantPast) >= earliest }
                 .min { ($0.startedAt ?? .distantPast) < ($1.startedAt ?? .distantPast) }
             // Where the agent does not record a start, fall back to the
             // conversation it touched most recently since the session began.
-            let touched = candidates
+            let touched =
+                candidates
                 .filter { $0.startedAt == nil && $0.updatedAt >= earliest }
                 .max { $0.updatedAt < $1.updatedAt }
             if let match = began ?? touched {

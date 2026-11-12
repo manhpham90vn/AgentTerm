@@ -93,7 +93,9 @@ struct HistoryView: View {
                     .lineLimit(1)
                     .fixedSize()
                 Spacer()
-                Button { model.refreshHistory() } label: {
+                Button {
+                    model.refreshHistory()
+                } label: {
                     Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
                 }
                 .buttonStyle(.plain)
@@ -117,9 +119,10 @@ struct HistoryView: View {
             placeholder("Select a folder to see its conversations, or switch to All.")
         } else if let history = model.history {
             if history.isEmpty {
-                placeholder(model.historyShowsAll
-                    ? "No agent has a conversation on this Mac yet."
-                    : "No agent has a conversation in this folder yet.\nSwitch to All to see the ones from other folders.")
+                placeholder(
+                    model.historyShowsAll
+                        ? "No agent has a conversation on this Mac yet."
+                        : "No agent has a conversation in this folder yet.\nSwitch to All to see the ones from other folders.")
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
@@ -200,7 +203,9 @@ private struct ConversationRow: View {
     private var actions: some View {
         HStack(spacing: 10) {
             if !targets.isEmpty {
-                Button { model.requestHandoff(conversation) } label: {
+                Button {
+                    model.requestHandoff(conversation)
+                } label: {
                     Label("Hand Off", systemImage: "arrowshape.turn.up.right.fill")
                         .font(.system(size: 10.5, weight: .semibold))
                 }
@@ -208,7 +213,9 @@ private struct ConversationRow: View {
                 .foregroundStyle(.secondary)
                 .help("Give this work to another agent")
             }
-            Button { model.resume(conversation) } label: {
+            Button {
+                model.resume(conversation)
+            } label: {
                 Label("Resume", systemImage: "play.fill")
                     .font(.system(size: 10.5, weight: .semibold))
             }
@@ -222,8 +229,9 @@ private struct ConversationRow: View {
         .background(
             // Fades in from the left so the title does not end at a hard
             // edge, and is solid before the first icon so no text shows through it.
-            LinearGradient(stops: [.init(color: Self.hoverFill.opacity(0), location: 0), .init(color: Self.hoverFill, location: 0.14)],
-                           startPoint: .leading, endPoint: .trailing)
+            LinearGradient(
+                stops: [.init(color: Self.hoverFill.opacity(0), location: 0), .init(color: Self.hoverFill, location: 0.14)],
+                startPoint: .leading, endPoint: .trailing)
         )
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
     }

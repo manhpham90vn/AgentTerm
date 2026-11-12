@@ -16,7 +16,7 @@ public enum DaemonLauncher {
     /// The program that listens on a local TCP port, if there is one.
     public static func listener(onPort port: UInt16) -> (pid: pid_t, path: String)? {
         guard let result = Subprocess.run("/usr/sbin/lsof", ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-t"], timeout: 5),
-              let pid = String(decoding: result.output, as: UTF8.self).split(whereSeparator: \.isNewline).first.flatMap({ pid_t($0) })
+            let pid = String(decoding: result.output, as: UTF8.self).split(whereSeparator: \.isNewline).first.flatMap({ pid_t($0) })
         else { return nil }
         var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
         guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }

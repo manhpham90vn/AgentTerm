@@ -41,7 +41,7 @@ extension AppModel {
 
     static func savedTabLayout() -> TabLayout {
         guard let data = UserDefaults.standard.data(forKey: tabLayoutKey),
-              let layout = try? JSONDecoder().decode(TabLayout.self, from: data)
+            let layout = try? JSONDecoder().decode(TabLayout.self, from: data)
         else { return TabLayout() }
         return layout
     }
