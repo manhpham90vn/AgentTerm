@@ -65,7 +65,16 @@ The bundle identifier is `com.manhpham.agentterm`. Before the first upload:
    it in the match repository. After that the lanes only read it.
 
 `ios beta` gives the build the next number after the newest one TestFlight
-has for the version, and does not wait for Apple to finish processing it.
+has for the version.
+
+Who gets the build: the internal testers always. `TESTFLIGHT_GROUPS=External`
+(any group names, separated by commas) also gives it to those groups; for a
+group of outside testers the lane submits the build to Apple's beta review,
+and they get it when that passes. The release workflow does this for the
+`External` group unless its `testflight_groups` input is emptied.
+`scripts/release.sh ios groups` lists the groups, and
+`TESTFLIGHT_GROUPS=External scripts/release.sh ios distribute` gives a build
+that is already uploaded to them without building again.
 
 ### The App Store listing
 
@@ -107,11 +116,19 @@ silicon Mac). There is no universal build yet.
 - `VERSION` holds the version being released. A release as `0.3.0-beta.1`
   is a pre-release of `0.3.0`; the workflow refuses a version that is not
   the one in the file (`scripts/check-version.sh`).
-- `packaging/release-notes/v<version>.md` says what changed, one file for a
-  version and its pre-releases. The workflow refuses to release without it
-  (`scripts/check-release-notes.sh`). The GitHub release shows it, and
-  TestFlight gets it as "What to Test", for which the iPhone lane waits until
-  Apple has processed the build. `NOTES=0` skips the waiting and the notes.
+- `packaging/release-notes/` holds what is said about a release:
+  - `v0.3.0.md` says what changed in the version. The workflow refuses to
+    release without it (`scripts/check-release-notes.sh`).
+  - `v0.3.0-beta.4.md`, when there is one, is used for that pre-release
+    instead: what is new since the one before.
+  - Either can have a file next to it ending in `.testflight.md`
+    (`v0.3.0-beta.4.testflight.md`). TestFlight shows that one as "What to
+    Test": what changed on the iPhone and what testers should try. Without
+    it TestFlight gets the release notes.
+
+  The GitHub release and the Discord announcement show the release notes.
+  For TestFlight the iPhone lane waits until Apple has processed the build;
+  `NOTES=0` skips the waiting and the notes.
 
 `make release V=0.3.0-beta.1` runs both checks and then starts the workflow.
 
@@ -132,6 +149,15 @@ the same bundle identifier. Their config files are in the dotfiles repo, at
 
 Crashlytics is not given debug symbols yet, so stack traces in its console
 show addresses, not function names.
+
+## Discord
+
+After a release the workflow posts the version's release notes in a Discord
+channel, with links to the GitHub release and TestFlight, through a webhook
+of that channel. The webhook's address is the `DISCORD_WEBHOOK_URL` secret,
+kept in the dotfiles repo's `projects/agentterm/release.env`; without it
+nothing is posted. `scripts/announce-discord.sh <version>` does the same by
+hand, and `DRY_RUN=1` prints the message without sending it.
 
 ## Homebrew
 

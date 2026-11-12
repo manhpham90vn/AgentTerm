@@ -18,6 +18,7 @@ name: Release
 #   FIREBASE_CONFIG_MAC, FIREBASE_CONFIG_IOS
 #                                 base64 of each app's GoogleService-Info.plist; without one
 #                                 that app is built with no reporting service
+#   DISCORD_WEBHOOK_URL           a Discord channel's webhook; without it the release is not announced
 #   HOMEBREW_TAP_TOKEN            token with contents write access to manhpham90vn/homebrew-tap;
 #                                 without it the cask is not updated
 
@@ -37,6 +38,9 @@ on:
         description: "Upload the iPhone app to TestFlight"
         type: boolean
         default: true
+      testflight_groups:
+        description: "TestFlight groups that get the build, besides the internal testers (e.g. External); empty for none"
+        default: "External"
 
 permissions:
   contents: write
@@ -153,6 +157,7 @@ jobs:
           if [ -n "${{ inputs.version }}" ]; then v="${{ inputs.version }}"; else v="${GITHUB_REF_NAME#v}"; fi
           # TestFlight takes numbers only: 0.2.0-beta.1 is uploaded as 0.2.0.
           echo "value=${v%%-*}" >> "$GITHUB_OUTPUT"
+          echo "release=$v" >> "$GITHUB_OUTPUT"
 
       # The version has to be the one in VERSION (a -beta.N suffix is fine), and its
       # notes have to be written: the GitHub release and TestFlight show them.
@@ -188,6 +193,10 @@ jobs:
       - name: Build and upload
         env:
           VERSION: ${{ steps.version.outputs.value }}
+          # With its suffix, to find the notes a pre-release has of its own.
+          RELEASE_VERSION: ${{ steps.version.outputs.release }}
+          # A release from a tag has no inputs: it goes to the outside testers too.
+          TESTFLIGHT_GROUPS: ${{ github.event_name == 'push' && 'External' || inputs.testflight_groups }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
           ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
@@ -201,3 +210,21 @@ jobs:
       - name: Remove the key
         if: always()
         run: rm -f "$RUNNER_TEMP/asc_key.p8" "$RUNNER_TEMP/firebase.plist"
+
+  # Tells the Discord channel, once both apps are out. Skipped without the secret.
+  announce:
+    name: Announce on Discord
+    needs: [mac, ios]
+    # Also when only one of the two was released; not when one of them failed.
+    if: ${{ !cancelled() && !failure() && (needs.mac.result == 'success' || needs.ios.result == 'success') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Post the release notes
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then echo "No DISCORD_WEBHOOK_URL secret: not announcing."; exit 0; fi
+          if [ -n "${{ inputs.version }}" ]; then v="${{ inputs.version }}"; else v="${GITHUB_REF_NAME#v}"; fi
+          scripts/announce-discord.sh "$v"

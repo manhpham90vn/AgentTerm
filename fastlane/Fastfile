@@ -45,6 +45,24 @@ def what_to_test(markdown)
   text.strip[0, 4000]
 end
 
+# The notes of the release being made: the pre-release's own file when it
+# has one (v0.3.0-beta.4.md), the version's otherwise (v0.3.0.md). RELEASE
+# names the release when it is not just the version, as for a pre-release.
+# With `testflight`, a file ending in .testflight.md is preferred: what
+# testers should look at, not everything that changed.
+def release_notes(testflight: false)
+  release = ENV["RELEASE_VERSION"].to_s.empty? ? app_version : ENV["RELEASE_VERSION"]
+  base = release[/^[\d.]+/]
+  names = ["v#{release}.md", "v#{base}.md"]
+  names = ["v#{release}.testflight.md", "v#{base}.testflight.md"] + names if testflight
+  names.map { |name| File.join(ROOT, "packaging/release-notes", name) }.find { |file| File.size?(file) }
+end
+
+# The TestFlight groups named in TESTFLIGHT_GROUPS.
+def testflight_groups
+  ENV["TESTFLIGHT_GROUPS"].to_s.split(",").map(&:strip).reject(&:empty?)
+end
+
 platform :ios do
   desc "Build the iPhone app, signed for the App Store"
   lane :build do |options|
@@ -117,13 +135,13 @@ platform :ios do
     # Name, subtitle, description, keywords, URLs, categories and the notes
     # for App Review. "What's New" is the version's release notes. Nothing is
     # submitted for review; the screenshots have a lane of their own.
-    notes = File.join(ROOT, "packaging/release-notes/v#{app_version[/^[\d.]+/]}.md")
+    notes = release_notes
     upload_to_app_store(
       api_key: asc_key,
       app_identifier: APP_ID,
       app_version: app_version[/^[\d.]+/],
       metadata_path: File.join(ROOT, "fastlane/metadata"),
-      release_notes: File.size?(notes) ? { "en-US" => what_to_test(File.read(notes)) } : nil,
+      release_notes: notes ? { "en-US" => what_to_test(File.read(notes)) } : nil,
       skip_binary_upload: true,
       skip_screenshots: true,
       precheck_include_in_app_purchases: false,
@@ -133,20 +151,61 @@ platform :ios do
     )
   end
 
+  desc "List the TestFlight groups of the app"
+  lane :groups do
+    Spaceship::ConnectAPI.token = Spaceship::ConnectAPI::Token.create(
+      key_id: ENV.fetch("ASC_KEY_ID"), issuer_id: ENV.fetch("ASC_ISSUER_ID"), filepath: ENV.fetch("ASC_KEY_PATH")
+    )
+    app = Spaceship::ConnectAPI::App.find(APP_ID)
+    app.get_beta_groups.each do |group|
+      UI.message("#{group.is_internal_group ? 'internal' : 'external'}  #{group.name}  (#{group.id})")
+    end
+  end
+
   desc "Build the iPhone app and upload it to TestFlight"
   lane :beta do |options|
     build(options)
     # "What to Test" is the version's release notes. TestFlight takes them
     # only once it has processed the build, so the lane waits for that when
     # there are notes; NOTES=0 uploads and leaves at once.
-    notes = File.join(ROOT, "packaging/release-notes/v#{app_version[/^[\d.]+/]}.md")
-    with_notes = File.size?(notes) && ENV["NOTES"] != "0"
+    notes = release_notes(testflight: true)
+    with_notes = notes && ENV["NOTES"] != "0"
+    # TESTFLIGHT_GROUPS names the groups that get the build, separated by
+    # commas ("External"). Without it only the internal testers do. A group
+    # of outside testers gets a build once Apple's beta review has passed
+    # it, which the lane asks for; that needs the build to be processed
+    # first, so the lane waits.
+    groups = testflight_groups
     upload_to_testflight(
       api_key: asc_key,
       ipa: File.join(DIST, "AgentTerm.ipa"),
-      skip_waiting_for_build_processing: !with_notes,
-      distribute_external: false,
+      skip_waiting_for_build_processing: !with_notes && groups.empty?,
+      distribute_external: !groups.empty?,
+      groups: groups.empty? ? nil : groups,
+      notify_external_testers: true,
       changelog: with_notes ? what_to_test(File.read(notes)) : nil
+    )
+  end
+
+  desc "Give a build that is already on TestFlight to groups: TESTFLIGHT_GROUPS=External fastlane ios distribute [build:3]"
+  lane :distribute do |options|
+    groups = testflight_groups
+    UI.user_error!("Set TESTFLIGHT_GROUPS to the groups that should get the build, e.g. External") if groups.empty?
+    key = asc_key
+    version = app_version[/^[\d.]+/]
+    number = options[:build] || latest_testflight_build_number(api_key: key, app_identifier: APP_ID, version: version)
+    notes = release_notes(testflight: true)
+    upload_to_testflight(
+      api_key: key,
+      app_identifier: APP_ID,
+      distribute_only: true,
+      app_platform: "ios",
+      app_version: version,
+      build_number: number.to_s,
+      distribute_external: true,
+      groups: groups,
+      notify_external_testers: true,
+      changelog: notes ? what_to_test(File.read(notes)) : nil
     )
   end
 end
