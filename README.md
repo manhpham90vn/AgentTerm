@@ -112,7 +112,8 @@ in [SECURITY.md](SECURITY.md) and [PRIVACY.md](PRIVACY.md).
 
 ## Documentation
 
-- [docs/SPEC.md](docs/SPEC.md): everything the product does, and the roadmap
+- [docs/SPEC.md](docs/SPEC.md): everything the product does
+- [Issues](https://github.com/manhpham90vn/AgentTerm/issues): planned work and known bugs
 - [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md): build from source, tests, code layout, contributing
 - [docs/DESIGN.md](docs/DESIGN.md): architecture and protocol
 - [docs/RELEASE.md](docs/RELEASE.md): how releases are made

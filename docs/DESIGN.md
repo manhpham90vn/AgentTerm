@@ -200,8 +200,7 @@ is not attached to the session is dropped.
 The host keeps the last 512 KB of each session's output and replays it to a
 client that attaches. This is simple and good enough for shells. For full
 screen programs it relies on the program redrawing, which happens when the
-attach changes the size. Replacing the replay with a real screen snapshot from
-a headless emulator on the host is planned (M3).
+attach changes the size.
 
 ## Agent detection
 
@@ -457,8 +456,8 @@ the same folder can therefore be mixed up; the History tab is exact.
 - **macOS**: SwiftTerm's view implements `NSTextInputClient`, so input methods
   that use marked text compose at the cursor. Tools that retype with
   backspaces send DEL bytes followed by the new text, which the shell and the
-  agents handle themselves. Both paths need to be checked by hand against the
-  matrix in the spec; that has not been done yet.
+  agents handle themselves. Both paths are checked by hand, against the
+  matrix in the spec.
 - **iPhone**: prose goes through a native compose field and is sent as
   complete text, so the emulator never sees a composition. The key bar sends
   control keys directly. The text and the Return that submits it are sent 80 ms
@@ -517,4 +516,3 @@ the same folder can therefore be mixed up; the History tab is exact.
 - The host does not apply backpressure to a slow client.
 - The daemon is started by the app, not as a login item, so after a reboot
   nothing runs until the app is opened.
-- The Mac build is ad-hoc signed, not notarized.

@@ -401,11 +401,6 @@ edits here is not merged; saving overwrites it.
   session that was open.
 
 
-### Notifications (later)
-
-When an agent finishes or waits for an answer, the iPhone is notified. This
-needs a push provider and is not part of the first release.
-
 ## Vietnamese input requirements
 
 - The host forces a UTF-8 locale for every session.
@@ -426,11 +421,7 @@ needs a push provider and is not part of the first release.
 - A code editor. The changes pane is read-only.
 - Windows and Linux hosts.
 
-## Roadmap
+## Planned work
 
-| Milestone | Scope | Status |
-|---|---|---|
-| M1 Mac core | Host daemon, PTY sessions, protocol, macOS three-pane app, agent detection and quick launch, changes pane, pairing QR code | Done, except the Vietnamese input matrix, which is checked by hand and not yet run |
-| M2 iPhone | iOS app: scan to pair, several Macs, session list, terminal sized to the phone, key bar, compose field, folder picker, changes, history, resume and handoff | Works in the iOS Simulator. Not yet run on a real iPhone, so QR scanning with the camera, Tailscale from the phone and typing with the Vietnamese keyboard are unverified |
-| M3 Polish | Host as a login item, screen snapshot on attach, app icon, signed and notarized Mac build | Not started |
-| M4 Awareness | Agent state (working, waiting, done) and notifications | Not started |
+What is planned is kept in the
+[issues](https://github.com/manhpham90vn/AgentTerm/issues), not in this file.
