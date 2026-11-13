@@ -60,21 +60,25 @@ answering. What is over its threshold is fixed for 0.6.0.
 
 ## After the first fixes
 
-Taken again on 2026-11-13, release build, after the changes are read with
-one `git status`, new files' patches are made without a git for each, the
+Taken again on 2026-11-13, release build, after: the changes are read with
+one `git status`; new files' patches are made without a git for each; the
 side panel and the host read a folder's changes again only when its files
-change (FSEvents), and messages larger than 256 KB are sent in pieces.
+change (FSEvents); messages larger than 256 KB are sent in pieces; and
+commands are started with `posix_spawn` and waited for with `waitpid`,
+since Foundation's `Process` took some 70 ms to start one and see it end
+(five runs of `/usr/bin/true`: 342 ms before, 5 ms after).
 
 | Case | Before | After | Threshold |
 |---|---|---|---|
-| A repository of 50,000 files, nothing changed | 575 ms | 354 ms | met |
-| The same, ten files changed | 583 ms | 462 ms | met |
+| A repository of 50,000 files, nothing changed | 575 ms | 83 ms | met |
+| The same, ten files changed | 583 ms | 130 ms | met |
 | The side panel open, nothing changing | a refresh every 3 s, 19% of a core | none: read again when files change | met |
-| 5,000 untracked files | 5.1 s | 325 ms | met |
-| A diff of 20,000 lines worked out | 638 ms | 470 ms | **over** (300 ms) |
+| 5,000 untracked files | 5.1 s | 34 ms | met |
+| A diff of 20,000 lines worked out | 638 ms | 105 ms | met |
 | A folder of 20,000 entries, as sent | one message of 3.6 MB | pieces of at most 256 KB | met |
-| The host after 100 sessions opened and ended | +61% | +48% | **over** (10%) |
-| Attaching to a session with 10,000 lines | 81 ms on the queue the sessions use | 80 ms | **over** (16 ms) |
+| The host after 100 sessions opened and ended | +61% | +47% | **over** (10%) |
+| Attaching to a session with 10,000 lines | 81 ms on the queue the sessions use | 81 ms | **over** (16 ms) |
+| A text file over 2 MB | cannot be opened | cannot be opened | **over** |
 
 ## Not measured yet
 
