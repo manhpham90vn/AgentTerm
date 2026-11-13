@@ -218,13 +218,25 @@ final class PerformanceMeasurements: XCTestCase {
 
     // MARK: Memory
 
+    /// What the process holds, in KB, as vmmap says: its own dirty pages,
+    /// not the libraries it shares with every other process.
+    private func footprint(_ pid: Int32) -> Int {
+        let map = String(decoding: Subprocess.run("/usr/bin/vmmap", ["-summary", String(pid)], timeout: 60)?.output ?? Data(), as: UTF8.self)
+        guard let line = map.split(separator: "\n").first(where: { $0.hasPrefix("Physical footprint:") }) else { return 0 }
+        let figure = line.split(separator: " ").last.map(String.init) ?? ""
+        let number = Double(figure.dropLast()) ?? 0
+        return Int(figure.hasSuffix("M") ? number * 1024 : number)
+    }
+
     private func resident(_ pid: Int32) -> Int {
         let result = Subprocess.run("/bin/ps", ["-o", "rss=", "-p", String(pid)], timeout: 5)
         return Int(String(decoding: result?.output ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
     }
 
     /// The real host, on a state folder and port of its own: its memory at
-    /// rest, with sessions, and once a hundred were opened and ended.
+    /// rest, with sessions, and once two hundred were opened and ended. What
+    /// it holds after the first twenty is the allocator keeping their pages;
+    /// it must not grow with more (PERF-8).
     func testTheHostsMemory() throws {
         let tool = Bundle(for: PerformanceMeasurements.self).bundleURL.deletingLastPathComponent().appendingPathComponent("agenttermd")
         try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: tool.path))
@@ -254,7 +266,8 @@ final class PerformanceMeasurements: XCTestCase {
         func spin(_ seconds: TimeInterval) { RunLoop.main.run(until: Date().addingTimeInterval(seconds)) }
         spin(1)
         let atRest = resident(host.processIdentifier)
-        report("the host at rest, no session", "\(atRest / 1024) MB resident")
+        let footprintAtRest = footprint(host.processIdentifier)
+        report("the host at rest, no session", "\(atRest / 1024) MB resident, \(footprintAtRest / 1024) MB its own")
 
         for _ in 0..<20 { client.send(.create(CreateRequest(command: "exec sleep 600", cwd: root.path))) }
         let deadline = Date().addingTimeInterval(20)
@@ -265,7 +278,11 @@ final class PerformanceMeasurements: XCTestCase {
 
         for session in sessions { client.send(.kill(session: session.id)) }
         while !sessions.isEmpty && Date() < deadline.addingTimeInterval(20) { spin(0.1) }
-        for round in 0..<4 {
+        spin(3)
+        // What twenty at once leave held: the allocator keeps the pages.
+        let footprintAfterFirst = footprint(host.processIdentifier)
+        report("  its own memory once the first 20 ended", "\(footprintAfterFirst / 1024) MB")
+        for round in 0..<9 {
             for _ in 0..<20 { client.send(.create(CreateRequest(command: "exec sleep 600", cwd: root.path))) }
             let started = Date()
             while sessions.count < 20 && Date().timeIntervalSince(started) < 20 { spin(0.1) }
@@ -276,7 +293,27 @@ final class PerformanceMeasurements: XCTestCase {
         spin(3)
         let after = resident(host.processIdentifier)
         report(
-            "the host after 100 sessions opened and ended",
+            "the host after 200 sessions opened and ended",
             "\(after / 1024) MB resident, \(String(format: "%+.0f", Double(after - atRest) / Double(max(atRest, 1)) * 100))% from at rest")
+        let footprintAfter = footprint(host.processIdentifier)
+        report(
+            "  its own memory after all 200",
+            "\(footprintAfter / 1024) MB, \(String(format: "%+.0f", Double(footprintAfter - footprintAtRest) / Double(max(footprintAtRest, 1)) * 100))% from at rest, "
+                + "\(String(format: "%+.0f", Double(footprintAfter - footprintAfterFirst) / Double(max(footprintAfterFirst, 1)) * 100))% from after the first 20")
+        // A leak, or pages the allocator keeps for later? `leaks` says what
+        // nothing points at any more; the footprint is what the process
+        // holds, kept pages included.
+        let pid = String(host.processIdentifier)
+        let leaks = String(decoding: Subprocess.run("/usr/bin/leaks", [pid], timeout: 60)?.output ?? Data(), as: UTF8.self)
+        if let line = leaks.split(separator: "\n").first(where: { $0.contains("leaks for") }) {
+            report("  leaks", line.trimmingCharacters(in: .whitespaces))
+        }
+        let map = String(decoding: Subprocess.run("/usr/bin/vmmap", ["-summary", pid], timeout: 60)?.output ?? Data(), as: UTF8.self)
+        for line in map.split(separator: "\n")
+        where line.hasPrefix("Physical footprint") || line.contains("MALLOC") || line.contains("Zone")
+            || line.hasPrefix("REGION TYPE") || line.contains("TOTAL")
+        {
+            report("  vmmap", line.trimmingCharacters(in: .whitespaces))
+        }
     }
 }
