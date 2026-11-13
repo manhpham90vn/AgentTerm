@@ -1,8 +1,8 @@
+import ActivityKit
 import AgentTermClient
 import AgentTermProtocol
 import AgentTermTelemetry
 import AgentTermTerminal
-import ActivityKit
 import SwiftUI
 import UserNotifications
 

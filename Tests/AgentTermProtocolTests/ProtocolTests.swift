@@ -248,4 +248,25 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(LiveActivityRule.decide(enabled: false, connected: true, macInUse: false, sessions: working), .endNow, "switched off")
         XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: true, macInUse: false, sessions: [session(.done(said: nil)), session(nil)]), .endShowingDone)
     }
+
+    /// PERF-1: a message larger than a frame may be is sent in pieces, none
+    /// larger than 256 KB, and joined whole; one that fits is not split.
+    func testALargeMessageIsSentInPiecesAndJoined() throws {
+        XCTAssertNil(MessageParts.frames(for: Data(count: 1000), id: 1))
+        let message = Data((0..<(1_000_000)).map { UInt8($0 % 251) })
+        let frames = try XCTUnwrap(MessageParts.frames(for: message, id: 7))
+        XCTAssertEqual(frames.count, 4)
+        XCTAssertTrue(frames.allSatisfy { $0.encoded().count <= MessageParts.limit })
+        XCTAssertEqual(frames.map(\.kind), [.messagePart, .messagePart, .messagePart, .messageEnd])
+        var joiner = MessageParts.Joiner()
+        var whole: Data?
+        for frame in frames { whole = joiner.add(DataFrame(decoding: frame.encoded())!) ?? whole }
+        XCTAssertEqual(whole, message)
+        // Pieces of a message that never ended are not taken for the next.
+        _ = joiner.add(frames[0])
+        let other = try XCTUnwrap(MessageParts.frames(for: Data(repeating: 1, count: 300_000), id: 8))
+        var second: Data?
+        for frame in other { second = joiner.add(frame) ?? second }
+        XCTAssertEqual(second, Data(repeating: 1, count: 300_000))
+    }
 }

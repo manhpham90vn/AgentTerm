@@ -50,6 +50,28 @@ final class LoginItemTests: XCTestCase {
     }
 
     /// LOGIN-4.
+    /// LOGIN-9: Start at Login is on by default, the first time a host that
+    /// can be started at login runs; once the user turned it off, it stays off.
+    func testItIsOnByDefaultUntilTheUserChooses() throws {
+        let item = item()
+        var configuration = HostServer.Configuration(port: 0, token: "test-token-0123456789abcdef0123456789", listenOnTailscale: false, detectAgents: { [] })
+        configuration.foldersFile = folder.appendingPathComponent("state/folders.json")
+        configuration.loginItem = item
+        var server = HostServer(configuration: configuration)
+        _ = try server.start()
+        XCTAssertTrue(item.isOn, "on by default")
+        server.stop()
+
+        // The user turns it off; the next host leaves it off.
+        try item.turnOff()
+        let saved = folder.appendingPathComponent("state/settings.json")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: saved.path))
+        server = HostServer(configuration: configuration)
+        _ = try server.start()
+        XCTAssertFalse(item.isOn, "the user's choice is kept")
+        server.stop()
+    }
+
     func testAnAppThatMovedIsStartedFromWhereItIsNow() throws {
         try item().turnOn()
         let moved = item(executable: "/Users/me/Applications/AgentTerm.app/Contents/MacOS/agenttermd")

@@ -172,7 +172,9 @@ struct RootView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("A new worktree starts from the last commit, without them: the agent there will not see them. Nothing git ignores is brought along either, such as .env or node_modules; a setup command for the folder can bring what is needed.")
+            Text(
+                "A new worktree starts from the last commit, without them: the agent there will not see them. Nothing git ignores is brought along either, such as .env or node_modules; a setup command for the folder can bring what is needed."
+            )
         }
         .alert("Worktree", isPresented: Binding(get: { model.worktreeSaid != nil }, set: { if !$0 { model.worktreeSaid = nil } })) {
             Button("OK", role: .cancel) {}

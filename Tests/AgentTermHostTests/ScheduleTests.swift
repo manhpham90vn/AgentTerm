@@ -118,10 +118,10 @@ final class SchedulerHostTests: XCTestCase {
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
         // Writes down its arguments, its folder and its permission variable, then waits.
         try """
-            #!/bin/sh
-            printf '%s|%s|%s\\n' "$*" "$PWD" "$COPILOT_ALLOW_ALL" >> '\(started.path)'
-            exec sleep 600
-            """.write(to: agents.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
+        #!/bin/sh
+        printf '%s|%s|%s\\n' "$*" "$PWD" "$COPILOT_ALLOW_ALL" >> '\(started.path)'
+        exec sleep 600
+        """.write(to: agents.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agents.appendingPathComponent("claude").path)
         try FileManager.default.copyItem(at: agents.appendingPathComponent("claude"), to: agents.appendingPathComponent("copilot"))
 

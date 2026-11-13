@@ -387,7 +387,8 @@ struct SessionRow: View {
         .accessibilityLabel(
             AgentStateMark.label(
                 "\(session.displayName), session" + (session.branch.map { ", in worktree \($0)" } ?? "") + (session.openedBy == nil ? "" : ", opened by an agent"),
-                session))
+                session)
+        )
         .accessibilityIdentifier("session-\(session.id)")
         .accessibilityAddTraits(model.selectedSession == session.id ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { model.select(session: session) }

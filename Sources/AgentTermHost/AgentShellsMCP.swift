@@ -42,7 +42,8 @@ public final class AgentShellsMCP {
                 "serverInfo": ["name": "agentterm", "version": version],
                 "instructions": ask == nil
                     ? "Not in a session of AgentTerm: no tools."
-                    : "Open shells the user can see in AgentTerm, next to your session, and work in them. Use them for what keeps running or what the user should watch: an SSH session, a dev server, a REPL.",
+                    : "Open shells the user can see in AgentTerm, next to your session, and work in them. Use them for what keeps running or what the user should watch: an SSH session, a dev server, a REPL."
+                    ,
             ])
         case "ping":
             return result([:])

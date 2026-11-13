@@ -78,7 +78,9 @@ final class PerformanceMeasurements: XCTestCase {
         let wall = time(1) { for _ in 0..<5 { _ = GitDiff.snapshot(directory: repo.path) } }
         report(
             "large repository, side panel open: one refresh every 3 s costs",
-            String(format: "%.0f ms each, %.1f%% of a core at that rate (this process only: git's own work is not counted)", wall / 5, Double(clock() - cpuBefore) / Double(CLOCKS_PER_SEC) * 1000 / 5 / 3000 * 100))
+            String(
+                format: "%.0f ms each, %.1f%% of a core at that rate (this process only: git's own work is not counted)", wall / 5,
+                Double(clock() - cpuBefore) / Double(CLOCKS_PER_SEC) * 1000 / 5 / 3000 * 100))
     }
 
     /// Thousands of changed or untracked files.

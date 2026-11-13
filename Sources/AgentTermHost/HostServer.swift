@@ -132,6 +132,8 @@ public final class HostServer {
         var attached: Set<SessionID> = []
         /// A Mac app that says it is in front: someone is at the Mac.
         var inFront = false
+        /// Numbers the large messages sent in pieces.
+        var nextMessage: UInt32 = 0
 
         var authenticated: Bool { identity != nil }
         /// The Mac's own apps may pair and revoke devices.
@@ -187,6 +189,32 @@ public final class HostServer {
     /// The last changes read per folder, so asking for one file's diff right
     /// after the list does not run git again.
     private var diffCache: [String: (snapshot: DiffSnapshot, at: Date)] = [:]
+    /// The folders whose changes clients ask about, watched so that they are
+    /// worked out again only after their files changed; the last few only.
+    private var diffWatches: [String: FolderWatch] = [:]
+    private var diffWatchOrder: [String] = []
+    private var diffDirty: Set<String> = []
+    private static let diffWatchesKept = 8
+
+    private func watchForDiff(_ path: String) {
+        diffWatchOrder.removeAll { $0 == path }
+        diffWatchOrder.append(path)
+        guard diffWatches[path] == nil else { return }
+        while diffWatchOrder.count > Self.diffWatchesKept {
+            let oldest = diffWatchOrder.removeFirst()
+            diffWatches[oldest] = nil
+            diffDirty.remove(oldest)
+        }
+        workQueue.async { [weak self] in
+            let paths = FolderWatch.paths(for: path)
+            self?.queue.async {
+                guard let self, self.diffWatchOrder.contains(path), self.diffWatches[path] == nil else { return }
+                self.diffWatches[path] = FolderWatch(paths: paths, queue: self.queue) { [weak self] in self?.diffDirty.insert(path) }
+                // What changed before the watch began is not known: once more.
+                self.diffDirty.insert(path)
+            }
+        }
+    }
     /// Handoff plans that were shown to a user, until they are used. The
     /// prompt in a plan names a file, and the handoff has to write that file.
     private var handoffPlans: [String: (plan: Handoff.Plan, at: Date)] = [:]
@@ -232,6 +260,7 @@ public final class HostServer {
             keepAwakeOptions = saved.keepAwakeOptions ?? KeepAwakeOptions()
             commitWriter = saved.commitWriter ?? CommitWriterSettings()
             displaySettings = saved.display
+            startAtLoginChosen = saved.startAtLoginChosen ?? false
         }
         if let file = tabLayoutFile, let data = try? Data(contentsOf: file),
             let saved = try? JSONDecoder().decode(TabLayout.self, from: data)
@@ -286,11 +315,30 @@ public final class HostServer {
         var keepAwakeOptions: KeepAwakeOptions?
         var commitWriter: CommitWriterSettings?
         var display: DisplaySettings?
+        /// The user turned Start at Login on or off once: from then on it
+        /// is theirs. Until then it is turned on, the default.
+        var startAtLoginChosen: Bool?
+    }
+
+    /// Whether the user has turned Start at Login on or off.
+    private var startAtLoginChosen = false
+
+    /// Start at Login is on by default: turned on the first time a host
+    /// that can be started at login runs, until the user has chosen.
+    private func startAtLoginByDefault() {
+        // Without a settings file the user's choice could not be kept: then
+        // it is not turned on by itself either.
+        guard let item = configuration.loginItem, settingsFile != nil, !startAtLoginChosen else { return }
+        if !item.isOn { try? item.turnOn() }
+        startAtLoginChosen = true
+        saveSettings()
     }
 
     private func saveSettings() {
         guard let file = settingsFile else { return }
-        let settings = Settings(keepAwake: keepAwake, keepAwakeOptions: keepAwakeOptions, commitWriter: commitWriter, display: displaySettings)
+        let settings = Settings(
+            keepAwake: keepAwake, keepAwakeOptions: keepAwakeOptions, commitWriter: commitWriter, display: displaySettings,
+            startAtLoginChosen: startAtLoginChosen)
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? MessageCoding.encode(settings).write(to: file, options: .atomic)
     }
@@ -418,6 +466,7 @@ public final class HostServer {
             setAgentShells(nil)
             loadSchedules()
             loadWorktreeSetups()
+            startAtLoginByDefault()
             let timer = DispatchSource.makeTimerSource(queue: queue)
             timer.schedule(deadline: .now() + min(1, configuration.scheduleInterval), repeating: configuration.scheduleInterval)
             timer.setEventHandler { [weak self] in self?.checkSchedules() }
@@ -1022,9 +1071,16 @@ public final class HostServer {
     }
 
     private func send(_ message: ServerMessage, to client: Client) {
+        let data = MessageCoding.encode(message)
+        // Larger than a frame may be: in pieces, one after the other (#21).
+        if let frames = MessageParts.frames(for: data, id: client.nextMessage) {
+            client.nextMessage &+= 1
+            for frame in frames { send(frame, to: client) }
+            return
+        }
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
-        client.connection.send(content: MessageCoding.encode(message), contentContext: context, completion: .idempotent)
+        client.connection.send(content: data, contentContext: context, completion: .idempotent)
     }
 
     private func send(_ frame: DataFrame, to client: Client) {
@@ -1151,6 +1207,8 @@ public final class HostServer {
             queue.asyncAfter(deadline: .now() + 3) { [weak session] in session?.process.forceKill() }
         case .setStartAtLogin(let wanted):
             guard let item = configuration.loginItem else { return }
+            startAtLoginChosen = true
+            saveSettings()
             do {
                 if wanted { try item.turnOn() } else { try item.turnOff() }
             } catch {
@@ -1251,12 +1309,23 @@ public final class HostServer {
             folders.removeAll { $0 == path }
             foldersChanged()
         case .diff(let path):
+            // Asked again and again while a client shows it: worked out again
+            // only when the folder's files changed since (#21).
+            if let cached = diffCache[path], diffWatches[path] != nil, !diffDirty.contains(path) {
+                send(.diff(path: path, snapshot: cached.snapshot.withoutPatches), to: client)
+                return
+            }
+            watchForDiff(path)
+            diffDirty.remove(path)
             work(for: client, { GitDiff.snapshot(directory: path) }) { server, client, snapshot in
                 server.diffCache[path] = (snapshot, Date())
                 server.send(.diff(path: path, snapshot: snapshot.withoutPatches), to: client)
             }
         case .diffFile(let path, let file, let staged):
-            if let cached = diffCache[path], Date().timeIntervalSince(cached.at) < 20 {
+            // From the last look while it is recent, as before: a diff asked for
+            // right after the list is answered in turn, a file that is not
+            // there with nothing, which can only be told apart by its order.
+            if let cached = diffCache[path], Date().timeIntervalSince(cached.at) < 20 || (diffWatches[path] != nil && !diffDirty.contains(path)) {
                 send(.diffFile(path: path, file: cached.snapshot.files.first { $0.path == file && $0.isStaged == staged }), to: client)
                 return
             }

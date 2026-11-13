@@ -94,7 +94,9 @@ final class AgentShellsInstallTests: XCTestCase {
             AgentInfo(id: "agy", name: "Antigravity", path: nil),
         ]
         func install(_ tool: String) -> AgentShellsInstall {
-            AgentShellsInstall(directory: root, tool: tool) { ran.append($0); return true }
+            AgentShellsInstall(directory: root, tool: tool) {
+                ran.append($0); return true
+            }
         }
         let first = install("/Apps/AgentTerm.app/agenttermd")
         XCTAssertTrue(first.isOn, "on by default")
@@ -221,12 +223,12 @@ final class AgentShellsHostTests: XCTestCase {
         let pipe = folder.appendingPathComponent("in"), output = folder.appendingPathComponent("out")
         let script = folder.appendingPathComponent(name)
         try """
-            #!/bin/sh
-            mkfifo '\(pipe.path)'
-            exec 3<>'\(pipe.path)'
-            '\(tool.path)' mcp <&3 > '\(output.path)' 2> '\(output.path).err' &
-            exec sleep 600
-            """.write(to: script, atomically: true, encoding: .utf8)
+        #!/bin/sh
+        mkfifo '\(pipe.path)'
+        exec 3<>'\(pipe.path)'
+        '\(tool.path)' mcp <&3 > '\(output.path)' 2> '\(output.path).err' &
+        exec sleep 600
+        """.write(to: script, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
         let before = Set(client.sessions.map(\.id))
         client.connection.send(.create(CreateRequest(command: script.path, cwd: folder.path, title: title)))
@@ -285,5 +287,30 @@ final class AgentShellsHostTests: XCTestCase {
         let otherID = try XCTUnwrap(mac.sessions.first { $0.openedBy != nil && $0.id != shell.id }?.id)
         XCTAssertFalse(third.tool("close_shell", ["session": otherID], in: self).failed)
         waitUntil("the shell to be closed", timeout: 15) { !mac.sessions.contains { $0.id == otherID } }
+    }
+}
+
+/// PERF-2: a folder whose list is larger than a message could hold arrives
+/// whole, in pieces.
+final class LargeMessageTests: XCTestCase {
+    func testAFolderOfManyEntriesIsListedWhole() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-wide-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let long = String(repeating: "n", count: 150)
+        for index in 0..<25_000 { FileManager.default.createFile(atPath: root.appendingPathComponent("\(long)-\(index)").path, contents: nil) }
+        let token = "test-token-0123456789abcdef0123456789"
+        let server = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false, detectAgents: { [] }))
+        let port = try server.start()
+        defer { server.stop() }
+        let connection = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "phone")
+        var listed: [FileEntry]?
+        connection.onMessage = { if case .files(_, let entries) = $0 { listed = entries } }
+        connection.connect()
+        connection.send(.files(path: root.path))
+        let deadline = Date().addingTimeInterval(30)
+        while listed == nil && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertGreaterThan(MessageCoding.encode(ServerMessage.files(path: root.path, entries: listed ?? [])).count, 4 * 1024 * 1024, "larger than one message may be")
+        XCTAssertEqual(listed?.count, 25_000)
     }
 }

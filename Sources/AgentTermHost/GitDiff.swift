@@ -9,47 +9,126 @@ public enum GitDiff {
     private static let maxUntrackedFiles = 50
 
     /// Blocks while git runs. Call off the main thread.
+    ///
+    /// One `git status` says what changed, the branch and how far it is
+    /// from its upstream, in one walk of the working tree; `git diff` runs
+    /// only for what status says is staged or not, and the patches of new
+    /// files are made here rather than by a git for each (#21).
     public static func snapshot(directory: String) -> DiffSnapshot {
-        guard let inside = run(["rev-parse", "--is-inside-work-tree"], in: directory),
-            inside.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
+        guard let head = run(["rev-parse", "--is-inside-work-tree", "--show-prefix"], in: directory) else { return .notARepository }
+        let lines = head.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard lines.first == "true" else { return .notARepository }
+        // The folder's place in its repository: status names paths from the top.
+        let prefix = lines.count > 1 ? lines[1] : ""
+        guard let status = run(["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all", "--no-renames", "--", "."], in: directory)
         else { return .notARepository }
-
-        let branch = run(["branch", "--show-current"], in: directory)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let read = readStatus(status, prefix: prefix)
 
         // A rename is listed as a deleted file and a new one, so that every
         // entry is one path that can be staged or unstaged on its own.
         let options = ["--no-color", "--no-ext-diff", "--relative", "--no-renames"]
         // The index against the last commit is what a commit would record.
         // In a repository without commits git compares against nothing.
-        var files = parse(run(["diff", "--cached"] + options, in: directory) ?? "").map { file -> FileDiff in
-            var file = file
-            file.isStaged = true
-            return file
+        var files: [FileDiff] = []
+        if read.staged {
+            files += parse(run(["diff", "--cached"] + options, in: directory) ?? "").map { file -> FileDiff in
+                var file = file
+                file.isStaged = true
+                return file
+            }
         }
         // The working tree against the index is what is not staged.
-        files += parse(run(["diff"] + options, in: directory) ?? "")
+        if read.unstaged { files += parse(run(["diff"] + options, in: directory) ?? "") }
+        for path in read.untracked.prefix(maxUntrackedFiles) { files.append(newFile(path, in: directory)) }
 
-        let untracked = (run(["ls-files", "--others", "--exclude-standard"], in: directory) ?? "")
-            .split(whereSeparator: \.isNewline).map(String.init)
-        for path in untracked.prefix(maxUntrackedFiles) {
-            // `diff --no-index` exits with 1 when the files differ, which is the normal case here.
-            let text = run(["diff", "--no-index"] + options + ["--", "/dev/null", path], in: directory, acceptStatus: [0, 1]) ?? ""
-            var file = parse(text).first ?? FileDiff(path: path, added: 0, deleted: 0, isUntracked: true, patch: "")
-            file.path = path
-            file.isUntracked = true
-            file.status = .added
-            files.append(file)
-        }
-        var snapshot = DiffSnapshot(isRepository: true, branch: branch?.isEmpty == false ? branch : nil, files: files)
-        if let branch = snapshot.branch {
-            let followed = tracking(of: branch, in: directory)
-            snapshot.upstream = followed.upstream
-            snapshot.ahead = followed.ahead
-            snapshot.behind = followed.behind
-            if followed.upstream == nil { snapshot.pushRemote = pushRemote(in: directory) }
+        var snapshot = DiffSnapshot(isRepository: true, branch: read.branch, files: files)
+        if snapshot.branch != nil {
+            snapshot.upstream = read.upstream
+            snapshot.ahead = read.upstream == nil ? nil : read.ahead
+            snapshot.behind = read.upstream == nil ? nil : read.behind
+            if read.upstream == nil {
+                // One that follows a branch of a remote not fetched yet, a
+                // clone of an empty repository for one, is said to by its settings.
+                let followed = read.branch.map { tracking(of: $0, in: directory) }
+                snapshot.upstream = followed?.upstream
+                if followed?.upstream == nil { snapshot.pushRemote = pushRemote(in: directory) }
+            }
         }
         return snapshot
+    }
+
+    /// What `git status --porcelain=v2 -z --branch` says, for the paths
+    /// under `prefix`, named from there.
+    static func readStatus(_ text: String, prefix: String) -> (
+        branch: String?, upstream: String?, ahead: Int?, behind: Int?, staged: Bool, unstaged: Bool, untracked: [String]
+    ) {
+        var branch: String?
+        var upstream: String?
+        var ahead: Int?
+        var behind: Int?
+        var staged = false
+        var unstaged = false
+        var untracked: [String] = []
+        for record in text.split(separator: "\0") {
+            if record.hasPrefix("# branch.head ") {
+                let name = String(record.dropFirst("# branch.head ".count))
+                branch = name == "(detached)" ? nil : name
+            } else if record.hasPrefix("# branch.upstream ") {
+                upstream = String(record.dropFirst("# branch.upstream ".count))
+            } else if record.hasPrefix("# branch.ab ") {
+                let counts = record.dropFirst("# branch.ab ".count).split(separator: " ")
+                ahead = counts.first.flatMap { Int($0.dropFirst()) }
+                behind = counts.dropFirst().first.flatMap { Int($0.dropFirst()) }
+            } else if record.hasPrefix("1 ") || record.hasPrefix("2 ") || record.hasPrefix("u ") {
+                let code = record.dropFirst(2).prefix(2)
+                if record.hasPrefix("u ") {
+                    unstaged = true
+                } else {
+                    if code.first != "." { staged = true }
+                    if code.last != "." { unstaged = true }
+                }
+            } else if record.hasPrefix("? ") {
+                let path = String(record.dropFirst(2))
+                if path.hasPrefix(prefix) { untracked.append(String(path.dropFirst(prefix.count))) }
+            }
+        }
+        return (branch, upstream, ahead, behind, staged, unstaged, untracked)
+    }
+
+    /// The largest new file whose lines are shown.
+    private static let maxNewFileBytes = 8 * 1024 * 1024
+
+    /// A file git does not track yet, as `git diff --no-index` shows it:
+    /// every line added.
+    static func newFile(_ path: String, in directory: String) -> FileDiff {
+        var file = FileDiff(path: path, added: 0, deleted: 0, isUntracked: true, patch: "")
+        file.status = .added
+        let url = URL(fileURLWithPath: directory).appendingPathComponent(path)
+        var text: String
+        if let target = try? FileManager.default.destinationOfSymbolicLink(atPath: url.path) {
+            text = target
+        } else {
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            guard size <= maxNewFileBytes, let data = try? Data(contentsOf: url) else {
+                file.patch = size > maxNewFileBytes ? "File too large to show (\(size / 1_048_576) MB)" : ""
+                return file
+            }
+            guard !data.prefix(8000).contains(0), let decoded = String(data: data, encoding: .utf8) else {
+                file.patch = data.isEmpty ? "" : "Binary file changed"
+                return file
+            }
+            text = decoded
+        }
+        guard !text.isEmpty else { return file }
+        let endsWithNewline = text.hasSuffix("\n")
+        if endsWithNewline { text.removeLast() }
+        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        file.added = lines.count
+        var patch = "@@ -0,0 +\(lines.count == 1 ? "1" : "1,\(lines.count)") @@\n" + lines.map { "+" + $0 }.joined(separator: "\n")
+        if !endsWithNewline { patch += "\n\\ No newline at end of file" }
+        if patch.utf8.count > maxPatchBytes { patch = String(patch.prefix(maxPatchBytes)) + "\n… diff truncated …" }
+        file.patch = patch
+        return file
     }
 
     /// The branch a local branch follows, and how far the two are apart as

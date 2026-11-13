@@ -219,6 +219,11 @@ final class AppModel: ObservableObject {
     func setWorktreeSetup(_ command: String?, for folder: String) { connection?.send(.setWorktreeSetup(folder: folder, command: command)) }
 
     func save(_ schedule: Schedule) { connection?.send(.saveSchedule(schedule)) }
+
+    /// The schedule being made or changed in Settings > Schedules. Kept here
+    /// rather than in the view, which the Settings window keeps when it
+    /// closes: closing the window drops it.
+    @Published var editingSchedule: Schedule?
     func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
 
     /// A schedule to start from: the folder in front, the first agent.
@@ -494,6 +499,30 @@ final class AppModel: ObservableObject {
     private var launchedDaemon = false
     private var selectNextAttached = false
     private var diffTimer: Timer?
+    /// Watches the folder the side panel shows, on this Mac.
+    private var panelWatch: FolderWatch?
+    private var panelWatched: String?
+
+    /// Reads the changes again when the files of the folder shown change.
+    private func watchPanelFolder() {
+        let folder = isRemote ? nil : panelFolder
+        guard folder != panelWatched else { return }
+        panelWatched = folder
+        panelWatch = nil
+        guard let folder else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let paths = FolderWatch.paths(for: folder)
+            DispatchQueue.main.async {
+                guard let self, self.panelWatched == folder else { return }
+                self.panelWatch = FolderWatch(paths: paths, queue: .main) { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self, self.showDiff, self.panelFolder == folder else { return }
+                        self.refreshDiff()
+                    }
+                }
+            }
+        }
+    }
     private var diffGeneration = 0
     private var historyGeneration = 0
     private let foldersKey = "folders"
@@ -527,15 +556,33 @@ final class AppModel: ObservableObject {
                 self?.tellWhetherInFront()
             }
             .store(in: &observers)
+        // The Settings window closing drops a schedule half made in it.
+        NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)
+            .sink { [weak self] notification in
+                // SwiftUI's Settings window, not a sheet on it or another window.
+                guard let window = notification.object as? NSWindow, window.sheetParent == nil,
+                    window.identifier?.rawValue.localizedCaseInsensitiveContains("settings") == true
+                else { return }
+                // Once it has closed: taking the sheet away while it closes stops the close.
+                DispatchQueue.main.async { self?.editingSchedule = nil }
+            }
+            .store(in: &observers)
         NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
             .sink { [weak self] _ in self?.tellWhetherInFront() }
             .store(in: &observers)
+        // Another Mac's folder is asked about on a timer; its host works the
+        // changes out again only when its files changed. This Mac's own is
+        // read again when its files change (`panelWatch`) (#21).
         diffTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.showDiff, NSApp.isActive else { return }
+                guard let self, self.isRemote, self.showDiff, NSApp.isActive else { return }
                 self.refreshDiff()
             }
         }
+        // Changes made while the app was behind.
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in if self?.isRemote == false, self?.showDiff == true { self?.refreshDiff() } }
+            .store(in: &observers)
     }
 
     // MARK: Derived state
@@ -1333,6 +1380,7 @@ final class AppModel: ObservableObject {
 
     private func folderChanged() {
         diff = nil
+        watchPanelFolder()
         if let selectedFolder { listWorktrees(selectedFolder) }
         // The diff tab stays: it belongs to its own folder, not to the one on show.
         files.setRoot(panelFolder)

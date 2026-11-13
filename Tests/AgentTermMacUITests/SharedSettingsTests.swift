@@ -9,6 +9,21 @@ final class SharedSettingsTests: MacUITestCase {
         app.press(.button(pane))
     }
 
+    /// SCHED-13: a schedule being made is dropped when the Settings window
+    /// closes, and not shown again when it opens.
+    func testASchedulesBeingMadeIsNotShownAgainAfterSettingsCloses() throws {
+        openSettings("Schedules")
+        app.press(.id("new-schedule"))
+        app.wait(for: .text("New Schedule"))
+        app.closeWindow(titled: "Schedules")
+        app.waitGone(.text("New Schedule"))
+        // The folder it runs in is chosen in a row of its own.
+        openSettings("Schedules")
+        app.wait(for: .id("new-schedule"))
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertFalse(app.exists(.text("New Schedule")), "the editor came back with the window")
+    }
+
     func testKeepAwakeIsTheSameOnBothDevices() throws {
         let phone = try device()
         openSettings("General")
