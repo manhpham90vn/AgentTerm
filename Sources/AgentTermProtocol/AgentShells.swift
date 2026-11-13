@@ -45,3 +45,11 @@ public enum TerminalKeys {
         return nil
     }
 }
+
+/// What the agents are told when they are to run their commands in shells
+/// the user sees (#10): in the MCP server's instructions, and in Claude
+/// Code's system prompt.
+public enum AgentShellsInstructions {
+    public static let useShells =
+        "You run inside AgentTerm, where the user watches what you do. Run shell commands in a shell you open with the agentterm MCP server's open_shell tool rather than with your own command tool: open one at the start of the task, type each command with send_input and the Return key, wait for it with wait, and read the result with read_screen. Keep using the same shell; open another only for something that keeps running, such as a dev server. Close the shells you no longer need when the task is done."
+}

@@ -314,3 +314,64 @@ final class LargeMessageTests: XCTestCase {
         XCTAssertEqual(listed?.count, 25_000)
     }
 }
+
+/// MCP-10: the agents are asked to run their commands in shells the user
+/// sees, by default, and not once the user turned it off.
+final class AgentsUseShellsTests: XCTestCase {
+    func testTheAgentsAreAskedToUseTheShellsUntilTurnedOff() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-use-\(UUID().uuidString)").standardizedFileURL
+        defer { try? FileManager.default.removeItem(at: root) }
+        let agents = root.appendingPathComponent("agents")
+        try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
+        let told = root.appendingPathComponent("told")
+        // A stand-in for Claude Code that writes down how it was started.
+        try "#!/bin/sh\nprintf '%s|%s\\n' \"$AGENTTERM_MCP\" \"$*\" >> '\(told.path)'\nexec sleep 600\n".write(
+            to: agents.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agents.appendingPathComponent("claude").path)
+        let token = "test-token-0123456789abcdef0123456789"
+        var configuration = HostServer.Configuration(
+            port: 0, token: token, listenOnTailscale: false, detectAgents: { AgentDetector.detect(in: agents.path) }, statusLineTool: "/usr/bin/true",
+            usageDirectory: root.appendingPathComponent("usage"))
+        configuration.agentsDirectory = agents.path
+        configuration.foldersFile = root.appendingPathComponent("state/folders.json")
+        configuration.agentShells = AgentShellsInstall(directory: root.appendingPathComponent("state"), tool: "/usr/bin/true") { _ in true }
+        let server = HostServer(configuration: configuration)
+        let port = try server.start()
+        defer { server.stop() }
+        let client = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "mac")
+        var useShells: Bool?
+        client.onMessage = { if case .agentsUseShells(let on) = $0 { useShells = on } }
+        client.connect()
+        func spin(until condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(15)
+            while !condition() && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        }
+        func lines() -> [String] { ((try? String(contentsOf: told, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init) }
+        spin { useShells != nil }
+        XCTAssertEqual(useShells, true, "on by default")
+
+        client.send(.create(CreateRequest(command: "claude", cwd: root.path)))
+        spin { lines().count == 1 }
+        let first = try XCTUnwrap(lines().first)
+        XCTAssertTrue(first.split(separator: "|").first?.hasSuffix(" use") == true, first)
+        XCTAssertTrue(first.contains("--append-system-prompt"), first)
+
+        client.send(.setAgentsUseShells(false))
+        spin { useShells == false }
+        client.send(.create(CreateRequest(command: "claude", cwd: root.path)))
+        spin { lines().count == 2 }
+        let second = try XCTUnwrap(lines().last)
+        XCTAssertFalse(second.split(separator: "|").first?.hasSuffix(" use") == true, second)
+        XCTAssertFalse(second.contains("--append-system-prompt"), second)
+    }
+
+    func testTheServerSaysSoInItsInstructions() {
+        func instructions(_ server: AgentShellsMCP) -> String {
+            let reply = server.handle(#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#) ?? ""
+            let result = ((try? JSONSerialization.jsonObject(with: Data(reply.utf8))) as? [String: Any])?["result"] as? [String: Any]
+            return result?["instructions"] as? String ?? ""
+        }
+        XCTAssertEqual(instructions(AgentShellsMCP(ask: { _ in .done }, version: "t", useShells: true)), AgentShellsInstructions.useShells)
+        XCTAssertFalse(instructions(AgentShellsMCP(ask: { _ in .done }, version: "t", useShells: false)).contains("rather than with your own"))
+    }
+}

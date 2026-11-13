@@ -197,6 +197,12 @@ itself.
   user's from then on.
 - Outside a session of AgentTerm (an agent run in another terminal), the
   server offers no tools.
+- **Agents run their commands in shells you see**, on by default, next to
+  the switch above: each agent is asked to run its commands in a shell it
+  opens through the server, rather than in its own out of sight. Claude
+  Code is told so in its system prompt; the others through the server's
+  instructions, which each agent takes in as it does (Copilot CLI only for
+  servers it allows). An agent still decides for itself.
 
 ### Usage
 

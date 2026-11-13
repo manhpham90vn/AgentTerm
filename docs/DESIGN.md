@@ -734,7 +734,11 @@ any app on the Mac does, with the Mac's own token from the state folder,
 and sends each request as `agentShell(id:key:request:)`. The host looks up
 the session whose key it is and answers `agentShellResult(id:result:)` to
 that connection only. A key names a running agent's session or nothing.
-Without the variable, the server offers no tools.
+Without the variable, the server offers no tools. With "agents run their
+commands in shells you see" on (the host's `agentsUseShells`, on by
+default) the variable ends with `use`: the server's instructions are then
+`AgentShellsInstructions.useShells`, and Claude Code is also started with
+`--append-system-prompt` saying the same.
 
 **What it may reach.** A shell it opens is a session like any other, in the
 agent's folder and at its size, with `SessionInfo.openedBy` naming the

@@ -175,10 +175,11 @@ private struct CrashReportQuestion: ViewModifier {
 }
 
 private struct SettingsTabs: View {
-    @AppStorage("settingsTab") private var tab = "general"
+    @EnvironmentObject private var model: AppModel
 
     var body: some View {
-        TabView(selection: $tab) {
+        // General each time Settings opens, not the tab it was left on.
+        TabView(selection: $model.settingsTab) {
             SettingsView().tabItem { Label("General", systemImage: "gearshape") }.tag("general")
             GitSettingsView().tabItem { Label("Git", systemImage: "arrow.triangle.branch") }.tag("git")
             SchedulesView().tabItem { Label("Schedules", systemImage: "calendar.badge.clock") }.tag("schedules")
@@ -220,6 +221,17 @@ private struct SettingsView: View {
                                 help:
                                     "Through AgentTerm's MCP server, put in the settings of Claude Code, Codex, Copilot CLI and Antigravity; turning this off takes it out. An agent opens shells only, never another agent.",
                                 isOn: Binding(get: { agentShells }, set: { model.setAgentShells($0) }))
+                            if let useShells = model.agentsUseShells {
+                                Divider()
+                                SettingSwitch(
+                                    "Agents run their commands in shells you see", id: "agents-use-shells",
+                                    detail: "They are asked to use those shells rather than their own.",
+                                    help:
+                                        "Claude Code is told in its system prompt; the other agents through the MCP server's instructions, which each takes in as it does. An agent still decides for itself.",
+                                    isOn: Binding(get: { useShells }, set: { model.setAgentsUseShells($0) })
+                                )
+                                .disabled(!agentShells)
+                            }
                         }
                     }
                 }
@@ -290,12 +302,12 @@ private struct SettingSwitch: View {
                 Text(detail).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer(minLength: 8)
+            // The switch itself is what VoiceOver and the tests press.
             Toggle(title, isOn: $isOn).labelsHidden().toggleStyle(.switch)
+                .accessibilityLabel(title)
+                .accessibilityIdentifier(id)
         }
         .help(help)
-        // The words next to a switch are its label only to the eye.
-        .accessibilityLabel(title)
-        .accessibilityIdentifier(id)
     }
 }
 

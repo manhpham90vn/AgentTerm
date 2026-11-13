@@ -48,7 +48,7 @@ if arguments.first == "hook" {
 if arguments.first == "mcp" {
     var ask: AgentShellsMCP.Ask?
     let named = ProcessInfo.processInfo.environment[HostServer.agentShellsVariable]?.split(separator: " ").map(String.init) ?? []
-    if named.count == 2, let port = UInt16(named[0]), let token = try? HostEnvironment.loadOrCreateToken() {
+    if named.count >= 2, let port = UInt16(named[0]), let token = try? HostEnvironment.loadOrCreateToken() {
         let key = named[1]
         let connection = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "MCP")
         let lock = NSLock()
@@ -78,7 +78,7 @@ if arguments.first == "mcp" {
             return answers.removeValue(forKey: id) ?? .refused("AgentTerm's host did not answer.")
         }
     }
-    let server = AgentShellsMCP(ask: ask, version: AppChannel.current.appName)
+    let server = AgentShellsMCP(ask: ask, version: AppChannel.current.appName, useShells: named.dropFirst(2).first == "use")
     // Lines are read and answered in turn, off the main queue, where the
     // connection's answers arrive.
     Thread.detachNewThread {

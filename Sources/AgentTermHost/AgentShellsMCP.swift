@@ -16,13 +16,16 @@ public final class AgentShellsMCP {
 
     private let ask: Ask?
     private let version: String
+    /// The agent is to run its commands in these shells.
+    private let useShells: Bool
     /// How long `wait` looks between two reads of the screen.
     var pollInterval: TimeInterval = 0.2
 
     /// - Parameter ask: Nil outside a session of AgentTerm: no tools then.
-    public init(ask: Ask?, version: String) {
+    public init(ask: Ask?, version: String, useShells: Bool = false) {
         self.ask = ask
         self.version = version
+        self.useShells = useShells
     }
 
     /// Answers one line, a JSON-RPC message. Nil for a notification, which
@@ -42,7 +45,9 @@ public final class AgentShellsMCP {
                 "serverInfo": ["name": "agentterm", "version": version],
                 "instructions": ask == nil
                     ? "Not in a session of AgentTerm: no tools."
-                    : "Open shells the user can see in AgentTerm, next to your session, and work in them. Use them for what keeps running or what the user should watch: an SSH session, a dev server, a REPL."
+                    : useShells
+                        ? AgentShellsInstructions.useShells
+                        : "Open shells the user can see in AgentTerm, next to your session, and work in them. Use them for what keeps running or what the user should watch: an SSH session, a dev server, a REPL."
                     ,
             ])
         case "ping":

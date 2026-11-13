@@ -39,13 +39,19 @@ public enum AgentHooks {
     /// Code its status line too (`usageFile`). Copilot CLI and Antigravity
     /// need a `directory` to keep what they are given in; without one,
     /// they get nothing.
-    public static func launchArguments(agent: String, tool: String, usageFile: String?, directory: URL?, home: String, trust: [String] = []) throws -> String {
+    /// `useShells`: Claude Code is told in its system prompt to run its
+    /// commands in shells the user sees (`AgentShellsInstructions`); the
+    /// others are told by the MCP server's instructions.
+    public static func launchArguments(
+        agent: String, tool: String, usageFile: String?, directory: URL?, home: String, trust: [String] = [], useShells: Bool = false
+    ) throws -> String {
         switch agent {
         case "claude":
             var settings: [String: Any] = ["hooks": claudeHooks(tool: tool)]
             if let usageFile { settings["statusLine"] = StatusLineRelay.statusLine(tool: tool, file: usageFile) }
             let json = try JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys])
             return " --settings " + Handoff.shellQuote(String(decoding: json, as: UTF8.self))
+                + (useShells ? " --append-system-prompt " + Handoff.shellQuote(AgentShellsInstructions.useShells) : "")
         case "codex":
             return codexArguments(tool: tool)
         case "copilot":

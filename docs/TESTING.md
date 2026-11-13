@@ -471,6 +471,7 @@ A second host stands in for the other Mac, with a project of its own.
 | MCP-7 | An agent | It opens a shell running `claude` | Refused | H |
 | MCP-8 | An agent with a shell it opened | The agent's session ends; another agent closes a shell of its own | The first shell stays; the second ends | H |
 | MCP-9 | The Mac app and the iPhone | Settings | A switch, "Agents can open shells you see", that turns the server off and on for every device | hand, until the UI tests cover it |
+| MCP-10 | A stand-in Claude Code | Started with the setting on, as by default; then off | On: its session's variable says `use` and it is asked in its system prompt; the server's instructions say to run commands in its shells. Off: neither | H |
 
 ### Vietnamese input
 
@@ -485,6 +486,7 @@ A second host stands in for the other Mac, with a project of its own.
 | ID | Input | Action or event | Expected response | Checked by |
 |---|---|---|---|---|
 | TEST-1 | A host and an app started by a test or a test script | A session starts through the login shell | Its `HOME` is the test's home folder: none of the startup files of the person running the tests is read. The hosts and apps get the test's home as `HOME`, `ZDOTDIR` and `CFFIXED_USER_HOME` | M |
+| SET-1 | The Mac app's Settings left on Schedules | Closed and opened again | It opens on General | M |
 
 ## What the tests found
 

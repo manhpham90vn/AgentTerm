@@ -202,6 +202,13 @@ final class AppModel: ObservableObject {
     /// MCP server installed in their configuration (#10). Nil when the
     /// host does not install it.
     @Published private(set) var agentShells: Bool?
+    /// Whether the agents are asked to run their commands in shells the user sees.
+    @Published private(set) var agentsUseShells: Bool?
+
+    func setAgentsUseShells(_ on: Bool) {
+        agentsUseShells = on
+        connection?.send(.setAgentsUseShells(on))
+    }
 
     /// The schedules of the Mac on screen (#11), as its host keeps them.
     @Published private(set) var schedules: [Schedule] = []
@@ -224,6 +231,8 @@ final class AppModel: ObservableObject {
     /// rather than in the view, which the Settings window keeps when it
     /// closes: closing the window drops it.
     @Published var editingSchedule: Schedule?
+    /// The tab of Settings: General each time Settings opens.
+    @Published var settingsTab = "general"
     func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
 
     /// A schedule to start from: the folder in front, the first agent.
@@ -564,7 +573,10 @@ final class AppModel: ObservableObject {
                     window.identifier?.rawValue.localizedCaseInsensitiveContains("settings") == true
                 else { return }
                 // Once it has closed: taking the sheet away while it closes stops the close.
-                DispatchQueue.main.async { self?.editingSchedule = nil }
+                DispatchQueue.main.async {
+                    self?.editingSchedule = nil
+                    self?.settingsTab = "general"
+                }
             }
             .store(in: &observers)
         NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
@@ -908,6 +920,7 @@ final class AppModel: ObservableObject {
         keepAwake = nil
         startAtLogin = nil
         agentShells = nil
+        agentsUseShells = nil
         hostVersion = 0
         system.stats = nil
         sshHosts = []
@@ -1058,6 +1071,8 @@ final class AppModel: ObservableObject {
             startAtLogin = on
         case .agentShells(let on):
             agentShells = on
+        case .agentsUseShells(let on):
+            agentsUseShells = on
         case .schedules(let list):
             schedules = list
         case .worktrees(let folder, let list, let setup):

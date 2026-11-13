@@ -261,6 +261,7 @@ public final class HostServer {
             commitWriter = saved.commitWriter ?? CommitWriterSettings()
             displaySettings = saved.display
             startAtLoginChosen = saved.startAtLoginChosen ?? false
+            agentsUseShells = saved.agentsUseShells ?? true
         }
         if let file = tabLayoutFile, let data = try? Data(contentsOf: file),
             let saved = try? JSONDecoder().decode(TabLayout.self, from: data)
@@ -318,10 +319,17 @@ public final class HostServer {
         /// The user turned Start at Login on or off once: from then on it
         /// is theirs. Until then it is turned on, the default.
         var startAtLoginChosen: Bool?
+        /// Whether the agents are asked to use shells the user sees; on when unset.
+        var agentsUseShells: Bool?
     }
 
     /// Whether the user has turned Start at Login on or off.
     private var startAtLoginChosen = false
+    /// Whether the agents are asked to run their commands in shells the
+    /// user sees (on by default).
+    private var agentsUseShells = true
+    /// Asked only where the agents can open them: the MCP server is installed.
+    private var asksToUseShells: Bool { agentsUseShells && (configuration.agentShells?.isOn ?? false) }
 
     /// Start at Login is on by default: turned on the first time a host
     /// that can be started at login runs, until the user has chosen.
@@ -338,7 +346,7 @@ public final class HostServer {
         guard let file = settingsFile else { return }
         let settings = Settings(
             keepAwake: keepAwake, keepAwakeOptions: keepAwakeOptions, commitWriter: commitWriter, display: displaySettings,
-            startAtLoginChosen: startAtLoginChosen)
+            startAtLoginChosen: startAtLoginChosen, agentsUseShells: agentsUseShells)
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? MessageCoding.encode(settings).write(to: file, options: .atomic)
     }
@@ -1152,6 +1160,10 @@ public final class HostServer {
             handleAgentShell(id: id, key: key, request: request, from: client)
         case .setAgentShells(let on):
             setAgentShells(on)
+        case .setAgentsUseShells(let on):
+            agentsUseShells = on
+            saveSettings()
+            for other in clients.values where other.authenticated { send(.agentsUseShells(on), to: other) }
         case .answer(let id, let state, let text):
             // Only while the agent still asks what the reply answers: one
             // that comes later is not typed into what it asks next.
@@ -1751,7 +1763,10 @@ public final class HostServer {
         send(.tabLayout(tabLayout), to: client)
         send(.keepAwake(keepAwake), to: client)
         send(.keepAwakeOptions(keepAwakeOptions), to: client)
-        if let install = configuration.agentShells { send(.agentShells(install.isOn), to: client) }
+        if let install = configuration.agentShells {
+            send(.agentShells(install.isOn), to: client)
+            send(.agentsUseShells(agentsUseShells), to: client)
+        }
         send(.macInUse(macInUse), to: client)
         send(.schedules(schedules), to: client)
         send(.commitWriter(commitWriter), to: client)
@@ -1862,7 +1877,7 @@ public final class HostServer {
             for file in [usage, events].compactMap({ $0 }) { try? FileManager.default.removeItem(at: file) }
             if let more = try? AgentHooks.launchArguments(
                 agent: agent, tool: tool, usageFile: usage?.path, directory: configuration.hooksDirectory, home: configuration.home,
-                trust: run.map { [$0.folder] } ?? [])
+                trust: run.map { [$0.folder] } ?? [], useShells: asksToUseShells)
             {
                 command = (command ?? "") + more
                 environment[AgentHooks.eventsVariable] = events.path
@@ -1877,7 +1892,7 @@ public final class HostServer {
         environment.merge(more) { _, new in new }
         // The agent's MCP server tells the host which session's it is.
         let agentKey = agent.map { _ in UUID().uuidString + UUID().uuidString }
-        if let agentKey { environment[Self.agentShellsVariable] = "\(boundPort) \(agentKey)" }
+        if let agentKey { environment[Self.agentShellsVariable] = "\(boundPort) \(agentKey)" + (asksToUseShells ? " use" : "") }
         let process: PTYProcess
         do {
             process = try PTYProcess(

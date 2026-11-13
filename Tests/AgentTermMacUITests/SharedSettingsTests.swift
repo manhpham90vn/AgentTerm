@@ -24,6 +24,17 @@ final class SharedSettingsTests: MacUITestCase {
         XCTAssertFalse(app.exists(.text("New Schedule")), "the editor came back with the window")
     }
 
+    /// SET-1: Settings opens on General each time, not on the tab it was left on.
+    func testSettingsOpensOnGeneral() throws {
+        openSettings("Schedules")
+        app.wait(for: .id("new-schedule"))
+        app.closeWindow(titled: "Schedules")
+        app.waitGone(.id("new-schedule"))
+        app.menu(["AgentTermMacUITest", "Settings…"])
+        app.wait(for: .id("menu-bar"))
+        XCTAssertFalse(app.exists(.id("new-schedule")))
+    }
+
     func testKeepAwakeIsTheSameOnBothDevices() throws {
         let phone = try device()
         openSettings("General")
