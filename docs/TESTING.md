@@ -261,6 +261,11 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | GIT-11 | Default commit message settings | A second device sets agent Codex, a model and a prompt | Settings > Git shows that agent, model and prompt, and the Write button names Codex | H, M |
 | GIT-12 | Changes listed on the Mac | Another device stages everything and commits | The Mac's list is empty and git has that device's commit | M, X |
 | GIT-13 | A diff scrolled part of the way down | The file changes under it | The diff stays where it was scrolled to | M |
+| GIT-14 | A remote that wants a sign-in; a credential helper (`!name`) in a folder only the login shell's `PATH` names | Push; pull | git finds and runs the helper | H |
+| GIT-15 | A pre-commit hook that calls a tool in a folder only the login shell's `PATH` names | Press Commit | The hook finds the tool; the commit is made | H |
+| GIT-16 | A credential helper that is nowhere, written as `!name args` or as a name git knows (`credential.helper = name`) | Push | The first line says "git could not sign in to <host>: its credential helper `name` was not found."; git's own words follow. A helper that answers with a sign-in the remote refuses is not called missing | H |
+| GIT-17 | The login shell asked once, before a tool the hook calls was installed | The shell's `PATH` now names the tool's folder; press Commit | The shell is asked again and the commit made on the second try; when the shell's `PATH` is the same, the action is not tried again | H |
+| GIT-18 | A login shell that prints its `PATH` after other lines, or prints nothing | The host asks it | Only the `PATH` behind the marker is taken, once; with nothing, git keeps the host's `PATH` and `GIT_TERMINAL_PROMPT=0` is still set | H |
 
 ### History
 
