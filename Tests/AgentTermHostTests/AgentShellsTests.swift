@@ -129,6 +129,89 @@ final class AgentShellsInstallTests: XCTestCase {
     }
 }
 
+/// MCP-11: Codex gives an MCP server only the variables it is told to, and
+/// without the session's the server offers no tools: it is told to.
+final class AgentShellsCodexTests: XCTestCase {
+    private var root: URL!
+
+    override func setUpWithError() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-codex-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    }
+
+    override func tearDown() { try? FileManager.default.removeItem(at: root) }
+
+    private var config: URL { root.appendingPathComponent("config.toml") }
+
+    /// What `codex mcp add` writes, with the user's own settings around it.
+    private let written = """
+        model = "gpt-5.5"
+
+        [mcp_servers.agentterm]
+        command = "/Apps/AgentTerm.app/agenttermd"
+        args = ["mcp"]
+
+        [projects."/Users/someone/code"]
+        trust_level = "trusted"
+
+        """
+
+    private func install(run: @escaping AgentShellsInstall.Run) -> AgentShellsInstall {
+        AgentShellsInstall(directory: root.appendingPathComponent("state"), tool: "/Apps/AgentTerm.app/agenttermd", codexConfig: config, run: run)
+    }
+
+    private let codex = AgentInfo(id: "codex", name: "Codex", path: "/a/codex")
+
+    func testCodexIsToldToGiveTheServerTheSessionsVariable() throws {
+        let install = install { _ in
+            try? self.written.write(to: self.config, atomically: true, encoding: .utf8)
+            return true
+        }
+        install.ensure(agents: [codex])
+        let text = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertEqual(
+            text,
+            """
+            model = "gpt-5.5"
+
+            [mcp_servers.agentterm]
+            env_vars = ["AGENTTERM_MCP"]
+            command = "/Apps/AgentTerm.app/agenttermd"
+            args = ["mcp"]
+
+            [projects."/Users/someone/code"]
+            trust_level = "trusted"
+
+            """)
+        install.ensure(agents: [codex])
+        XCTAssertEqual(try String(contentsOf: config, encoding: .utf8), text, "told once")
+    }
+
+    func testAnInstallWithoutItIsMended() throws {
+        // Installed by a host from before: recorded, so not added again.
+        var ran = 0
+        install { _ in
+            ran += 1; try? self.written.write(to: self.config, atomically: true, encoding: .utf8); return true
+        }.ensure(agents: [codex])
+        try written.write(to: config, atomically: true, encoding: .utf8)
+        install { _ in
+            ran += 1; return true
+        }.ensure(agents: [codex])
+        XCTAssertEqual(ran, 1)
+        XCTAssertTrue(try String(contentsOf: config, encoding: .utf8).contains("env_vars = [\"AGENTTERM_MCP\"]"))
+    }
+
+    func testVariablesTheUserGaveAreKept() throws {
+        let own = written.replacingOccurrences(of: "args = [\"mcp\"]", with: "args = [\"mcp\"]\nenv_vars = [\"MY_TOKEN\"]")
+        install { _ in
+            try? own.write(to: self.config, atomically: true, encoding: .utf8); return true
+        }.ensure(agents: [codex])
+        let text = try String(contentsOf: config, encoding: .utf8)
+        XCTAssertTrue(text.contains("env_vars = [\"AGENTTERM_MCP\", \"MY_TOKEN\"]"), text)
+        XCTAssertEqual(text.components(separatedBy: "env_vars").count, 2)
+    }
+}
+
 /// MCP-5 to MCP-8: stand-in agents start the real `agenttermd mcp`, as real
 /// agents do, and the test speaks MCP to it through a pipe.
 final class AgentShellsHostTests: XCTestCase {

@@ -28,15 +28,18 @@ public final class AgentShellsInstall {
     private let file: URL
     private let tool: String
     private let run: Run
+    private let codexConfig: URL
 
     /// - Parameters:
     ///   - directory: The host's state folder.
     ///   - tool: The host's program, which the server runs as `<tool> mcp`.
+    ///   - codexConfig: Codex's configuration; its own unless a test's.
     ///   - run: Runs an agent's command line; through the user's login shell
     ///     unless a test stands in for it.
-    public init(directory: URL, tool: String, run: Run? = nil) {
+    public init(directory: URL, tool: String, codexConfig: URL? = nil, run: Run? = nil) {
         file = directory.appendingPathComponent("agent-shells.json")
         self.tool = tool
+        self.codexConfig = codexConfig ?? Self.codexConfigFile
         self.run = run ?? AgentShellsInstall.throughLoginShell
     }
 
@@ -62,6 +65,8 @@ public final class AgentShellsInstall {
             if record.installed[agent.id] != nil { _ = run(Self.remove(agent: agent.id, path: path)) }
             if run(add) { record.installed[agent.id] = tool }
         }
+        // Also mends what a host from before installed without it.
+        if record.installed["codex"] != nil { Self.forwardSessionVariable(in: codexConfig) }
         self.record = record
     }
 
@@ -90,6 +95,34 @@ public final class AgentShellsInstall {
 
     static func remove(agent: String, path: String) -> [String] {
         agent == "claude" ? [path, "mcp", "remove", "--scope", "user", name] : [path, "mcp", "remove", name]
+    }
+
+    /// Codex starts an MCP server with only a few of its own variables
+    /// (`HOME`, `PATH` and the like) unless its configuration names more in
+    /// `env_vars`: without the session's, the server is not in a session and
+    /// offers no tools. `codex mcp add` cannot name them, so the line is
+    /// written into the server's table, next to what the user may have
+    /// named there.
+    static func forwardSessionVariable(in config: URL) {
+        guard let text = try? String(contentsOf: config, encoding: .utf8) else { return }
+        var lines = text.components(separatedBy: "\n")
+        guard let header = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "[mcp_servers.\(name)]" }) else { return }
+        let end = lines[(header + 1)...].firstIndex { $0.trimmingCharacters(in: .whitespaces).hasPrefix("[") } ?? lines.endIndex
+        let variable = "\"\(HostServer.agentShellsVariable)\""
+        if let line = lines[(header + 1)..<end].firstIndex(where: { $0.trimmingCharacters(in: .whitespaces).hasPrefix("env_vars") }) {
+            guard !lines[line].contains(variable), let open = lines[line].firstIndex(of: "[") else { return }
+            let rest = lines[line][lines[line].index(after: open)...]
+            lines[line] = String(lines[line][...open]) + variable + (rest.trimmingCharacters(in: .whitespaces).hasPrefix("]") ? "" : ", ") + rest
+        } else {
+            lines.insert("env_vars = [\(variable)]", at: header + 1)
+        }
+        try? lines.joined(separator: "\n").write(to: config, atomically: true, encoding: .utf8)
+    }
+
+    /// Codex's own configuration file, where `codex mcp add` writes.
+    static var codexConfigFile: URL {
+        let home = ProcessInfo.processInfo.environment["CODEX_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) }
+        return (home ?? URL(fileURLWithPath: HostEnvironment.homeDirectory).appendingPathComponent(".codex")).appendingPathComponent("config.toml")
     }
 
     /// As in a terminal: the agents find their sign-in and their PATH there.
