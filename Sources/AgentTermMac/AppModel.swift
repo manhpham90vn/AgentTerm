@@ -77,8 +77,9 @@ final class AppModel: ObservableObject {
     /// When this Mac's host died lately, as the app saw it go. A host that
     /// dies this often within a minute is not started again by itself.
     private var hostDeaths: [Date] = []
-    static let deathsThatBreak = 3
-    static let deathWindow: TimeInterval = 60
+    /// Three times in sixty seconds, as the host counts too.
+    static let deathsThatBreak = HostMarker.deathsThatBreak
+    static let deathWindow = HostMarker.deathWindow
     /// True when the host died too often to be started again by itself.
     @Published private(set) var hostBroken = false
     /// How often it died within the minute, for saying so.
@@ -88,6 +89,8 @@ final class AppModel: ObservableObject {
     /// The host this app started last, and whether it ever answered.
     private var launchedHost: pid_t?
     private var launchedHostAnswered = false
+    /// Counts the starts, so that what is learnt of one that is over is dropped.
+    private var launchCount = 0
     /// Why the host this app started could not be started: it ended
     /// before it ever answered.
     private var launchFailure: String?
@@ -478,24 +481,59 @@ final class AppModel: ObservableObject {
     /// phones and the other Macs reach this Mac through it all the same.
     private func startOwnHost() {
         guard let executable = DaemonLauncher.bundledExecutable else { return }
+        let arguments = ["--port", String(port)]
         let port = port
         DispatchQueue.global(qos: .utility).async {
-            guard DaemonLauncher.listener(onPort: port) == nil, let pid = DaemonLauncher.launch(executable: executable, arguments: ["--port", String(port)]) else { return }
+            guard DaemonLauncher.listener(onPort: port) == nil else { return }
+            // Through launchd while Start at Login is on, as always.
+            let item = LoginItem.forHost(executable: executable, arguments: arguments)
+            guard case .spawned(let pid) = DaemonLauncher.startHost(executable: executable, arguments: arguments, loginItem: item).start else { return }
             // Only to take it off the system's books when it ends.
             DaemonLauncher.watch(pid) { _ in }
         }
     }
 
+    /// The launch agent of this app's host, nil for an app with a state
+    /// folder of its own.
+    private func loginItem(_ executable: String) -> LoginItem? {
+        LoginItem.forHost(executable: executable, arguments: ["--port", String(port)])
+    }
+
     /// Starts this Mac's host, and watches it: how it ends is what the app
-    /// says when it cannot be started, or keeps stopping.
+    /// says when it cannot be started, or keeps stopping. While Start at
+    /// Login is on, launchd starts it (`DaemonLauncher.startHost`), so the
+    /// host has one owner; the app learns from launchd how it ended.
     private func launchHost(_ executable: String) {
         launchFailure = nil
         launchedHostAnswered = false
-        guard let pid = DaemonLauncher.launch(executable: executable, arguments: ["--port", String(port)]) else {
-            launchedHost = nil
-            launchFailure = "\(executable) could not be run."
-            return
+        launchedHost = nil
+        launchCount += 1
+        let count = launchCount
+        let arguments = ["--port", String(port)]
+        let item = loginItem(executable)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let (start, lastExit) = DaemonLauncher.startHost(executable: executable, arguments: arguments, loginItem: item)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.launchCount == count else {
+                        if case .spawned(let pid) = start { DaemonLauncher.watch(pid) { _ in } }
+                        return
+                    }
+                    // How the host launchd ran last ended: launchd started
+                    // it again, or was about to.
+                    if let lastExit { self.lastHostExit = DaemonLauncher.describe(exitStatus: lastExit, log: item?.log) }
+                    switch start {
+                    case .spawned(let pid): self.watchSpawned(pid)
+                    case .launchd: if let item { self.watchLaunchd(item, count: count) }
+                    case .running: if let item { self.watchLaunchd(item, count: count, startIfGone: executable) }
+                    case .failed(let why): self.launchFailure = why
+                    }
+                }
+            }
         }
+    }
+
+    private func watchSpawned(_ pid: pid_t) {
         launchedHost = pid
         DaemonLauncher.watch(pid) { [weak self] status in
             MainActor.assumeIsolated {
@@ -505,6 +543,42 @@ final class AppModel: ObservableObject {
                 // One that ended before it ever answered could not be
                 // started: that is said at once, with its reason.
                 if !self.launchedHostAnswered { self.launchFailure = how }
+            }
+        }
+    }
+
+    /// The same for a host launchd started, which is not this app's child:
+    /// launchd is asked how it is doing until it answers. One that ended
+    /// before it ever answered could not be started, and launchd would
+    /// only try again every ten seconds: it is said at once, with its
+    /// reason, and launchd is told to stop until Try Again.
+    ///
+    /// `startIfGone`: the host launchd was running when the app looked may
+    /// have been the one that just died, not yet seen to end. Gone, it is
+    /// started afresh rather than left to launchd's ten seconds.
+    private func watchLaunchd(_ item: LoginItem, count: Int, look: Int = 1, startIfGone executable: String? = nil) {
+        guard look <= 30 else { return }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            let state = item.jobState()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.launchCount == count, !self.launchedHostAnswered else { return }
+                    // Gone, and long enough after the start that launchd has
+                    // run it: it ended. Status 0 too: a host that keeps
+                    // dying does not run, and exits cleanly so launchd leaves it.
+                    if let executable, state?.pid == nil {
+                        self.launchHost(executable)
+                        return
+                    }
+                    if let state, state.pid == nil, state.lastExitStatus != 0 || look >= 3 {
+                        let how = DaemonLauncher.describe(exitStatus: state.lastExitStatus, log: item.log)
+                        self.lastHostExit = how
+                        self.launchFailure = how
+                        DispatchQueue.global(qos: .utility).async { item.unload() }
+                        return
+                    }
+                    self.watchLaunchd(item, count: count, look: look + 1, startIfGone: executable)
+                }
             }
         }
     }
@@ -765,6 +839,10 @@ final class AppModel: ObservableObject {
             recentDeaths = hostDeaths.count
             hostBroken = true
             status = .failed(brokenReason)
+            // Nor by launchd, which would start it again ten seconds later.
+            if let item = DaemonLauncher.bundledExecutable.flatMap(loginItem) {
+                DispatchQueue.global(qos: .utility).async { if item.jobState()?.pid == nil { item.unload() } }
+            }
             return
         }
         if !launchedDaemon, let executable = DaemonLauncher.bundledExecutable {
@@ -794,8 +872,10 @@ final class AppModel: ObservableObject {
     func reconnect() {
         connectAttempts = 0
         launchedDaemon = false
-        // The user asked: whatever happened before starts over.
+        // The user asked: whatever happened before starts over, also for
+        // the host, which counts the deaths it is told of too.
         hostDeaths = []
+        if !isRemote { HostMarker.forgetDeaths(in: HostEnvironment.supportDirectory, port: port) }
         hostBroken = false
         launchFailure = nil
         status = .connecting
@@ -811,8 +891,9 @@ final class AppModel: ObservableObject {
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             wasConnected = true
             hostBroken = false
-            // The host the app started is the one that answers.
-            if launchedHost != nil { launchedHostAnswered = true }
+            // The host the app started, itself or through launchd, is the
+            // one that answers.
+            launchedHostAnswered = true
             // A host that is lost later is started again: until 0.6.0 this
             // stayed set, and only the first host that was lost ever was.
             launchedDaemon = false

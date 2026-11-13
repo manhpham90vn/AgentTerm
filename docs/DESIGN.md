@@ -704,7 +704,8 @@ own marker.
 **The host watched by the Mac app.** When the app's connection to its own
 host closes, the app looks for the marker: there, the host died; gone, it
 was stopped. A death is counted. The app starts the host again by itself
-(`DaemonLauncher.launch`), and the new host reports what ended. After
+(`DaemonLauncher.startHost`: through launchd while Start at Login is on,
+see below), and the new host reports what ended. After
 three deaths within sixty seconds the app does not start it again: the
 launch screen says that the host keeps stopping, how often, and how the
 last one ended, with Try Again, which starts over. The app knows how a
@@ -720,6 +721,55 @@ the report then says only that it stopped.
 Until 0.6.0 the app started its host again only the first time it was
 lost: the flag that says it has started one was never reset after a host
 answered.
+
+**How the host is started: one owner.** With Start at Login on, the host
+is a launch agent (`LoginItem`): `~/Library/LaunchAgents/<bundle
+id>.host.plist`, with `RunAtLoad`, and `KeepAlive` = `SuccessfulExit:
+false`. launchd starts it at login and starts it again when it crashed or
+was killed; a host that was stopped as asked (SIGTERM, SIGINT) exits with
+status 0, and launchd leaves it. While the switch is on, the app does not
+spawn the host either: it asks launchd (`DaemonLauncher.startHost`), so
+there is never a second host racing the first for the port.
+
+`startHost` decides, in this order:
+
+1. launchd runs the job already (it started it again after a death):
+   nothing to start.
+2. The switch is on: the property list is brought up to date
+   (`refresh()`: the host of this app, as this version writes it), the job
+   is unloaded if launchd still has it, and loaded (`launchctl bootstrap`),
+   which starts it at once. A job launchd is waiting to start again is
+   started this way too, instead of after launchd's ten-second throttle.
+   Should launchd refuse it, the app spawns the host itself.
+3. The switch is off: a job launchd still has loaded from before is
+   unloaded, so it cannot start a host next to the app's, and the app
+   spawns its own (`DaemonLauncher.launch`).
+
+The switch only writes or removes the file. Turning it on loads nothing,
+since that would start a second host: the host that runs then is the
+app's until it next stops, and launchd's from the next start on. Turning
+it off unloads nothing, since that would stop the host: launchd keeps
+watching the host it runs until it stops.
+
+A host launchd started is not the app's child, so the app asks launchd
+how it ended (`jobState()`: `launchctl list <label>`, whose
+`LastExitStatus` is the status `waitpid` gives) and puts it in the same
+words. One that ended before it ever answered could not be started: the
+app says so, and unloads the job until Try Again, since launchd would
+only start it again every ten seconds.
+
+**Broken under launchd.** With the app closed nobody counts deaths but
+the host. The marker carries the times of the deaths within the last
+minute from one host to the next (`HostMarker.deaths`). A host that
+starts and finds that its predecessor was the third to die within sixty
+seconds reports that death as broken (`broken`, not `restarted`), removes
+the marker, and exits with status 0 (`StartError.keepsDying`), so that
+launchd does not start it again. The next start is one the user makes:
+logging in, opening the app, Try Again. With the app open the app counts
+as before, says the host keeps stopping after the third death, and
+unloads the job. Try Again clears the deaths in the marker
+(`forgetDeaths`), keeping the marker itself so the death it holds is
+still reported.
 
 ## Another Mac
 
@@ -818,6 +868,11 @@ toolbar, before the agents, switches between this Mac and the paired ones.
 - A terminal wider than the Mac window (a phone in landscape next to a narrow
   window) is clipped rather than scaled.
 - The host does not apply backpressure to a slow client.
-- The daemon is started by the app, or at login when the user asks for
-  that. With the app closed nothing watches it: a host that dies then is
-  reported only when the next one starts.
+- The daemon is started by the app, or by launchd when the user asked for
+  Start at Login. With Start at Login off and the app closed nothing
+  watches it: a host that dies then is reported only when the next one
+  starts. With it on, a host the app started before the switch was turned
+  on is launchd's only from its next start.
+- A host that cannot even start (its port taken at login) is started
+  again by launchd every ten seconds while the app is closed: it is not
+  counted as dying, since it never ran.

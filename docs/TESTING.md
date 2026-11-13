@@ -118,6 +118,7 @@ taken on the iPhone Air, whose screen is the size the App Store asks for.
 | What a client is sent on attach | `Tests/AgentTermHostTests/ScreenMirrorTests.swift` | `session(_:)` and `attach(to:)`, which give the session's own terminal and a client's to compare |
 | The connection itself | `Tests/AgentTermHostTests/SlowLinkTests.swift` | a host on a port of its own and a real `AgentTermConnection` |
 | What one host leaves for the next: a host that died | `Tests/AgentTermHostTests/HostDeathTests.swift` | `startHost()`, which runs the real `agenttermd` on the test's own state folder and port, and `kill` |
+| The host as launchd runs it | `Tests/AgentTermHostTests/LaunchdHostTests.swift` | a launch agent of the test's own: a label no app uses (`com.example.agentterm-test.…`), its property list in the test's folder, never `~/Library/LaunchAgents`, loaded into the user's launchd and unloaded after |
 | The Mac app | a class under `Tests/AgentTermMacUITests` | `MacUITestCase`: `app.press`, `app.write`, `app.menu`, `app.wait(for:)`, and `device()` for a second device |
 | The Mac app on another Mac | `RemoteMacTests` | `startOtherMac()` and `pair()` |
 | The iPhone app | `iOS/AgentTermUITests` | the test `scripts/test-ios.sh` runs |
@@ -291,6 +292,9 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | LOGIN-3 | Start at Login on | Log out and in again | The host is running without the app having been opened | hand |
 | LOGIN-4 | Start at Login on, and the app moved since: the launch agent names its host where it was | The app's host starts from where the app is now | The launch agent names this host's program | H |
 | LOGIN-5 | Start at Login on for the installed app | A build that is not part of an app starts its host, or the installed host is started by hand with other arguments | The launch agent is left as it was | H |
+| LOGIN-6 | A host launchd started from its launch agent, the app closed | The host is killed (SIGKILL); then it is stopped as asked (SIGTERM) | launchd starts it again after the kill, and says it was killed; after the stop it does not | H |
+| LOGIN-7 | Start at Login on | The app starts its host; again while it runs; the host is killed within ten seconds of its start and the app starts it; Start at Login is turned off, the host stopped, and the app starts it | launchd starts it, once; started again at once, not after launchd's ten seconds, and the app is told it was killed; with the switch off the app starts its own and launchd has no job left | H |
+| LOGIN-8 | A launch agent written by 0.5.0, without `KeepAlive` | The host it names starts; the same host started by hand with other arguments | It is written again as this version writes it; by the other, it is left as it was | H |
 
 ### Menu bar, permissions, the host
 
@@ -306,6 +310,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | HOST-5 | The Mac app on its host, a session `build` running | The host is killed | The app starts its host again by itself and shows a banner: the host stopped unexpectedly, was started again, and `build` ended with it. Dismiss takes it away here and on the host | M |
 | HOST-6 | The Mac app on its host | The host is killed three times within sixty seconds | After the third the app does not start it again: it says the host keeps stopping, how often, why the last one stopped (it was killed), and offers Try Again, which starts it; the new host then reports the three | M |
 | HOST-7 | The app's port held by something that is not a host | Open the app | The host it starts cannot listen there; the app says it could not be started, with the host's own words why, and offers Try Again | M |
+| HOST-9 | A host started again each time it died, by launchd with the app closed | It dies three times within sixty seconds; then the user asks for it (Try Again) | The host after the third does not run: it exits with status 0, so launchd leaves it, and the third report says it keeps stopping. After Try Again it runs, and one more death does not break it | H |
 | HOST-8 | The host on the Mac died with two sessions before this one started | The iPhone connects | A card says "The host on <Mac> stopped unexpectedly … and was started again", names the two sessions that ended, and goes once dismissed | P |
 
 ### Files
@@ -442,6 +447,9 @@ Found while #20 was built (0.6.0), each shown by a test that failed first:
   the second, it waited, then said the host did not answer (HOST-6).
 - A host that could not start was tried twenty times and then reported
   with the connection's error, not the host's own reason (HOST-7).
+- With the app closed, a host that was killed was not started again: the
+  launch agent had no `KeepAlive`, and the iPhone could not reach the Mac
+  until the app was opened (LOGIN-6).
 
 Found on CI in 0.6.0 (#32): SES-21 asked that a long session be written
 out in less than 2 seconds, which held here and failed on a slower runner

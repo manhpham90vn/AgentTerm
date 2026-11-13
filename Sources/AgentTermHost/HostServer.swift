@@ -90,10 +90,17 @@ public final class HostServer {
 
     public enum StartError: Error, CustomStringConvertible {
         case listenerFailed(String)
+        /// The hosts before this one died too often within a minute
+        /// (`HostMarker.deathsThatBreak`): it is not to run until the user
+        /// asks. A host that gets this exits with status 0, so that launchd
+        /// does not start it again either.
+        case keepsDying(Int)
 
         public var description: String {
             switch self {
             case .listenerFailed(let reason): return "could not listen: \(reason)"
+            case .keepsDying(let count):
+                return "the host stopped unexpectedly \(count) times within a minute, so it is not started again until AgentTerm is opened and asked to"
             }
         }
     }
@@ -307,11 +314,15 @@ public final class HostServer {
     @discardableResult
     public func start() throws -> UInt16 {
         let port = try listen(on: "127.0.0.1", port: configuration.port)
-        queue.sync {
+        let deaths = queue.sync {
             boundPort = port
             // Only once the port is this host's: a host that cannot listen
             // there leaves the one that can to find out what happened.
-            noteStart()
+            return noteStart()
+        }
+        if let deaths {
+            stop()
+            throw StartError.keepsDying(deaths)
         }
 
         // Names sessions after the conversations their agents are having.
@@ -379,25 +390,40 @@ public final class HostServer {
     // MARK: Parts that stopped
 
     /// Reads what the host before this one left, reports it if it died,
-    /// and notes that this one runs.
-    private func noteStart() {
-        guard let directory = configuration.stateDirectory else { return }
+    /// and notes that this one runs. Returns how often the hosts before it
+    /// died lately when that is too often for this one to run.
+    private func noteStart(now: Date = Date()) -> Int? {
+        guard let directory = configuration.stateDirectory else { return nil }
         failures = FailureLog.read(in: directory)
         let file = HostMarker.file(in: directory, port: boundPort)
+        var deaths: [Date] = []
         if let found = HostMarker.read(file), !found.marker.isRunning {
             // It left its marker, so it did not stop as asked: it was
             // killed or it crashed, and its sessions ended with it. Whoever
             // started this host started it again.
-            failures.append(PartFailure(part: .host, at: found.aliveAt, ended: found.marker.sessions, restarted: true))
+            deaths = HostMarker.recent(found.marker.deaths + [found.aliveAt], now: now)
+            // Broken means three times in sixty seconds, however the host
+            // was started again: by the app, or by launchd with the app
+            // closed. Then this one does not run.
+            let broken = deaths.count >= HostMarker.deathsThatBreak
+            failures.append(PartFailure(part: .host, at: found.aliveAt, ended: found.marker.sessions, restarted: !broken, broken: broken))
             failures = Array(failures.suffix(FailureLog.limit))
             FailureLog.write(failures, in: directory)
+            if broken {
+                // What is reported is kept; the deaths that were counted
+                // are not, so the next start, which only the user makes
+                // (opening the app, Try Again, logging in), runs.
+                try? FileManager.default.removeItem(at: file)
+                return deaths.count
+            }
         }
-        let marker = HostMarker(sessions: endedSessions())
+        let marker = HostMarker(sessions: endedSessions(), deaths: deaths)
         marker.write(to: file)
         self.marker = marker
         markerFile = file
         // A client that came in while the listener was starting.
         if !failures.isEmpty { broadcastFailures() }
+        return nil
     }
 
     /// The sessions as the marker names them: what would end with this host.

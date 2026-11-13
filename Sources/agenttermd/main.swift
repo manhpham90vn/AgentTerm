@@ -160,6 +160,11 @@ do {
     server = HostServer(configuration: configuration)
     let bound = try server.start()
     print("agenttermd listening on 127.0.0.1:\(bound)")
+} catch HostServer.StartError.keepsDying(let count) {
+    // With status 0, so that launchd does not start it again: it is broken
+    // until the user asks for it. The next host reports it.
+    FileHandle.standardError.write(Data("agenttermd: \(HostServer.StartError.keepsDying(count))\n".utf8))
+    exit(0)
 } catch {
     FileHandle.standardError.write(Data("agenttermd: \(error)\n".utf8))
     exit(1)

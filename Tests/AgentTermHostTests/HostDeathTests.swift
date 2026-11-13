@@ -74,6 +74,18 @@ final class HostDeathTests: XCTestCase {
     /// Starts a host on the test's port and state folder, and waits until it answers.
     @discardableResult
     private func startHost() throws -> Process {
+        let process = try launchHost()
+        let deadline = Date().addingTimeInterval(10)
+        while Date() < deadline {
+            if (try? token()) != nil, Self.answers(port: port) { return process }
+            usleep(100_000)
+        }
+        XCTFail("the host did not start")
+        return process
+    }
+
+    /// Starts a host on the test's port and state folder.
+    private func launchHost() throws -> Process {
         try XCTSkipUnless(FileManager.default.isExecutableFile(atPath: executable.path), "agenttermd is not built next to the tests")
         let process = Process()
         process.executableURL = executable
@@ -85,12 +97,6 @@ final class HostDeathTests: XCTestCase {
         process.standardError = FileHandle.nullDevice
         try process.run()
         hosts.append(process)
-        let deadline = Date().addingTimeInterval(10)
-        while Date() < deadline {
-            if (try? token()) != nil, Self.answers(port: port) { return process }
-            usleep(100_000)
-        }
-        XCTFail("the host did not start")
         return process
     }
 
@@ -191,5 +197,42 @@ final class HostDeathTests: XCTestCase {
         let mac = try connect("mac")
         XCTAssertEqual(mac.failures ?? [], [])
         XCTAssertEqual(mac.sessions, [])
+    }
+
+    /// HOST-9: the host dies three times within sixty seconds, started again
+    /// each time by whoever starts it: the app, or launchd with the app
+    /// closed, which counts nothing. The host after the third does not run:
+    /// it exits with status 0, so launchd leaves it, and the third report
+    /// says it keeps stopping. Once the user asks for it (Try Again), it runs.
+    func testAHostThatKeepsDyingIsNotRunAgainUntilAskedFor() throws {
+        for _ in 0..<3 {
+            let host = try startHost()
+            kill(host.processIdentifier, SIGKILL)
+            host.waitUntilExit()
+        }
+        let fourth = try XCTUnwrap(launchHost())
+        fourth.waitUntilExit()
+        XCTAssertEqual(fourth.terminationReason, .exit)
+        XCTAssertEqual(fourth.terminationStatus, 0, "launchd starts again only a host that did not exit cleanly")
+        XCTAssertFalse(Self.answers(port: port))
+        XCTAssertFalse(HostMarker.exists(in: state, port: port), "a stop, not a death")
+
+        // The deaths counted so far no longer stop it once the user asks.
+        HostMarker.forgetDeaths(in: state, port: port)
+        try startHost()
+        let mac = try connect("mac")
+        waitUntil("the reports") { (mac.failures?.count ?? 0) == 3 }
+        let reports = try XCTUnwrap(mac.failures)
+        XCTAssertEqual(reports.map(\.restarted), [true, true, false])
+        XCTAssertEqual(reports.map(\.broken), [false, false, true])
+        XCTAssertTrue(reports[2].headline().contains("keeps stopping"))
+
+        // And it counts again from nothing: one more death does not break it.
+        kill(hosts.last!.processIdentifier, SIGKILL)
+        hosts.last!.waitUntilExit()
+        try startHost()
+        let again = try connect("mac again")
+        waitUntil("the reports") { (again.failures?.count ?? 0) == 4 }
+        XCTAssertEqual(again.failures?.last?.broken, false)
     }
 }

@@ -28,8 +28,11 @@ final class LoginItemTests: XCTestCase {
         XCTAssertEqual(written["Label"] as? String, "com.example.host")
         XCTAssertEqual(written["ProgramArguments"] as? [String], ["/Applications/AgentTerm.app/Contents/MacOS/agenttermd", "--port", "7717"])
         XCTAssertEqual(written["RunAtLoad"] as? Bool, true)
-        // The app starts the host again when it stops; launchd must not, or there would be two.
-        XCTAssertNil(written["KeepAlive"])
+        // launchd starts it again when it crashed or was killed, not when it
+        // was stopped as asked (status 0). The app starts it through launchd
+        // while this is on, so there is one owner.
+        XCTAssertEqual(written["KeepAlive"] as? [String: Bool], ["SuccessfulExit": false])
+        XCTAssertNil(written["EnvironmentVariables"], "the real login item sets nothing in the host's environment")
         XCTAssertEqual(written["StandardOutPath"] as? String, item.log.path)
         // And it is a property list launchd's own tool accepts.
         let lint = Process()
@@ -73,5 +76,37 @@ final class LoginItemTests: XCTestCase {
 
     func testAHostWithFilesOfItsOwnHasNoLoginItem() {
         XCTAssertNil(LoginItem.forThisHost(environment: ["AGENTTERM_STATE_DIR": "/tmp/somewhere"]))
+        XCTAssertNil(LoginItem.forHost(executable: "/Applications/AgentTerm.app/Contents/MacOS/agenttermd", arguments: [], environment: ["AGENTTERM_STATE_DIR": "/tmp/somewhere"]))
+    }
+
+    /// LOGIN-8: a launch agent written by 0.5.0, which launchd did not keep
+    /// alive, is written again as this version writes it by the host it names.
+    func testALaunchAgentOfAnEarlierVersionIsBroughtUpToDate() throws {
+        let item = item()
+        try FileManager.default.createDirectory(at: item.file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var old = item.propertyList
+        old["KeepAlive"] = nil
+        try PropertyListSerialization.data(fromPropertyList: old, format: .xml, options: 0).write(to: item.file)
+        item.refresh()
+        let written = try XCTUnwrap(NSDictionary(contentsOf: item.file) as? [String: Any])
+        XCTAssertEqual(written["KeepAlive"] as? [String: Bool], ["SuccessfulExit": false])
+        // Not by the same host started by hand with other arguments (LOGIN-5).
+        try PropertyListSerialization.data(fromPropertyList: old, format: .xml, options: 0).write(to: item.file)
+        self.item(arguments: ["--port", "7800", "--local-only"]).refresh()
+        XCTAssertNil((NSDictionary(contentsOf: item.file) as? [String: Any])?["KeepAlive"])
+    }
+
+    func testWhatLaunchdSaysOfAJobIsRead() {
+        let printed = """
+            {
+            \t"LimitLoadToSessionType" = "Aqua";
+            \t"Label" = "com.example.host";
+            \t"LastExitStatus" = 9;
+            \t"PID" = 4711;
+            };
+            """
+        XCTAssertEqual(LoginItem.number("PID", in: printed), 4711)
+        XCTAssertEqual(LoginItem.number("LastExitStatus", in: printed), 9)
+        XCTAssertNil(LoginItem.number("Missing", in: printed))
     }
 }

@@ -364,9 +364,14 @@ has dismissed it on one device:
 - On the iPhone, and on a Mac showing another Mac, the same in words: "The
   host on <Mac> stopped unexpectedly … and was started again", with the
   sessions that ended, rather than a list that emptied.
+- With the app closed, the host started at login (Start at Login on) is
+  started again by macOS (launchd) when it is killed or crashes, so the
+  iPhone still reaches the Mac; the next app to connect is told what
+  ended. With Start at Login off and the app closed, nothing starts it
+  again.
 - A host that dies three times within sixty seconds is not started again
-  by itself: the Mac app says that it keeps stopping, how the last one
-  ended when it knows, and offers Try Again.
+  by itself, by the app or by launchd: the Mac app says that it keeps
+  stopping, how the last one ended when it knows, and offers Try Again.
 - A host the app starts that cannot start (its port is taken, for one)
   is said so at once, with the host's own words why, and Try Again.
 

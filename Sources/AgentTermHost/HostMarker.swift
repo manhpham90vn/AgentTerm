@@ -17,11 +17,48 @@ public struct HostMarker: Codable, Equatable {
     public var startedAt: Date
     /// The sessions running in the host, as they are named in the lists.
     public var sessions: [EndedSession]
+    /// When the hosts before this one died, those within the last minute:
+    /// carried from one host to the next, so that a host started again by
+    /// launchd, with no app to count, knows it keeps dying.
+    public var deaths: [Date]
 
-    public init(pid: Int32 = getpid(), startedAt: Date = Date(), sessions: [EndedSession] = []) {
+    /// Broken means three times in sixty seconds.
+    public static let deathsThatBreak = 3
+    public static let deathWindow: TimeInterval = 60
+
+    public init(pid: Int32 = getpid(), startedAt: Date = Date(), sessions: [EndedSession] = [], deaths: [Date] = []) {
         self.pid = pid
         self.startedAt = startedAt
         self.sessions = sessions
+        self.deaths = deaths
+    }
+
+    private enum CodingKeys: String, CodingKey { case pid, startedAt, sessions, deaths }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        pid = try container.decode(Int32.self, forKey: .pid)
+        startedAt = try container.decode(Date.self, forKey: .startedAt)
+        sessions = try container.decode([EndedSession].self, forKey: .sessions)
+        // A marker of 0.6.0's first builds counted none.
+        deaths = try container.decodeIfPresent([Date].self, forKey: .deaths) ?? []
+    }
+
+    /// The deaths that still count: within the last minute.
+    public static func recent(_ deaths: [Date], now: Date = Date()) -> [Date] {
+        deaths.filter { now.timeIntervalSince($0) < deathWindow }
+    }
+
+    /// The user asked for the host (Try Again): the deaths counted so far
+    /// no longer stop it. The marker of a host that died is kept, with
+    /// when it was last alive, so the next host still reports it.
+    public static func forgetDeaths(in directory: URL, port: UInt16) {
+        let url = file(in: directory, port: port)
+        guard let found = read(url), !found.marker.deaths.isEmpty, !found.marker.isRunning else { return }
+        var marker = found.marker
+        marker.deaths = []
+        marker.write(to: url)
+        try? FileManager.default.setAttributes([.modificationDate: found.aliveAt], ofItemAtPath: url.path)
     }
 
     public static func file(in directory: URL, port: UInt16) -> URL {
