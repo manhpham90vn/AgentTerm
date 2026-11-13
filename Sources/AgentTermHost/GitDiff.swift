@@ -189,8 +189,7 @@ public enum GitActions {
     public static func commit(message: String, in directory: String) -> String? {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "Write a commit message first." }
-        // Hooks run here, and may call tools the user's shell finds.
-        return findingTools { run(["commit", "--quiet", "--message", trimmed], in: directory, timeout: 120, environment: toolEnvironment) }
+        return run(["commit", "--quiet", "--message", trimmed], in: directory, timeout: 120)
     }
 
     /// Pushes the checked out branch to its upstream. A branch without one
@@ -198,15 +197,11 @@ public enum GitActions {
     /// and follows it from then on.
     public static func push(in directory: String) -> String? {
         guard let branch = currentBranch(in: directory) else { return "Check out a branch to push: this is a detached HEAD." }
-        let arguments: [String]
         if GitDiff.tracking(of: branch, in: directory).upstream != nil {
-            arguments = ["push"]
-        } else {
-            guard let remote = GitDiff.pushRemote(in: directory) else { return "This repository has no remote to push to." }
-            arguments = ["push", "--set-upstream", remote, branch]
+            return run(["push"], in: directory, timeout: remoteTimeout, environment: remoteEnvironment)
         }
-        let problem = findingTools { run(arguments, in: directory, timeout: remoteTimeout, environment: remoteEnvironment) }
-        return problem.map(explainingSignIn)
+        guard let remote = GitDiff.pushRemote(in: directory) else { return "This repository has no remote to push to." }
+        return run(["push", "--set-upstream", remote, branch], in: directory, timeout: remoteTimeout, environment: remoteEnvironment)
     }
 
     /// Brings in what the upstream has, the way the repository is set up to
@@ -219,107 +214,25 @@ public enum GitActions {
         }
         // A merge or rebase the user left unfinished is theirs, not this pull's.
         let before = unfinished(in: directory)
-        let problem = findingTools { () -> String? in
-            guard let problem = run(["pull", "--no-edit"], in: directory, timeout: remoteTimeout, environment: remoteEnvironment) else { return nil }
-            guard before == nil, let left = unfinished(in: directory) else { return problem }
-            _ = run([left, "--abort"], in: directory)
-            return "The pull ran into conflicts and was undone. Pull in a terminal to resolve them.\n\n\(problem)"
-        }
-        return problem.map(explainingSignIn)
+        guard let problem = run(["pull", "--no-edit"], in: directory, timeout: remoteTimeout, environment: remoteEnvironment) else { return nil }
+        guard before == nil, let left = unfinished(in: directory) else { return problem }
+        _ = run([left, "--abort"], in: directory)
+        return "The pull ran into conflicts and was undone. Pull in a terminal to resolve them.\n\n\(problem)"
     }
 
     private static let remoteTimeout: TimeInterval = 120
-
-    /// Where the `PATH` for what git starts by name comes from. A test puts
-    /// a stand-in for the user's shell here.
-    nonisolated(unsafe) static var shellPath = LoginShellPath.shared
-
-    /// The host's own environment with the `PATH` of the user's shell, so
-    /// that git finds the credential helpers, hooks' tools and `git-lfs` it
-    /// starts by name. When the shell did not say, the `PATH` stays as it is.
-    /// The first call may wait for the shell to start: never on the main thread.
-    static var toolEnvironment: [String: String] {
-        var environment = ProcessInfo.processInfo.environment
-        if let path = shellPath.value() { environment["PATH"] = path }
-        return environment
-    }
 
     /// git must never wait for a password or a passphrase: there is no
     /// terminal to type it in. Credential helpers and the SSH agent still
     /// answer; anything that would ask fails with git's own message.
     static var remoteEnvironment: [String: String] {
-        var environment = toolEnvironment
+        var environment = ProcessInfo.processInfo.environment
         environment["GIT_TERMINAL_PROMPT"] = "0"
         environment["GIT_ASKPASS"] = nil
         environment["SSH_ASKPASS"] = nil
         environment["SSH_ASKPASS_REQUIRE"] = "never"
         environment["GIT_EDITOR"] = "true"
         return environment
-    }
-
-    /// Runs `action`, and once more when git could not find a program and the
-    /// user's shell has another `PATH` since it was asked: the program may
-    /// have been installed in between.
-    private static func findingTools(_ action: () -> String?) -> String? {
-        guard let problem = action() else { return nil }
-        guard missesAProgram(problem), shellPath.refresh() else { return problem }
-        return action()
-    }
-
-    /// What a shell says of a program it cannot find, and what git says of a
-    /// `git-<name>` it cannot find.
-    private static func missesAProgram(_ said: String) -> Bool {
-        said.contains(": command not found") || said.contains("' is not a git command")
-    }
-
-    /// Puts a sentence above git's words when a push or pull could not sign
-    /// in because a credential helper was not found, naming the helper.
-    /// A sign-in that was refused is left as git said it.
-    static func explainingSignIn(_ said: String) -> String {
-        guard let host = signInHost(in: said) else { return said }
-        let missing = missingHelpers(in: said)
-        guard !missing.isEmpty else { return said }
-        let names = missing.map { "`\($0)`" }
-        let sentence =
-            names.count == 1
-            ? "git could not sign in to \(host): its credential helper \(names[0]) was not found."
-            : "git could not sign in to \(host): its credential helpers \(names.dropLast().joined(separator: ", ")) and \(names.last!) were not found."
-        return "\(sentence)\n\n\(said)"
-    }
-
-    /// The host in git's "could not read Username for '<url>'", which is how
-    /// git says that nothing gave it a sign-in and it may not ask for one.
-    private static func signInHost(in said: String) -> String? {
-        let start = "could not read Username for '"
-        guard let range = said.range(of: start), let end = said[range.upperBound...].firstIndex(of: "'") else { return nil }
-        let url = String(said[range.upperBound..<end])
-        return URLComponents(string: url)?.host ?? url
-    }
-
-    /// The helpers git could not start: one written as a shell command
-    /// (`!gh auth git-credential`), of which the shell says
-    /// "gh auth git-credential get: gh: command not found", and one git knows
-    /// by name (`manager`), of which git says
-    /// "git: 'credential-manager' is not a git command".
-    static func missingHelpers(in said: String) -> [String] {
-        var names: [String] = []
-        for line in said.split(whereSeparator: \.isNewline) {
-            let parts = line.components(separatedBy: ": ")
-            if parts.count >= 3, parts.last == "command not found" {
-                let command = parts[0], name = parts[parts.count - 2]
-                // The shell names the command git ran, which ends with the
-                // operation git asked of the helper; a hook's line does not.
-                let operation = command.split(separator: " ").last.map(String.init)
-                if command.hasPrefix(name), ["get", "store", "erase"].contains(operation), !names.contains(name) { names.append(name) }
-            } else if line.hasPrefix("git: 'credential-"), line.contains("' is not a git command") {
-                let rest = line.dropFirst("git: 'credential-".count)
-                if let end = rest.firstIndex(of: "'") {
-                    let name = String(rest[..<end])
-                    if !names.contains(name) { names.append(name) }
-                }
-            }
-        }
-        return names
     }
 
     private static func currentBranch(in directory: String) -> String? {

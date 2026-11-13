@@ -317,23 +317,6 @@ git's own message, since there is no terminal to type in. A pull that
 leaves a merge or a rebase under way is aborted, unless one was already
 under way before it, which is the user's and is left alone.
 
-Commit, push and pull run with the `PATH` of the user's login shell, not
-the host's own: the host is started by the app or by launchd, whose `PATH`
-is the system's short one, and git starts credential helpers (`!gh auth
-git-credential`), hooks' tools and `git-lfs` by name. `LoginShellPath`
-asks `$SHELL -l -i -c` for it once, prints it behind a marker so whatever
-the startup files print is left out, and keeps it; when the shell says
-nothing, the host's `PATH` is used. When git then says a program was not
-found ("command not found", "is not a git command"), the shell is asked
-again, and the action is run once more only if the `PATH` it gives is
-another one: the program may have been installed since. The first ask
-waits for the shell to start (at most 8 seconds), so the actions are never
-run on the main thread. When a push or pull fails because nothing gave git
-a sign-in ("could not read Username for '<url>'") and a credential helper
-was not found, a sentence naming the host and the helper is put above
-git's words: "git could not sign in to github.com: its credential helper
-`gh` was not found."
-
 ## Commit messages written by an agent
 
 `CommitWriter` builds the agent's input: the prompt, the list of staged
