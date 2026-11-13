@@ -1,0 +1,110 @@
+name: CodeQL
+
+# Static analysis of this repository's code, in place of GitHub's "default
+# setup". That one builds everything while it watches the compiler, the
+# dependencies too: 16 to 41 minutes for every push to a pull request.
+#
+# Here what a watched build left is kept from one run to the next. CodeQL
+# only looks at what is compiled while it watches, and only this
+# repository's own sources are newer than what was kept: so the
+# dependencies are neither built again nor looked at.
+#
+# Two things that were tried and do not work:
+# - Building the dependencies first without CodeQL. Under its tracer the
+#   compiler is a copy in another place, and SwiftPM takes nothing built by
+#   the real one as up to date. What is kept has to come from a watched build.
+# - The xcode-27 runner, with Xcode 27: SwiftPM could not start the package
+#   manifest under the tracer ("Bad CPU type in executable"). macos-latest,
+#   which the default setup used, has no such trouble.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '23 5 * * 2'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The workflows, the fastlane lanes and the small C target need no build.
+  scripts:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, ruby, c-cpp]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: .github/codeql/codeql-config.yml
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:${{ matrix.language }}
+
+  swift:
+    name: Analyze (swift)
+    runs-on: macos-latest
+    # A run with nothing kept builds everything under the tracer, which is
+    # slow; one with the build folder restored takes a fraction of this.
+    timeout-minutes: 90
+    env:
+      KEPT: |
+        .build
+        ~/Library/Caches/org.swift.swiftpm
+        ~/Library/org.swift.swiftpm
+    steps:
+      - uses: actions/checkout@v7
+
+      # The build folder of the last watched build on main, and what
+      # SwiftPM remembers of the packages' manifests. A pull request that
+      # changes the dependencies starts from the nearest one there is.
+      - name: Restore what the last watched build left
+        id: kept
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.KEPT }}
+          key: codeql-watched-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: |
+            codeql-watched-${{ runner.os }}-${{ runner.arch }}-
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: swift
+          build-mode: manual
+          config-file: .github/codeql/codeql-config.yml
+
+      # This repository's sources are made newer than anything that was
+      # kept, so they are compiled, and seen, whatever the build folder holds.
+      - name: Build, watched
+        shell: bash
+        run: |
+          find Sources -type f \( -name '*.swift' -o -name '*.c' -o -name '*.h' \) -exec touch {} +
+          swift build
+
+      # Only from main: what a pull request keeps cannot be used by another,
+      # and the room for kept builds is limited. Also when the analysis
+      # fails: the build is what took the time.
+      - name: Keep what was built
+        if: always() && github.ref == 'refs/heads/main' && steps.kept.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.KEPT }}
+          key: codeql-watched-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.resolved') }}
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:swift
