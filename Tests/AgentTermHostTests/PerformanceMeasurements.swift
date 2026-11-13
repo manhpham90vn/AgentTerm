@@ -228,6 +228,17 @@ final class PerformanceMeasurements: XCTestCase {
         return Int(figure.hasSuffix("M") ? number * 1024 : number)
     }
 
+    /// What the process has allocated and not freed, in bytes, as `heap`
+    /// counts it: what it uses, without the free pages the allocator keeps.
+    private func allocated(_ pid: Int32) -> Int {
+        let heap = String(decoding: Subprocess.run("/usr/bin/heap", [String(pid)], timeout: 60)?.output ?? Data(), as: UTF8.self)
+        // "All zones: 3742 nodes (479088 bytes)"
+        guard let line = heap.split(separator: "\n").first(where: { $0.hasPrefix("All zones:") && $0.contains("bytes)") }),
+            let open = line.lastIndex(of: "("), let number = Int(line[line.index(after: open)...].split(separator: " ").first ?? "")
+        else { return 0 }
+        return number
+    }
+
     private func resident(_ pid: Int32) -> Int {
         let result = Subprocess.run("/bin/ps", ["-o", "rss=", "-p", String(pid)], timeout: 5)
         return Int(String(decoding: result?.output ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
@@ -281,7 +292,8 @@ final class PerformanceMeasurements: XCTestCase {
         spin(3)
         // What twenty at once leave held: the allocator keeps the pages.
         let footprintAfterFirst = footprint(host.processIdentifier)
-        report("  its own memory once the first 20 ended", "\(footprintAfterFirst / 1024) MB")
+        let allocatedAfterFirst = allocated(host.processIdentifier)
+        report("  once the first 20 ended", "\(allocatedAfterFirst / 1024) KB allocated, \(footprintAfterFirst / 1024) MB its own with the pages kept")
         for round in 0..<9 {
             for _ in 0..<20 { client.send(.create(CreateRequest(command: "exec sleep 600", cwd: root.path))) }
             let started = Date()
@@ -296,8 +308,14 @@ final class PerformanceMeasurements: XCTestCase {
             "the host after 200 sessions opened and ended",
             "\(after / 1024) MB resident, \(String(format: "%+.0f", Double(after - atRest) / Double(max(atRest, 1)) * 100))% from at rest")
         let footprintAfter = footprint(host.processIdentifier)
+        let allocatedAfter = allocated(host.processIdentifier)
+        // PERF-8: what it uses does not grow with the sessions.
         report(
-            "  its own memory after all 200",
+            "  allocated after all 200",
+            "\(allocatedAfter / 1024) KB, \(String(format: "%+.0f", Double(allocatedAfter - allocatedAfterFirst) / Double(max(allocatedAfterFirst, 1)) * 100))% from after the first 20 (threshold +15%)"
+        )
+        report(
+            "  its own memory after all 200, with the pages kept",
             "\(footprintAfter / 1024) MB, \(String(format: "%+.0f", Double(footprintAfter - footprintAtRest) / Double(max(footprintAtRest, 1)) * 100))% from at rest, "
                 + "\(String(format: "%+.0f", Double(footprintAfter - footprintAfterFirst) / Double(max(footprintAfterFirst, 1)) * 100))% from after the first 20")
         // A leak, or pages the allocator keeps for later? `leaks` says what

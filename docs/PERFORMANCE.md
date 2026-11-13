@@ -36,7 +36,7 @@ answering. What is over its threshold is fixed for 0.6.0.
 | A history of 400 conversations listed | within 300 ms |
 | The host at rest | at most 30 MB |
 | Each idle session in the host | at most 1 MB |
-| After 200 sessions, or tabs, opened and closed | nothing leaked (`leaks`), and the process's own memory (its physical footprint) no more than 15% over what it was once the first 20 had come and gone: what a peak leaves held, the allocator keeping its pages, is not a leak; growing with every session would be |
+| After 200 sessions, or tabs, opened and closed | nothing leaked (`leaks`), and what the process has allocated (`heap`) no more than 15% over what it was once the first 20 had come and gone: the pages the allocator keeps after a peak are not counted, growing with every session would be |
 | A message to the iPhone or another Mac | at most 256 KB; more is sent in parts |
 
 ## Figures, before the fixes
@@ -76,7 +76,7 @@ since Foundation's `Process` took some 70 ms to start one and see it end
 | 5,000 untracked files | 5.1 s | 34 ms | met |
 | A diff of 20,000 lines worked out | 638 ms | 105 ms | met |
 | A folder of 20,000 entries, as sent | one message of 3.6 MB | pieces of at most 256 KB | met |
-| The host after 200 sessions opened and ended | +61% of its resident size | nothing leaked; its own memory 8 MB after the first 20, 9 to 13 MB after 200 (+13% to +57%, four runs) | **not met for sure** (15%) |
+| The host after 200 sessions opened and ended | +61% of its resident size | nothing leaked; 445 KB allocated after the first 20, 479 KB after 200 (+8%) | met |
 | Attaching to a session with 10,000 lines: another client waits | 89 ms, its screen written out on the queue every session uses | 0 ms: written out on the session's own queue (82 ms there) | met |
 | A text file over 2 MB | cannot be opened | cannot be opened | **over** |
 
@@ -90,10 +90,11 @@ all of it free (95%) and kept for later. Asking the allocator to hand it
 back (`malloc_zone_pressure_relief`) changed nothing. The threshold was
 "within 10% of where it started", which any peak of sessions breaks; it is
 now that nothing leaks and that more sessions do not make it grow (PERF-8).
-After 200 sessions, in four runs, it held 9, 11, 13 and 9 MB: nothing
-leaked each time, but whether a little of it grows with the sessions is not
-settled. Next: compare what is allocated after 20 and after 200 sessions
-(`heap`, or Instruments' Allocations) to see what the difference is.
+After 200 sessions, in four runs, it held 9, 11, 13 and 9 MB of its own,
+nothing leaked each time, and what it had allocated hardly moved: 445 KB
+after the first 20, 479 KB after 200. The rest is free pages the allocator
+keeps, more or fewer from one run to the next. The threshold, as the owner
+decided, is on what is allocated (`heap`), not on those pages (PERF-8).
 
 ## Scrolling on the iPhone
 

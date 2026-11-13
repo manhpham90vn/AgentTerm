@@ -300,7 +300,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | HIST-6 | A session of 3,000 lines opened again on the iPhone | Scroll to the top, twice | It came with 500 lines above the screen; each time earlier lines load, 1,000 more, a strip saying so, and the line in view stays in view; the host writes out only as many as asked and says how many it keeps | H, P |
 | PERF-6 | A terminal of 5,000 lines on the iPhone | A fast swipe, five times (`SCROLL=only scripts/test-ios.sh`) | The app's processor work while it coasts is measured; the figures are in PERFORMANCE.md | P |
 | PERF-7 | A session of 10,000 lines | A client attaches; another asks something meanwhile; the session writes meanwhile | The other is answered at once (measured: `scripts/measure.sh`); what was written follows the screen | H |
-| PERF-8 | The real host, on a state folder of its own | Twenty sessions opened and ended, then 180 more (`scripts/measure.sh`) | `leaks` finds nothing; its own memory after 200 is within 15% of what it was after the first 20 | H |
+| PERF-8 | The real host, on a state folder of its own | Twenty sessions opened and ended, then 180 more (`scripts/measure.sh`) | `leaks` finds nothing; what it has allocated (`heap`) after 200 is within 15% of what it was after the first 20 | H |
 
 ### Keeping the Mac awake, starting at login
 
