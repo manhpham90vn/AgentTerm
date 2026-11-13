@@ -209,7 +209,20 @@ final class GitShellPathTests: XCTestCase {
         let path = LoginShellPath(shell: { [shell] in shell.path })
         XCTAssertNil(path.value())
         GitActions.shellPath = path
-        XCTAssertEqual(GitActions.remoteEnvironment["PATH"], ProcessInfo.processInfo.environment["PATH"])
+        XCTAssertEqual(GitActions.actionEnvironment["PATH"], ProcessInfo.processInfo.environment["PATH"])
+    }
+
+    // GIT-19
+    func testTheUsersOwnShellIsNeverStartedByTheTests() {
+        XCTAssertTrue(LoginShellPath.underTests)
+        let before = LoginShellPath.refusedUnderTests
+        let theUsers = LoginShellPath()
+        XCTAssertNil(theUsers.value())
+        XCTAssertFalse(theUsers.refresh())
+        XCTAssertEqual(LoginShellPath.refusedUnderTests, before + 2, "both asks were refused, not sent to the shell")
+        // What a test that stands no shell in gets: the host's PATH, untouched.
+        GitActions.shellPath = .shared
+        XCTAssertEqual(GitActions.actionEnvironment["PATH"], ProcessInfo.processInfo.environment["PATH"])
     }
 
     func testReadingWhatTheShellPrints() {
@@ -223,8 +236,8 @@ final class GitShellPathTests: XCTestCase {
 
     func testGitIsGivenTheShellsPath() {
         // GIT-18
-        XCTAssertEqual(GitActions.remoteEnvironment["PATH"], "\(tools.path):/usr/bin:/bin")
-        XCTAssertEqual(GitActions.remoteEnvironment["GIT_TERMINAL_PROMPT"], "0", "and still never asks for a password")
+        XCTAssertEqual(GitActions.actionEnvironment["PATH"], "\(tools.path):/usr/bin:/bin")
+        XCTAssertEqual(GitActions.actionEnvironment["GIT_TERMINAL_PROMPT"], "0", "and still never asks for a password")
     }
 }
 

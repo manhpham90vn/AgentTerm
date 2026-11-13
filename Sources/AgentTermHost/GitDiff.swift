@@ -190,7 +190,7 @@ public enum GitActions {
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "Write a commit message first." }
         // Hooks run here, and may call tools the user's shell finds.
-        return findingTools { run(["commit", "--quiet", "--message", trimmed], in: directory, timeout: 120, environment: toolEnvironment) }
+        return findingTools { run(["commit", "--quiet", "--message", trimmed], in: directory, timeout: 120, environment: actionEnvironment) }
     }
 
     /// Pushes the checked out branch to its upstream. A branch without one
@@ -205,7 +205,7 @@ public enum GitActions {
             guard let remote = GitDiff.pushRemote(in: directory) else { return "This repository has no remote to push to." }
             arguments = ["push", "--set-upstream", remote, branch]
         }
-        let problem = findingTools { run(arguments, in: directory, timeout: remoteTimeout, environment: remoteEnvironment) }
+        let problem = findingTools { run(arguments, in: directory, timeout: remoteTimeout, environment: actionEnvironment) }
         return problem.map(explainingSignIn)
     }
 
@@ -220,7 +220,7 @@ public enum GitActions {
         // A merge or rebase the user left unfinished is theirs, not this pull's.
         let before = unfinished(in: directory)
         let problem = findingTools { () -> String? in
-            guard let problem = run(["pull", "--no-edit"], in: directory, timeout: remoteTimeout, environment: remoteEnvironment) else { return nil }
+            guard let problem = run(["pull", "--no-edit"], in: directory, timeout: remoteTimeout, environment: actionEnvironment) else { return nil }
             guard before == nil, let left = unfinished(in: directory) else { return problem }
             _ = run([left, "--abort"], in: directory)
             return "The pull ran into conflicts and was undone. Pull in a terminal to resolve them.\n\n\(problem)"
@@ -234,21 +234,18 @@ public enum GitActions {
     /// a stand-in for the user's shell here.
     nonisolated(unsafe) static var shellPath = LoginShellPath.shared
 
-    /// The host's own environment with the `PATH` of the user's shell, so
-    /// that git finds the credential helpers, hooks' tools and `git-lfs` it
-    /// starts by name. When the shell did not say, the `PATH` stays as it is.
-    /// The first call may wait for the shell to start: never on the main thread.
-    static var toolEnvironment: [String: String] {
+    /// What commit, push and pull run with: the host's own environment, with
+    /// the `PATH` of the user's shell, so that git finds the credential
+    /// helpers, hooks' tools and `git-lfs` it starts by name (when the shell
+    /// did not say, the `PATH` stays as it is). The first call may wait for
+    /// the shell to start: never on the main thread.
+    ///
+    /// Neither git nor a hook may wait for a password or a passphrase: there
+    /// is no terminal to type it in. Credential helpers and the SSH agent
+    /// still answer; anything that would ask fails with git's own message.
+    static var actionEnvironment: [String: String] {
         var environment = ProcessInfo.processInfo.environment
         if let path = shellPath.value() { environment["PATH"] = path }
-        return environment
-    }
-
-    /// git must never wait for a password or a passphrase: there is no
-    /// terminal to type it in. Credential helpers and the SSH agent still
-    /// answer; anything that would ask fails with git's own message.
-    static var remoteEnvironment: [String: String] {
-        var environment = toolEnvironment
         environment["GIT_TERMINAL_PROMPT"] = "0"
         environment["GIT_ASKPASS"] = nil
         environment["SSH_ASKPASS"] = nil
@@ -341,7 +338,7 @@ public enum GitActions {
         _ arguments: [String], in directory: String, timeout: TimeInterval = 30, environment: [String: String]? = nil
     ) -> String? {
         // File names are taken as they are, not as patterns. No program is
-        // asked for a password either: see `remoteEnvironment`.
+        // asked for a password either: see `actionEnvironment`.
         guard
             let result = Subprocess.run(
                 git, ["-C", directory, "--literal-pathspecs", "-c", "core.askPass="] + arguments, timeout: timeout, mergeErrors: true,

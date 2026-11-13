@@ -133,4 +133,22 @@ final class GitActionsTests: XCTestCase {
         XCTAssertTrue(problem.contains("lint failed"), problem)
         XCTAssertEqual(entries(snapshot.staged), ["A a.txt"], "still staged")
     }
+
+    // GIT-3c
+    func testAHookIsNeverLeftWaitingForAPassword() throws {
+        try write("a.txt", "one\n")
+        let seen = root.appendingPathComponent("seen")
+        let hook = root.appendingPathComponent(".git/hooks/pre-commit")
+        let body = "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"$GIT_TERMINAL_PROMPT\" \"${GIT_ASKPASS-unset}\" \"$SSH_ASKPASS_REQUIRE\" \"$GIT_EDITOR\" > '\(seen.path)'\n"
+        try body.write(to: hook, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
+        XCTAssertNil(GitActions.stage([], in: root.path))
+
+        XCTAssertNil(GitActions.commit(message: "feat: the message as written", in: root.path))
+        // git itself gives a hook `GIT_EDITOR=:` when the message is not edited,
+        // whatever editor the host sets.
+        XCTAssertEqual(try String(contentsOf: seen, encoding: .utf8), "0|unset|never|:\n")
+        // No editor is opened for a message that is given, so `true` as the editor changes nothing.
+        XCTAssertEqual(git("log", "-1", "--format=%B"), "feat: the message as written")
+    }
 }

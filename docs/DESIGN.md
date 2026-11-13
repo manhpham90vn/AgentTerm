@@ -310,9 +310,11 @@ for a branch that follows none, the remote a first push would go to:
 `origin`, else the first remote. `GitActions.push` runs `git push`, or
 `git push --set-upstream <remote> <branch>` for that first push;
 `GitActions.pull` runs `git pull --no-edit`, so it merges or rebases as the
-repository is set up to. Both run with `GIT_TERMINAL_PROMPT=0`, no askpass
-program and `SSH_ASKPASS_REQUIRE=never`: credential helpers and the SSH
-agent still answer, and anything that would wait for typing fails with
+repository is set up to. Commit, push and pull all run with
+`GitActions.actionEnvironment`: `GIT_TERMINAL_PROMPT=0`, no askpass
+program, `SSH_ASKPASS_REQUIRE=never` and `GIT_EDITOR=true`, so that neither
+git nor a hook can sit waiting for a password: credential helpers and the
+SSH agent still answer, and anything that would wait for typing fails with
 git's own message, since there is no terminal to type in. A pull that
 leaves a merge or a rebase under way is aborted, unless one was already
 under way before it, which is the user's and is left alone.
@@ -328,7 +330,10 @@ found ("command not found", "is not a git command"), the shell is asked
 again, and the action is run once more only if the `PATH` it gives is
 another one: the program may have been installed since. The first ask
 waits for the shell to start (at most 8 seconds), so the actions are never
-run on the main thread. When a push or pull fails because nothing gave git
+run on the main thread. Under XCTest the user's own shell is never
+started: `LoginShellPath` answers nothing there unless a test stands a
+shell of its own in, so the tests read none of the user's startup files.
+When a push or pull fails because nothing gave git
 a sign-in ("could not read Username for '<url>'") and a credential helper
 was not found, a sentence naming the host and the helper is put above
 git's words: "git could not sign in to github.com: its credential helper

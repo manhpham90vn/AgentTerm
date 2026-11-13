@@ -251,6 +251,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | GIT-2 | The same | Stage `notes.txt`; Stage all; unstage `new.txt` | After each step git's index holds exactly what the lists show as staged | H, P, M |
 | GIT-3a | Two files staged, a message in the field | Press Commit | git has a commit with that message; the committed files leave the list, the others stay, the field is empty | H, P, M |
 | GIT-3b | A pre-commit hook that prints a message and fails | Press Commit | git's own words are shown; no commit is made; the message stays in the field | H, M |
+| GIT-3c | A pre-commit hook that records the environment it is given | Press Commit | The hook sees `GIT_TERMINAL_PROMPT=0`, no `GIT_ASKPASS` and `SSH_ASKPASS_REQUIRE=never`, as push and pull do; the commit has the message as written | H |
 | GIT-4 | `notes.txt` changed | Pick it in the list; switch to two panels and back | Its diff opens as a tab with `+second line`; in two panels the line is on the right without its mark | P, M |
 | GIT-5 | Changes in several folders | Press Group by folder | The list becomes a tree; folders fold and show totals | H, P, X |
 | GIT-6 | One panel and a flat list on both devices | Choose two panels, or the tree, on one device | The other device shows the same choice | H, M, X |
@@ -266,6 +267,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | GIT-16 | A credential helper that is nowhere, written as `!name args` or as a name git knows (`credential.helper = name`) | Push | The first line says "git could not sign in to <host>: its credential helper `name` was not found."; git's own words follow. A helper that answers with a sign-in the remote refuses is not called missing | H |
 | GIT-17 | The login shell asked once, before a tool the hook calls was installed | The shell's `PATH` now names the tool's folder; press Commit | The shell is asked again and the commit made on the second try; when the shell's `PATH` is the same, the action is not tried again | H |
 | GIT-18 | A login shell that prints its `PATH` after other lines, or prints nothing | The host asks it | Only the `PATH` behind the marker is taken, once; with nothing, git keeps the host's `PATH` and `GIT_TERMINAL_PROMPT=0` is still set | H |
+| GIT-19 | The host tests, which stand in no shell of their own | A git action asks for the login shell's `PATH` | The user's own shell is not started and none of their startup files is read; the `PATH` stays the host's | H |
 
 ### History
 
