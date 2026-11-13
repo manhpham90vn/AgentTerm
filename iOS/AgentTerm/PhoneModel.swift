@@ -292,6 +292,11 @@ final class PhoneModel: ObservableObject {
 
     // MARK: Agents that finished or need an instruction (#22)
 
+    /// The Mac's schedules (#11), as its host keeps them.
+    @Published private(set) var schedules: [Schedule] = []
+    func save(_ schedule: Schedule) { connection?.send(.saveSchedule(schedule)) }
+    func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
+
     /// Shown as a banner while the app is in front, until it is opened or
     /// dismissed.
     @Published private(set) var agentNotice: AgentNotice?
@@ -801,6 +806,8 @@ final class PhoneModel: ObservableObject {
             break
         case .macInUse(let inUse):
             macInUse = inUse
+        case .schedules(let list):
+            schedules = list
         case .keepAwake(let on):
             keepAwake = on
         case .keepAwakeOptions(let options):

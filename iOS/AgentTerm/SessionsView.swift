@@ -556,6 +556,12 @@ private struct SessionRow: View {
                 .font(.body)
                 .lineLimit(1)
             Spacer(minLength: 8)
+            if session.schedule != nil {
+                Image(systemName: "calendar.badge.clock")
+                    .font(.system(size: 12))
+                    .foregroundStyle(session.schedulePermissions == .skipAll ? .orange : .secondary)
+                    .accessibilityLabel(session.schedulePermissions == .skipAll ? "A scheduled run, without asking for permission" : "A scheduled run")
+            }
             if session.openedBy != nil {
                 Image(systemName: "sparkles")
                     .font(.system(size: 12))

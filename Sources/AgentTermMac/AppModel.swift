@@ -175,6 +175,22 @@ final class AppModel: ObservableObject {
     /// host does not install it.
     @Published private(set) var agentShells: Bool?
 
+    /// The schedules of the Mac on screen (#11), as its host keeps them.
+    @Published private(set) var schedules: [Schedule] = []
+
+    func save(_ schedule: Schedule) { connection?.send(.saveSchedule(schedule)) }
+    func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
+
+    /// A schedule to start from: the folder in front, the first agent.
+    func newSchedule() -> Schedule {
+        let agent = agents.first { $0.path != nil }?.id ?? "claude"
+        let folder = selectedFolder ?? folders.first?.path ?? ""
+        return Schedule(name: "Every morning", agent: agent, folder: folder, prompt: "", when: .daily(hour: 9, minute: 0))
+    }
+
+    /// An agent's name for the user, its id when it is not known here.
+    func agentName(_ id: String) -> String { agents.first { $0.id == id }?.name ?? AgentDetector.known.first { $0.id == id }?.name ?? id }
+
     /// An agent of a session that is not the one in front finished, or
     /// waits for the user (#22): shown until it is opened or dismissed.
     @Published private(set) var agentNotice: AgentNotice?
@@ -954,6 +970,8 @@ final class AppModel: ObservableObject {
             startAtLogin = on
         case .agentShells(let on):
             agentShells = on
+        case .schedules(let list):
+            schedules = list
         case .agentShellResult, .macInUse:
             // For `agenttermd mcp`, and for the iPhone.
             break

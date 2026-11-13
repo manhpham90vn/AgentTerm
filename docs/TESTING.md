@@ -402,6 +402,23 @@ A second host stands in for the other Mac, with a project of its own.
 | AGENT-9 | A stand-in agent that waits for permission | The Mac app shows it | A mark next to its name in the folder list and on its tab, read as "waiting for permission"; its folder's row says a session waits | M |
 | AGENT-10 | The same | The iPhone shows it | A mark in the sessions list, and the state in the terminal's title | hand, until the iPhone tests cover it |
 
+### Schedules
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| SCHED-1 | Each kind of time | The next time after a moment | Today's or tomorrow's for every day, the nearest weekday's, the moment for once until it passed, none for a limit reset | H |
+| SCHED-2 | Each agent and mode | A run's command line | The agent's own switch for the mode and the prompt quoted; Copilot CLI's variable; Codex offers no "accept edits"; the warning names what Codex's runs do with hooks | H |
+| SCHED-3 | Claude Code's and Copilot CLI's settings with other things in them | A schedule is saved | Its folder is trusted in them; the rest is as it was | H |
+| SCHED-4 | A schedule that skips permissions | Saved without its warning accepted; with it; Codex with "accept edits" | Refused; saved, every client told with when it runs next; refused | H |
+| SCHED-5 | Every day at nine, the clock at 8:59 | Nine comes | One session of its agent in its folder, named after it, marked as its run, started with the mode's switch and the prompt; recorded as started; once | H |
+| SCHED-6 | The first run still going | The next day's time comes | Skipped, and said to be | H |
+| SCHED-7 | Three schedules: one that catches up, one that does not, one off | Three days pass at once | The first runs once, said to be missed; the second is recorded as missed; the third does not run | H |
+| SCHED-8 | A schedule a minute away; then hours away | It is saved | The Mac is held awake; then let go | H |
+| SCHED-9 | Copilot CLI skipping all | It runs | Started with `COPILOT_ALLOW_ALL=true` | H |
+| SCHED-10 | Every day at nine, made at 9:31 | A moment passes | Nothing runs until tomorrow | H |
+| SCHED-11 | The Mac app and the iPhone | A schedule is made with "skip all permissions" | The warning is shown, and only once it is accepted is the schedule saved; both show it | hand, until the UI tests cover it |
+| SCHED-12 | A schedule for when the limit resets | The account's limit starts over | It runs two minutes later | hand: needs an account whose limit resets |
+
 ### When an agent is done or needs you
 
 | ID | Input | Action or event | Expected response | Checked by |
@@ -504,6 +521,9 @@ failed while the host reported nothing:
 - A hold on sleep that macOS refused was not known to anyone (AWAKE-4).
 - Usage the status line relay could not save left the usage band with
   its old figures, without a word (USE-5).
+
+Found while #11 was built: a schedule made after its time of today ran at
+once for that time (SCHED-10).
 
 Found on CI in 0.6.0 (#32): SES-21 asked that a long session be written
 out in less than 2 seconds, which held here and failed on a slower runner

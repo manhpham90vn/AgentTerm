@@ -80,6 +80,35 @@ itself.
 - Antigravity does not say when it waits for permission: while it runs a
   tool, its state is not shown, and its session says why.
 
+### Schedules
+
+- A schedule starts an agent with a prompt in a folder: once at a time,
+  every day at a time, on some weekdays at a time, or a little after the
+  agent's account limit starts over. On or off without being deleted. Made
+  and changed in the Mac's Settings > Schedules and the iPhone's Settings >
+  Schedules; the host keeps them and runs them, with the app closed too.
+- **Permissions.** A schedule says how its agent handles permissions:
+  skip all (the default: nobody is there to answer), accept edits, or ask.
+  Codex offers no "accept edits". Before a schedule that skips them is
+  saved, the app says in words what each run may do on the Mac, and it is
+  saved only once that is accepted. Sessions started by hand keep asking.
+- **Nothing to do when it runs.** A run gives itself what it needs: its
+  agent's switch for the mode, and the folder trusted where the agent would
+  ask. Claude Code's trust is written into its settings when the schedule
+  is saved; Codex's hooks run without the user's trust; Copilot CLI and
+  Antigravity are told for the run.
+- **Runs.** A run is a session like any other, in the folder, named after
+  the schedule and marked as its run, and stays open when the agent is done,
+  for a day, so what it did can be read. A run whose turn before it is
+  still going is skipped and said to be. At most two run at the same
+  moment; a third waits for its turn. A run missed while the Mac slept or
+  was off runs once when it is next awake, or is skipped, as the schedule
+  says; never more than once for all the times missed. A schedule made
+  after its time today first runs at its next time.
+- A schedule about to run keeps the Mac awake from ten minutes before,
+  whatever the keep-awake switch says. Waking a sleeping Mac is not done.
+- Each schedule lists its last runs: when, and what came of it.
+
 ### When an agent is done or needs you
 
 - While the Mac is used from the iPhone, the iPhone says when an agent has

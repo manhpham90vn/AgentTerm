@@ -67,6 +67,10 @@ public final class HostServer {
         /// How often sessions are named and measured, in seconds. Tests
         /// shorten it.
         public var refreshInterval: TimeInterval = 6
+        /// How often schedules are looked at, in seconds (#11). Tests shorten it.
+        public var scheduleInterval: TimeInterval = 20
+        /// The time, for schedules. A test sets its own clock.
+        public var now: () -> Date = Date.init
         /// Where the host notes that it is running (`HostMarker`), so the
         /// host after it can tell that it died, and keeps the reports of
         /// parts that stopped until someone has seen them (`FailureLog`).
@@ -304,7 +308,10 @@ public final class HostServer {
         let powered = !keepAwakeOptions.onlyOnPower || configuration.isOnPower()
         // Any session holds the Mac awake, or only an agent at work.
         let running = keepAwakeOptions.onlyWhileWorking ? sessions.values.contains { $0.info.state?.isWorking == true } : !sessions.isEmpty
-        let wanted = keepAwake && running && powered
+        let soon = schedules.contains { schedule in
+            schedule.enabled && schedule.nextRun.map { $0.timeIntervalSince(configuration.now()) <= Self.awakeBeforeRun } == true
+        }
+        let wanted = (keepAwake && running && powered) || soon
         let held =
             configuration.holdAwake.map { $0(wanted, keepAwakeOptions.display) }
             ?? sleepGuard.set(held: wanted, display: keepAwakeOptions.display)
@@ -409,6 +416,12 @@ public final class HostServer {
             watchEvents()
             // Installed by default the first time, and again after the app moved.
             setAgentShells(nil)
+            loadSchedules()
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + min(1, configuration.scheduleInterval), repeating: configuration.scheduleInterval)
+            timer.setEventHandler { [weak self] in self?.checkSchedules() }
+            timer.resume()
+            scheduleTimer = timer
             systemTimer = system
             scheduleKeepAwakeEnd()
         }
@@ -435,6 +448,8 @@ public final class HostServer {
             tailscaleTimer?.cancel()
             tailscaleTimer = nil
             summaryTimer?.cancel()
+            scheduleTimer?.cancel()
+            scheduleTimer = nil
             eventsWatch?.cancel()
             eventsWatch = nil
             summaryTimer = nil
@@ -509,6 +524,208 @@ public final class HostServer {
         marker.sessions = now
         marker.write(to: file)
         self.marker = marker
+    }
+
+    // MARK: Schedules (#11)
+
+    private var schedules: [Schedule] = []
+    /// Until when the schedules were looked at: a time that came between it
+    /// and now, while the Mac slept, is a run that was missed.
+    private var schedulesChecked: Date?
+    /// The last limit reset each agent's schedules ran for.
+    private var resetsRun: [String: Date] = [:]
+    /// From when each schedule is looked at: when it was saved, so that a
+    /// time of today that passed before it was made is not taken for due.
+    private var schedulesFrom: [String: Date] = [:]
+    /// Runs that came due while two others ran, oldest first.
+    private var waitingRuns: [(schedule: String, at: Date, note: String)] = []
+    /// When each run's session was first seen done, to close it a day later.
+    private var runDoneAt: [SessionID: Date] = [:]
+    private var scheduleTimer: DispatchSourceTimer?
+
+    static let maxRunsAtOnce = 2
+    static let afterLimitReset: TimeInterval = 120
+    static let keepRunFor: TimeInterval = 24 * 3600
+    static let awakeBeforeRun: TimeInterval = 10 * 60
+
+    private struct SchedulesFile: Codable {
+        var schedules: [Schedule]
+        var checked: Date?
+        var resetsRun: [String: Date]?
+        var from: [String: Date]?
+    }
+
+    private var schedulesFile: URL? { configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("schedules.json") }
+
+    private func loadSchedules() {
+        guard let file = schedulesFile, let data = FileManager.default.contents(atPath: file.path),
+            let saved = MessageCoding.decode(SchedulesFile.self, from: data)
+        else { return }
+        schedules = saved.schedules
+        schedulesChecked = saved.checked
+        resetsRun = saved.resetsRun ?? [:]
+        schedulesFrom = saved.from ?? [:]
+    }
+
+    private func saveSchedules() {
+        guard let file = schedulesFile else { return }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? MessageCoding.encode(SchedulesFile(schedules: schedules, checked: schedulesChecked, resetsRun: resetsRun, from: schedulesFrom)).write(to: file, options: .atomic)
+    }
+
+    private func broadcastSchedules() {
+        for client in clients.values where client.authenticated { send(.schedules(schedules), to: client) }
+    }
+
+    /// Adds or changes a schedule; why not, when it is refused.
+    private func save(_ wanted: Schedule) -> String? {
+        var schedule = wanted
+        guard SchedulePermissions.offered(by: schedule.agent).contains(schedule.permissions) else {
+            return "\(schedule.agent) cannot run with “\(schedule.permissions.label)”."
+        }
+        guard schedule.permissions != .skipAll || schedule.warningAccepted else {
+            return "A schedule that skips permissions cannot be saved before its warning was shown and accepted."
+        }
+        guard !schedule.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Write what the agent is to do." }
+        // Asked once now, while the user is here, rather than at 3 a.m.
+        do { try ScheduleRunner.trustFolder(of: schedule, home: configuration.home) } catch {
+            return "The folder could not be trusted for \(schedule.agent): \(error.localizedDescription)"
+        }
+        // What the host keeps is not the client's to set.
+        let kept = schedules.first { $0.id == schedule.id }
+        schedule.runs = kept?.runs ?? []
+        let now = configuration.now()
+        // Changed, or new: looked at from now on.
+        if kept?.when != schedule.when || kept?.enabled != schedule.enabled { schedulesFrom[schedule.id] = now }
+        if schedulesChecked == nil { schedulesChecked = now }
+        schedule.nextRun = nextRun(of: schedule, after: configuration.now())
+        if let index = schedules.firstIndex(where: { $0.id == schedule.id }) { schedules[index] = schedule } else { schedules.append(schedule) }
+        saveSchedules()
+        broadcastSchedules()
+        updateSleepGuard()
+        return nil
+    }
+
+    /// When it comes due next, after `date`.
+    private func nextRun(of schedule: Schedule, after date: Date) -> Date? {
+        guard schedule.enabled else { return nil }
+        if case .limitReset = schedule.when {
+            let done = resetsRun[schedule.agent] ?? .distantPast
+            return resets(of: schedule.agent).filter { $0 > done }.map { $0.addingTimeInterval(Self.afterLimitReset) }.filter { $0 > date }.min()
+        }
+        return schedule.when.next(after: date)
+    }
+
+    /// When the account limits of an agent start over, as its service last said.
+    private func resets(of agent: String) -> [Date] {
+        accountUsage[agent].map { $0.groups.flatMap(\.limits).compactMap(\.resetsAt) } ?? []
+    }
+
+    /// Runs what came due since the last look, at most once each however
+    /// many times it came due meanwhile; closes the sessions of runs done
+    /// for a day.
+    private func checkSchedules() {
+        let now = configuration.now()
+        let checked = schedulesChecked ?? now
+        // A look that came this late means the Mac slept in between.
+        let slept = now.timeIntervalSince(checked) > max(3 * configuration.scheduleInterval, 90)
+        var changed = false
+        for index in schedules.indices where schedules[index].enabled {
+            let schedule = schedules[index]
+            let since = max(checked, schedulesFrom[schedule.id] ?? checked)
+            let due: Date?
+            if case .limitReset = schedule.when {
+                let done = resetsRun[schedule.agent] ?? .distantPast
+                let passed = resets(of: schedule.agent).filter { $0 > done && $0.addingTimeInterval(Self.afterLimitReset) <= now }
+                due = passed.max()?.addingTimeInterval(Self.afterLimitReset)
+                if let latest = passed.max() { resetsRun[schedule.agent] = latest }
+            } else {
+                due = schedule.when.next(after: since).flatMap { $0 <= now ? $0 : nil }
+            }
+            guard let due else { continue }
+            changed = true
+            let missed = slept && now.timeIntervalSince(due) > configuration.scheduleInterval * 2
+            if missed && !schedule.catchUp {
+                record(ScheduleRun(at: due, started: false, note: "Missed while the Mac was asleep or off"), in: index)
+            } else {
+                waitingRuns.append((schedule.id, due, missed ? "Missed at \(due.formatted(date: .omitted, time: .shortened)), run when the Mac was next awake" : "Started"))
+            }
+        }
+        schedulesChecked = now
+        startWaitingRuns()
+        closeFinishedRuns(now: now)
+        for index in schedules.indices {
+            let next = nextRun(of: schedules[index], after: now)
+            if next != schedules[index].nextRun {
+                schedules[index].nextRun = next
+                changed = true
+            }
+        }
+        saveSchedules()
+        if changed { broadcastSchedules() }
+        updateSleepGuard()
+    }
+
+    /// The runs of a schedule that are still going: their session runs,
+    /// and their agent is not done.
+    private func going(_ scheduleName: String) -> [Session] {
+        sessions.values.filter { session in
+            guard session.info.schedule == scheduleName else { return false }
+            if case .done? = session.info.state { return false }
+            return true
+        }
+    }
+
+    private func startWaitingRuns() {
+        var still: [(schedule: String, at: Date, note: String)] = []
+        for run in waitingRuns {
+            guard let index = schedules.firstIndex(where: { $0.id == run.schedule }) else { continue }
+            let schedule = schedules[index]
+            if !going(schedule.name).isEmpty {
+                record(ScheduleRun(at: run.at, started: false, note: "Skipped: the run before it is still going"), in: index)
+                continue
+            }
+            let running = sessions.values.filter { session in
+                guard session.info.schedule != nil else { return false }
+                if case .done? = session.info.state { return false }
+                return true
+            }.count
+            guard running < Self.maxRunsAtOnce else {
+                still.append(run)
+                continue
+            }
+            let (command, environment) = ScheduleRunner.launch(schedule)
+            let request = CreateRequest(command: command, cwd: schedule.folder, title: schedule.name)
+            if let id = create(request, for: nil, run: schedule, environment: environment) {
+                record(ScheduleRun(at: run.at, started: true, session: id, note: run.note), in: index)
+            } else {
+                record(ScheduleRun(at: run.at, started: false, note: "The agent could not be started"), in: index)
+            }
+        }
+        waitingRuns = still
+    }
+
+    private func record(_ run: ScheduleRun, in index: Int) {
+        schedules[index].runs = Array((schedules[index].runs + [run]).suffix(Schedule.runsKept))
+        // Once is once.
+        if case .once = schedules[index].when, run.started || !schedules[index].catchUp { schedules[index].enabled = false }
+        broadcastSchedules()
+    }
+
+    /// A run's session whose agent has been done for a day is closed.
+    private func closeFinishedRuns(now: Date) {
+        for session in sessions.values where session.info.schedule != nil {
+            guard case .done? = session.info.state else {
+                runDoneAt[session.info.id] = nil
+                continue
+            }
+            let since = runDoneAt[session.info.id] ?? now
+            runDoneAt[session.info.id] = since
+            guard now.timeIntervalSince(since) >= Self.keepRunFor else { continue }
+            runDoneAt[session.info.id] = nil
+            session.endAsked = true
+            session.process.hangUp()
+        }
     }
 
     // MARK: Whether someone is at the Mac (#22, #24)
@@ -806,6 +1023,13 @@ public final class HostServer {
         case .appInFront(let front):
             client.inFront = front
             updateMacInUse()
+        case .saveSchedule(let schedule):
+            if let problem = save(schedule) { send(.error(problem), to: client) }
+        case .removeSchedule(let id):
+            schedules.removeAll { $0.id == id }
+            schedulesFrom[id] = nil
+            saveSchedules()
+            broadcastSchedules()
         case .attach(let id, let size, let have):
             guard let session = sessions[id] else {
                 send(.error("no such session"), to: client)
@@ -1362,6 +1586,7 @@ public final class HostServer {
         send(.keepAwakeOptions(keepAwakeOptions), to: client)
         if let install = configuration.agentShells { send(.agentShells(install.isOn), to: client) }
         send(.macInUse(macInUse), to: client)
+        send(.schedules(schedules), to: client)
         send(.commitWriter(commitWriter), to: client)
         if let item = configuration.loginItem { send(.startAtLogin(item.isOn), to: client) }
         // Without any yet, the client is sent none and hands over its own.
@@ -1448,7 +1673,10 @@ public final class HostServer {
     // MARK: Sessions
 
     @discardableResult
-    private func create(_ request: CreateRequest, for client: Client, conversationID: String? = nil, openedBy: SessionID? = nil) -> SessionID? {
+    private func create(
+        _ request: CreateRequest, for client: Client?, conversationID: String? = nil, openedBy: SessionID? = nil, run: Schedule? = nil,
+        environment more: [String: String] = [:]
+    ) -> SessionID? {
         var cwd = request.cwd ?? HostEnvironment.homeDirectory
         var isDirectory: ObjCBool = false
         if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDirectory) || !isDirectory.boolValue {
@@ -1466,7 +1694,8 @@ public final class HostServer {
             let usage = agent == "claude" ? usageFile(for: id) : nil
             for file in [usage, events].compactMap({ $0 }) { try? FileManager.default.removeItem(at: file) }
             if let more = try? AgentHooks.launchArguments(
-                agent: agent, tool: tool, usageFile: usage?.path, directory: configuration.hooksDirectory, home: configuration.home)
+                agent: agent, tool: tool, usageFile: usage?.path, directory: configuration.hooksDirectory, home: configuration.home,
+                trust: run.map { [$0.folder] } ?? [])
             {
                 command = (command ?? "") + more
                 environment[AgentHooks.eventsVariable] = events.path
@@ -1478,6 +1707,7 @@ public final class HostServer {
         {
             command = Handoff.shellQuote((directory as NSString).appendingPathComponent(agent)) + text.dropFirst(agent.count)
         }
+        environment.merge(more) { _, new in new }
         // The agent's MCP server tells the host which session's it is.
         let agentKey = agent.map { _ in UUID().uuidString + UUID().uuidString }
         if let agentKey { environment[Self.agentShellsVariable] = "\(boundPort) \(agentKey)" }
@@ -1492,7 +1722,7 @@ public final class HostServer {
                 queue: queue
             )
         } catch {
-            send(.error("\(error)"), to: client)
+            if let client { send(.error("\(error)"), to: client) }
             return nil
         }
 
@@ -1512,6 +1742,8 @@ public final class HostServer {
         session.hooked = hooked
         session.agentKey = agentKey
         session.info.openedBy = openedBy
+        session.info.schedule = run?.name
+        session.info.schedulePermissions = run?.permissions
         sessions[id] = session
 
         process.onOutput = { [weak self, weak session] data in
@@ -1522,7 +1754,7 @@ public final class HostServer {
             self?.sessionExited(id, status: status)
         }
 
-        attach(client, to: session, size: size)
+        if let client { attach(client, to: session, size: size) }
         broadcastSessions()
         // An agent that was not in use until now: ask its service right away.
         refreshAccountUsage(olderThan: Self.accountInterval)

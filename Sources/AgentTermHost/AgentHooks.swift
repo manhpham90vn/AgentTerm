@@ -39,7 +39,7 @@ public enum AgentHooks {
     /// Code its status line too (`usageFile`). Copilot CLI and Antigravity
     /// need a `directory` to keep what they are given in; without one,
     /// they get nothing.
-    public static func launchArguments(agent: String, tool: String, usageFile: String?, directory: URL?, home: String) throws -> String {
+    public static func launchArguments(agent: String, tool: String, usageFile: String?, directory: URL?, home: String, trust: [String] = []) throws -> String {
         switch agent {
         case "claude":
             var settings: [String: Any] = ["hooks": claudeHooks(tool: tool)]
@@ -53,7 +53,7 @@ public enum AgentHooks {
             return try copilotArguments(tool: tool, directory: directory)
         case "agy":
             guard let directory else { throw CocoaError(.fileNoSuchFile) }
-            return try antigravityArguments(tool: tool, directory: directory, home: home)
+            return try antigravityArguments(tool: tool, directory: directory, home: home, trust: trust)
         default:
             throw CocoaError(.featureUnsupported)
         }
@@ -101,7 +101,8 @@ public enum AgentHooks {
     /// started with. The folder is trusted for the session, next to the
     /// folders the user trusts already, which are read from their settings
     /// and not changed: `--settings` is for this session only.
-    static func antigravityArguments(tool: String, directory: URL, home: String) throws -> String {
+    /// `trust`: folders trusted for the session too, a schedule's (#11).
+    static func antigravityArguments(tool: String, directory: URL, home: String, trust: [String] = []) throws -> String {
         let folder = directory.appendingPathComponent("antigravity", isDirectory: true)
         let agents = folder.appendingPathComponent(".agents", isDirectory: true)
         try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -114,7 +115,7 @@ public enum AgentHooks {
         let settingsFile = URL(fileURLWithPath: home).appendingPathComponent(".gemini/antigravity-cli/settings.json")
         let own = (FileManager.default.contents(atPath: settingsFile.path)).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any]
         var trusted = own?["trustedWorkspaces"] as? [String] ?? []
-        if !trusted.contains(folder.path) { trusted.append(folder.path) }
+        for path in [folder.path] + trust where !trusted.contains(path) { trusted.append(path) }
         let settings = try JSONSerialization.data(withJSONObject: ["trustedWorkspaces": trusted], options: [.sortedKeys])
         return " --add-dir " + Handoff.shellQuote(folder.path) + " --settings " + Handoff.shellQuote(String(decoding: settings, as: UTF8.self))
     }

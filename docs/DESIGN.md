@@ -607,6 +607,45 @@ What cannot be known:
   others. Escape alone or Control C typed to a working session makes its
   state not known until the agent says more.
 
+## Schedules
+
+`Schedule` (protocol): its agent, folder, prompt, `ScheduleTime` (`once`,
+`daily`, `weekly`, `limitReset`), `SchedulePermissions` (`skipAll`,
+`acceptEdits`, `ask`), whether it is on, whether a missed run catches up,
+whether its warning was accepted, its last 20 runs and its next run. The
+host keeps them in `schedules.json` next to `folders.json`, with until when
+it looked (`checked`), from when each schedule is looked at (`from`, set
+when it is made or its time changes), and the last limit reset each agent
+ran for. Clients send `saveSchedule`, `removeSchedule` and are told
+`schedules`.
+
+**Saving.** Refused when the agent does not offer the mode, when it skips
+permissions without its warning accepted, or without a prompt. Then
+`ScheduleRunner.trustFolder` trusts the folder where the agent keeps that:
+`projects[<folder>].hasTrustDialogAccepted` in `~/.claude.json`, and
+`trustedFolders` in `~/.copilot/config.json` for Copilot CLI when it does
+not skip permissions. The rest of those files is left as it was.
+
+**Running.** Every 20 seconds, on its clock (`Configuration.now`, which
+tests set), the host takes each schedule's first time after the later of
+`checked` and its `from`: one that is now or past is due, once, however
+many came between. A look more than 90 seconds after the last means the
+Mac slept: a due time older than that is a missed run, run now or recorded
+as missed as the schedule says. `limitReset` is due two minutes after the
+latest `resetsAt` of the agent's account limits that it has not run for.
+A due run of a schedule whose last run is still going (its session runs
+and its agent is not done) is skipped; with two runs going, it waits. A
+run is `ScheduleRunner.launch`: the agent's command with its switch
+(`claude --permission-mode bypassPermissions|acceptEdits`, `codex
+--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust`,
+`copilot` with `COPILOT_ALLOW_ALL=true` or `--allow-tool=write`, `agy
+--dangerously-skip-permissions` or `--mode accept-edits`) and the prompt,
+started as a session with no client attached, `SessionInfo.schedule` and
+`schedulePermissions` set; Antigravity gets the folder among those it
+trusts for the session. A run's session done for 24 hours is closed. The
+hold on sleep is also taken while a schedule's next run is ten minutes or
+less away.
+
 ## When an agent is done or needs you
 
 Each app works out what to tell of from the states the host sends (#3),

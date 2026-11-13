@@ -181,6 +181,7 @@ private struct SettingsTabs: View {
         TabView(selection: $tab) {
             SettingsView().tabItem { Label("General", systemImage: "gearshape") }.tag("general")
             GitSettingsView().tabItem { Label("Git", systemImage: "arrow.triangle.branch") }.tag("git")
+            SchedulesView().tabItem { Label("Schedules", systemImage: "calendar.badge.clock") }.tag("schedules")
             PermissionsView().tabItem { Label("Permissions", systemImage: "lock.shield") }.tag("permissions")
             PrivacySettingsView().tabItem { Label("Privacy", systemImage: "hand.raised") }.tag("privacy")
         }

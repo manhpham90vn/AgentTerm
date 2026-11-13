@@ -117,6 +117,12 @@ private struct SettingsTab: View {
                 }
 
                 Section {
+                    NavigationLink {
+                        SchedulesScreen()
+                    } label: {
+                        LabeledContent("Schedules", value: model.schedules.isEmpty ? "None" : "\(model.schedules.count)")
+                    }
+                    .accessibilityIdentifier("schedules")
                     Toggle("Tell me when an agent is done or needs me", isOn: $model.notifyAgents)
                         .accessibilityIdentifier("notify-agents")
                 } header: {
@@ -247,5 +253,152 @@ private struct AgentNoticeBanner: View {
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("agent-notice")
         .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// The Mac's schedules (#11), as on the Mac's Settings > Schedules.
+private struct SchedulesScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+
+    var body: some View {
+        List {
+            ForEach(model.schedules) { schedule in
+                NavigationLink {
+                    ScheduleForm(schedule: schedule, isNew: false)
+                } label: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(schedule.name)
+                        Text("\(Self.name(of: schedule.agent, in: model.agents)) · \(schedule.when.label())").font(.footnote).foregroundStyle(.secondary)
+                        Text(Self.status(schedule)).font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            if let first = model.agents.first(where: { $0.path != nil }), let folder = model.folders.first {
+                NavigationLink("New Schedule") {
+                    ScheduleForm(
+                        schedule: Schedule(name: "Every morning", agent: first.id, folder: folder, prompt: "", when: .daily(hour: 9, minute: 0)), isNew: true)
+                }
+                .accessibilityIdentifier("new-schedule")
+            }
+        }
+        .navigationTitle("Schedules")
+    }
+
+    static func name(of agent: String, in agents: [AgentInfo]) -> String { agents.first { $0.id == agent }?.name ?? agent }
+
+    static func status(_ schedule: Schedule) -> String {
+        var parts: [String] = []
+        if !schedule.enabled { parts.append("Off") } else if let next = schedule.nextRun { parts.append("Next \(next.formatted(date: .abbreviated, time: .shortened))") }
+        parts.append(schedule.permissions.label)
+        if let last = schedule.runs.last { parts.append("Last: \(last.note.lowercased())") }
+        return parts.joined(separator: " · ")
+    }
+}
+
+private struct ScheduleForm: View {
+    @EnvironmentObject private var model: PhoneModel
+    @Environment(\.dismiss) private var dismiss
+    @State var schedule: Schedule
+    let isNew: Bool
+    @State private var kind = 1
+    @State private var time = Date()
+    @State private var weekdays: Set<Int> = [2, 3, 4, 5, 6]
+    @State private var warning = false
+
+    var body: some View {
+        Form {
+            Section {
+                TextField("Name", text: $schedule.name)
+                Picker("Agent", selection: $schedule.agent) {
+                    ForEach(model.agents.filter { $0.path != nil }) { Text($0.name).tag($0.id) }
+                }
+                Picker("Folder", selection: $schedule.folder) {
+                    ForEach(model.folders, id: \.self) { Text(($0 as NSString).lastPathComponent).tag($0) }
+                }
+                TextField("Prompt", text: $schedule.prompt, axis: .vertical).lineLimit(3...8)
+            }
+            Section {
+                Picker("When", selection: $kind) {
+                    Text("Once").tag(0)
+                    Text("Every day").tag(1)
+                    Text("On some days").tag(2)
+                    Text("When the limit starts over").tag(3)
+                }
+                if kind == 0 { DatePicker("At", selection: $time) }
+                if kind == 1 || kind == 2 { DatePicker("At", selection: $time, displayedComponents: .hourAndMinute) }
+                if kind == 2 {
+                    ForEach(1...7, id: \.self) { day in
+                        Toggle(
+                            Calendar.current.weekdaySymbols[day - 1],
+                            isOn: Binding(get: { weekdays.contains(day) }, set: { on in if on { weekdays.insert(day) } else { weekdays.remove(day) } }))
+                    }
+                }
+                Picker("Permissions", selection: $schedule.permissions) {
+                    ForEach(SchedulePermissions.offered(by: schedule.agent), id: \.self) { Text($0.label).tag($0) }
+                }
+                Toggle("Run once after a missed time", isOn: $schedule.catchUp)
+                Toggle("On", isOn: $schedule.enabled)
+            }
+            if !schedule.runs.isEmpty {
+                Section("Last runs") {
+                    ForEach(Array(schedule.runs.suffix(5).reversed().enumerated()), id: \.offset) { _, run in
+                        Text("\(run.at.formatted(date: .abbreviated, time: .shortened)): \(run.note)").font(.footnote)
+                    }
+                }
+            }
+            if !isNew {
+                Section {
+                    Button("Delete Schedule", role: .destructive) {
+                        model.removeSchedule(schedule.id)
+                        dismiss()
+                    }
+                }
+            }
+        }
+        .navigationTitle(isNew ? "New Schedule" : schedule.name)
+        .toolbar {
+            Button("Save") { save() }
+                .disabled(schedule.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || schedule.name.isEmpty)
+        }
+        .onAppear(perform: read)
+        .onChange(of: schedule.agent) { _, agent in
+            schedule.warningAccepted = false
+            if !SchedulePermissions.offered(by: agent).contains(schedule.permissions) { schedule.permissions = .skipAll }
+        }
+        .alert("Run without asking for permission?", isPresented: $warning) {
+            Button("Run Without Asking", role: .destructive) {
+                schedule.warningAccepted = true
+                save()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(SchedulePermissions.warning(agent: schedule.agent, name: SchedulesScreen.name(of: schedule.agent, in: model.agents)))
+        }
+    }
+
+    private func read() {
+        switch schedule.when {
+        case .once(let moment): kind = 0; time = moment
+        case .daily(let hour, let minute): kind = 1; time = Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: Date()) ?? Date()
+        case .weekly(let days, let hour, let minute):
+            kind = 2; weekdays = Set(days); time = Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: Date()) ?? Date()
+        case .limitReset: kind = 3
+        }
+    }
+
+    private func save() {
+        let parts = Calendar.current.dateComponents([.hour, .minute], from: time)
+        switch kind {
+        case 0: schedule.when = .once(time)
+        case 1: schedule.when = .daily(hour: parts.hour ?? 9, minute: parts.minute ?? 0)
+        case 2: schedule.when = .weekly(weekdays: weekdays.sorted(), hour: parts.hour ?? 9, minute: parts.minute ?? 0)
+        default: schedule.when = .limitReset
+        }
+        if schedule.permissions == .skipAll && !schedule.warningAccepted {
+            warning = true
+            return
+        }
+        model.save(schedule)
+        dismiss()
     }
 }

@@ -67,6 +67,10 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
     /// The agent's session that opened this shell through MCP (#10), when
     /// one did. The shell stays, and is the user's, when that one ends.
     public var openedBy: SessionID?
+    /// The schedule this session is a run of (#11), by name, and how its
+    /// agent handles permissions.
+    public var schedule: String?
+    public var schedulePermissions: SchedulePermissions?
 
     public init(
         id: SessionID, title: String, cwd: String, size: TermSize, createdAt: Date,
@@ -277,6 +281,10 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case answer(session: SessionID, to: AgentState, text: String)
     /// The Mac app is in front, or is no longer: then the Mac is in use.
     case appInFront(Bool)
+    /// Adds a schedule, or changes the one with its id (#11). One that
+    /// skips permissions is refused unless its warning was accepted.
+    case saveSchedule(Schedule)
+    case removeSchedule(id: String)
 }
 
 /// JSON text frames sent by the host.
@@ -363,6 +371,8 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// Whether someone is at the Mac (#22, #24): its app in front, or a key
     /// or the pointer used in the last five minutes.
     case macInUse(Bool)
+    /// Every schedule, with its last runs and when it runs next.
+    case schedules([Schedule])
 }
 
 public enum MessageCoding {

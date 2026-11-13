@@ -322,6 +322,15 @@ struct SessionRow: View {
                 }
             }
             Spacer(minLength: 0)
+            if let schedule = session.schedule {
+                // A run of a schedule, and whether its agent asks (#11).
+                Image(systemName: "calendar.badge.clock")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(session.schedulePermissions == .skipAll ? .orange : .secondary)
+                    .help(
+                        "A run of “\(schedule)”"
+                            + (session.schedulePermissions == .skipAll ? ": it runs without asking for permission" : ", \(session.schedulePermissions?.label.lowercased() ?? "")"))
+            }
             if let owner = session.openedBy {
                 // Opened by an agent through MCP: it may type here too.
                 Image(systemName: "sparkles")
