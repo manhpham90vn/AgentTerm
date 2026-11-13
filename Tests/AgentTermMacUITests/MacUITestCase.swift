@@ -242,8 +242,9 @@ class MacUITestCase: XCTestCase {
     }
 
     /// Quits the app and opens it again, on the same host.
-    func relaunchApp() throws {
+    func relaunchApp(whileClosed: () -> Void = {}) throws {
         app.quit()
+        whileClosed()
         app = try launchApp()
     }
 

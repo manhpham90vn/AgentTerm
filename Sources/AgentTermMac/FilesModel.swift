@@ -50,6 +50,21 @@ final class FilesModel: ObservableObject {
     /// answered with a message that `handle` takes.
     private var remote: ((ClientMessage) -> Void)?
     var isRemote: Bool { remote != nil }
+    /// False while there is no connection to the other Mac: what is asked
+    /// of it then goes nowhere.
+    var isOnline = true
+    /// The text sent to the other Mac to be written, by path, until it
+    /// says the file is saved. Until then the file's changes are not saved.
+    private var saving: [String: String] = [:]
+    /// Files saved again while the other Mac was still writing them.
+    private var saveAgain: Set<String> = []
+    /// Files whose tab closes once the other Mac has saved them.
+    private var closeWhenSaved: Set<String> = []
+    /// How many times a file was asked for and not yet answered.
+    private var readsDue: [String: Int] = [:]
+    /// Files saved while a read was on its way: the answer to that read
+    /// may be the file as it was before, and is not shown.
+    private var staleReads: Set<String> = []
 
     init() {
         restoreOpenFiles()
@@ -76,7 +91,35 @@ final class FilesModel: ObservableObject {
         active = nil
         error = nil
         pendingClose = nil
+        forgetRequests()
         if remote == nil { restoreOpenFiles() }
+    }
+
+    /// The connection to the other Mac is gone, and with it the answers
+    /// that were on their way. A file that was being saved keeps its changes.
+    func connectionLost() {
+        isOnline = false
+        forgetRequests()
+    }
+
+    /// The other Mac said something went wrong. It does not say with what,
+    /// so no file that was being saved is taken as saved.
+    func requestFailed() {
+        saving = [:]
+        saveAgain = []
+        closeWhenSaved = []
+    }
+
+    private func forgetRequests() {
+        requestFailed()
+        readsDue = [:]
+        staleReads = []
+    }
+
+    private func read(_ path: String) {
+        guard let remote else { return }
+        readsDue[path, default: 0] += 1
+        remote(.readFile(path: path))
     }
 
     /// What another Mac's host answered about its files.
@@ -87,6 +130,14 @@ final class FilesModel: ObservableObject {
             guard root != nil, directory == root || expanded.contains(directory) else { return }
             if children[directory] != entries { children[directory] = entries }
         case .file(let path, let content, let data):
+            let due = max((readsDue[path] ?? 0) - 1, 0)
+            readsDue[path] = due == 0 ? nil : due
+            if staleReads.contains(path) {
+                // Asked for before the file was saved from here. The next
+                // look at the files reads it again.
+                if due == 0 { staleReads.remove(path) }
+                return
+            }
             guard let index = documents.firstIndex(where: { $0.path == path }) else { return }
             // One with edits of our own keeps them, as with a file on this disk.
             if documents[index].isDirty { return }
@@ -100,6 +151,19 @@ final class FilesModel: ObservableObject {
             if directory != root { expanded.insert(directory) }
             if isDirectory { expanded.insert(path) } else { open(path) }
             refresh()
+        case .fileSaved(let path):
+            guard let text = saving.removeValue(forKey: path) else { return }
+            let index = documents.firstIndex(where: { $0.path == path })
+            if let index { documents[index].savedText = text }
+            let again = saveAgain.remove(path) != nil
+            let closing = closeWhenSaved.remove(path) != nil
+            guard let index else { return }
+            if documents[index].isDirty {
+                // Changed again since: what closes it is the next save.
+                if again || closing { saveAndClose(path, closing: closing) }
+            } else if closing {
+                close(path)
+            }
         default:
             break
         }
@@ -152,7 +216,9 @@ final class FilesModel: ObservableObject {
     func refresh() {
         if let remote {
             if let root { for directory in [root] + expanded.sorted() { remote(.files(path: directory)) } }
-            for document in documents where document.isText && !document.isDirty && !document.isLoading { remote(.readFile(path: document.path)) }
+            for document in documents where document.isText && !document.isDirty && !document.isLoading && !staleReads.contains(document.path) {
+                read(document.path)
+            }
             return
         }
         if let root {
@@ -202,9 +268,9 @@ final class FilesModel: ObservableObject {
     /// Shows a file in the middle pane, opening a tab for it if it has none.
     func open(_ path: String) {
         if !documents.contains(where: { $0.path == path }) {
-            if let remote {
+            if isRemote {
                 documents.append(OpenDocument(path: path, content: .text(""), text: "", savedText: "", isLoading: true))
-                remote(.readFile(path: path))
+                read(path)
             } else {
                 documents.append(Self.load(path))
             }
@@ -253,10 +319,20 @@ final class FilesModel: ObservableObject {
     func save(_ path: String? = nil) -> Bool {
         guard let path = path ?? active, let index = documents.firstIndex(where: { $0.path == path }), documents[index].isDirty else { return true }
         if let remote {
-            // Taken as saved once it is sent: if the other Mac cannot write
-            // it, it says so, and the text is still in the editor.
+            guard isOnline else {
+                error = "The other Mac is not connected, so the file could not be saved. Its changes are kept: save again once it is back."
+                return false
+            }
+            // One write at a time: two on their way could be done in either order.
+            if saving[path] != nil {
+                saveAgain.insert(path)
+                return true
+            }
+            // Not saved until the other Mac says so. If it cannot write
+            // the file it says that instead, and the changes stay changes.
+            saving[path] = documents[index].text
+            if readsDue[path] != nil { staleReads.insert(path) }
             remote(.writeFile(path: path, text: documents[index].text))
-            documents[index].savedText = documents[index].text
             return true
         }
         do {
@@ -266,6 +342,19 @@ final class FilesModel: ObservableObject {
         } catch {
             self.error = "\(error)"
             return false
+        }
+    }
+
+    /// Saves a file and closes its tab. A file on another Mac closes once
+    /// that Mac has it: if it cannot be saved, it stays open with its changes.
+    func saveAndClose(_ path: String, closing: Bool = true) {
+        guard save(path) else { return }
+        guard closing else { return }
+        if isRemote, documents.first(where: { $0.path == path })?.isDirty == true {
+            pendingClose = nil
+            closeWhenSaved.insert(path)
+        } else {
+            close(path)
         }
     }
 

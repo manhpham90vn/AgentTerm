@@ -88,6 +88,29 @@ final class SlowLinkTests: XCTestCase {
         XCTAssertTrue(condition(), "timed out waiting for: \(what)")
     }
 
+    func testWhatIsSentBeforeTheConnectionIsUpWaitsForTheGreeting() {
+        // An app asks for things on a timer, also while it is connecting
+        // again. The host closes a client whose first word is not its hello.
+        let client = AgentTermConnection(host: "127.0.0.1", port: port, token: token, clientName: "early")
+        var state: AgentTermConnection.State = .connecting
+        var welcomed = false
+        var listed = false
+        client.onState = { state = $0 }
+        client.onMessage = {
+            if case .welcome = $0 { welcomed = true }
+            if case .directory = $0 { listed = true }
+        }
+        client.connect()
+        client.send(.listDirectory(path: nil))
+        defer { client.close() }
+        waitUntil("the answer to what was sent early") {
+            if case .closed = state { return true }
+            return listed
+        }
+        XCTAssertTrue(welcomed, "the host closed the connection: \(state)")
+        XCTAssertTrue(listed)
+    }
+
     func testAReplayThatArrivesSlowlyDoesNotCloseTheConnection() throws {
         // A session with a few hundred kilobytes behind it.
         let near = AgentTermConnection(host: "127.0.0.1", port: port, token: token, clientName: "near")

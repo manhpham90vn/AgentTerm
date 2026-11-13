@@ -156,4 +156,118 @@ final class RemoteMacTests: MacUITestCase {
         app.wait(for: .containing("removed this Mac from its paired devices"), timeout: 20)
         wait("this Mac to be on screen again", timeout: 20) { self.app.first(.id("mac-switcher"))?.value == "This Mac" }
     }
+
+    private var editor: MacDriver.Query { .role(kAXTextAreaRole as String) }
+
+    private func listens(on port: UInt16) -> Bool {
+        let find = Process()
+        find.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
+        find.arguments = ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-t"]
+        let pipe = Pipe()
+        find.standardOutput = pipe
+        find.standardError = FileHandle.nullDevice
+        try? find.run()
+        let found = pipe.fileHandleForReading.readDataToEndOfFile()
+        find.waitUntilExit()
+        return !found.isEmpty
+    }
+
+    func testACommitTheOtherMacRefusesLateKeepsItsMessage() throws {
+        try startOtherMac()
+        // A hook that takes longer than the changes are read again, then says no.
+        let hook = otherProject.appendingPathComponent(".git/hooks/pre-commit")
+        try "#!/bin/sh\nsleep 6\necho 'the hook says no' >&2\nexit 1\n".write(to: hook, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
+        pair()
+        app.wait(for: .text("work, folder"), timeout: 15)
+        app.press(.button("Git"))
+        app.press(.button("Stage notes.txt"), timeout: 15)
+        app.wait(for: .button("Unstage notes.txt"), timeout: 15)
+        app.write("fix: a message worth keeping", into: .text("Commit message"), confirm: true)
+        app.press(.containing("Commit 1 File"))
+        app.wait(for: .containing("the hook says no"), timeout: 30)
+        XCTAssertEqual(app.value(of: .text("Commit message")), "fix: a message worth keeping", "the message of a commit that failed is gone")
+    }
+
+    func testAFileTheOtherMacCannotWriteKeepsItsChanges() throws {
+        try startOtherMac()
+        pair()
+        app.wait(for: .text("work, folder"), timeout: 15)
+        app.press(.button("Files"))
+        app.press(.button("notes.txt"), timeout: 15)
+        wait("the other Mac's file in the editor", timeout: 15) { self.app.value(of: self.editor) == "first line\nchanged on the other Mac\n" }
+        // Nothing can be written in its folder from now on.
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: otherProject.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: otherProject.path) }
+        let edited = "first line\nchanged on the other Mac\nnot to be lost\n"
+        app.write(edited, into: editor)
+        app.menu(["File", "Save"])
+        // It is said, and the text stays, also when the files are read again.
+        app.press(.button("OK"), timeout: 15)
+        app.press(.button("Refresh"))
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        XCTAssertEqual(app.value(of: editor), edited, "the changes that could not be saved are gone")
+        XCTAssertEqual(read("notes.txt", in: otherProject), "first line\nchanged on the other Mac\n")
+        // And they still count as not saved.
+        app.press(.id("mac-switcher"))
+        app.press(.button("This Mac"), menus: true)
+        app.wait(for: .containing("Save or discard the changes"))
+    }
+
+    func testThisMacsTabsAreNotArrangedOnTheOtherMac() throws {
+        try startOtherMac()
+        let phone = try device()
+        let otherDevice = try device("observer", state: otherState, port: otherPort)
+        app.menu(["File", "New Shell"])
+        wait("a session here") { phone.sessions.count == 1 }
+        let own = try XCTUnwrap(phone.sessions.first)
+        wait("this Mac's host to have its tab") { phone.tabLayout?.order == [own.layoutID] }
+        pair()
+        app.wait(for: .text("work, folder"), timeout: 15)
+        app.press(.button("Shell"))
+        wait("a session on the other Mac") { otherDevice.sessions.count == 1 }
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        // Nothing the other Mac's host was ever told names a tab of this Mac.
+        let told = otherDevice.messages.compactMap { message -> TabLayout? in if case .tabLayout(let layout) = message { return layout } else { return nil } }
+        XCTAssertFalse(told.contains { $0.order.contains(own.layoutID) }, "the other Mac was given this Mac's tabs: \(told.map(\.order))")
+        // This Mac's own are as they were.
+        switchTo("This Mac")
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(phone.tabLayout?.order, [own.layoutID])
+    }
+
+    func testTheMacOnScreenIsNotForgottenOverUnsavedChanges() throws {
+        try startOtherMac()
+        pair()
+        app.wait(for: .text("work, folder"), timeout: 15)
+        app.press(.button("Files"))
+        app.press(.button("notes.txt"), timeout: 15)
+        wait("the other Mac's file in the editor", timeout: 15) { self.app.value(of: self.editor) == "first line\nchanged on the other Mac\n" }
+        app.write("first line\nnot saved yet\n", into: editor)
+        app.press(.id("mac-switcher"))
+        // The one under Forget, which comes after the one that switches.
+        let named = app.all(.button("Other Mac"), menus: true)
+        XCTAssertEqual(AXUIElementPerformAction(try XCTUnwrap(named.last).element, kAXPressAction as CFString), .success)
+        app.press(.button("Forget"), timeout: 15)
+        app.wait(for: .containing("Save or discard the changes"))
+        app.press(.button("OK"))
+        // Still on screen, so still one of the Macs to pick.
+        XCTAssertEqual(app.first(.id("mac-switcher"))?.value, "Other Mac")
+        app.press(.id("mac-switcher"))
+        app.wait(for: .button("Other Mac"), menus: true)
+    }
+
+    func testOpeningOnTheOtherMacStillStartsThisMacsHost() throws {
+        try startOtherMac()
+        pair()
+        app.wait(for: .text("work, folder"), timeout: 15)
+        // The Mac was restarted: the app opens on the other Mac, and
+        // nothing has started this Mac's host.
+        try relaunchApp {
+            stopWhateverListens(on: port)
+            wait("this Mac's host to be gone") { !self.listens(on: self.port) }
+        }
+        wait("the other Mac after reopening", timeout: 20) { self.app.first(.id("mac-switcher"))?.value == "Other Mac" }
+        wait("this Mac's host to be started", timeout: 15) { self.listens(on: self.port) }
+    }
 }

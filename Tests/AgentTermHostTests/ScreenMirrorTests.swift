@@ -211,6 +211,43 @@ final class ScreenMirrorTests: XCTestCase {
         XCTAssertFalse(written.contains("\(escape)]"), "the snapshot sets colors or a title: \(written.debugDescription)")
     }
 
+    func testAStringCutShortByAnotherSequenceIsOver() {
+        // A program killed in the middle of a title: the emulator takes the
+        // escape that follows as the start of something new.
+        let (mirror, original) = session(["abc\u{1b}]2;a tit", "\u{1b}[31mred\u{1b}[0m and more"])
+        assertSame(attach(to: mirror), original)
+        // And cut again right after the escape that ended it.
+        let cut = ScreenMirror(size: size, scrollback: 100)
+        let second = Client(size: size)
+        for piece in ["abc\u{1b}]2;a tit\u{1b}"] {
+            cut.feed(Data(piece.utf8))
+            second.feed(piece)
+        }
+        let client = attach(to: cut)
+        for target in [second, client] { target.feed("[31mred") }
+        cut.feed(Data("[31mred".utf8))
+        assertSame(client, second)
+        assertSame(attach(to: cut), second)
+    }
+
+    func testAnImageTooLongToKeepIsNotDrawnAsText() {
+        // More than is kept of one sequence, with a client attaching in
+        // the middle of it: it misses the image, and draws none of it.
+        let mirror = ScreenMirror(size: size, scrollback: 100)
+        mirror.feed(Data("before\r\n\u{1b}]1337;File=inline=1:".utf8))
+        let piece = Data(repeating: UInt8(ascii: "A"), count: 300_000)
+        for _ in 0..<5 { mirror.feed(piece) }
+        let snapshot = mirror.snapshot()
+        XCTAssertLessThan(snapshot.count, 10_000)
+        let client = Client(size: size)
+        client.feed(snapshot)
+        for target in [client] { target.feed(piece) }
+        mirror.feed(piece)
+        client.feed("\u{07}after")
+        mirror.feed(Data("\u{07}after".utf8))
+        XCTAssertEqual(text(of: client).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }, ["before", "after"])
+    }
+
     func testManyLinesAreWrittenOutQuickly() {
         let mirror = ScreenMirror(size: TermSize(cols: 120, rows: 40), scrollback: 10_000)
         var piece = ""
@@ -224,8 +261,19 @@ final class ScreenMirrorTests: XCTestCase {
         let writing = Date().timeIntervalSince(started)
         print("fed \(data.count * 60) bytes in \(feeding) s, wrote \(written.count) bytes in \(writing) s")
         XCTAssertLessThan(writing, 2)
+        // Several clients attach to a session that says nothing meanwhile,
+        // the Mac app and a phone coming back for one: written out once.
+        let again = Date()
+        for _ in 0..<10 { XCTAssertEqual(mirror.snapshot(), written) }
+        let rewriting = Date().timeIntervalSince(again)
+        print("wrote it 10 more times in \(rewriting) s")
+        XCTAssertLessThan(rewriting, max(writing, 0.05))
+        // Not what was written before, once there is more.
+        mirror.feed(Data("one more line\r\n".utf8))
+        XCTAssertNotEqual(mirror.snapshot(), written)
+        mirror.feed(data)
         let client = Client(size: TermSize(cols: 120, rows: 40), scrollback: 10_000)
-        client.feed(written)
+        client.feed(mirror.snapshot())
         XCTAssertEqual(text(of: client).count, 10_040)
     }
 }
@@ -257,6 +305,29 @@ final class OutputTrackerTests: XCTestCase {
         XCTAssertEqual(cut.pending, Data([0xF0, 0x9F, 0x98]))
         cut.consume(Data([0x80]))
         XCTAssertEqual(cut.pending, Data())
+    }
+
+    func testAStringEndsWhereAnotherSequenceBegins() {
+        let cut = tracker(["\u{1b}]0;tit", "\u{1b}[31mred\u{1b}[?25l text"])
+        XCTAssertEqual(cut.pending, Data())
+        XCTAssertEqual(cut.pen, ["31"])
+        XCTAssertEqual(cut.modes[25], false)
+        // Binary output with the start of a string in it and no end.
+        XCTAssertEqual(tracker(["\u{1b}Pjunk\u{1b}[1mbold"]).pen, ["1"])
+        // Only the escape is pending while it may still be the string's end.
+        XCTAssertEqual(tracker(["\u{1b}]0;title\u{1b}"]).pending, Data("\u{1b}".utf8))
+    }
+
+    func testAStringLongerThanIsKeptIsNotKeptInPart() {
+        var long = OutputTracker()
+        long.consume(Data("\u{1b}Pq".utf8))
+        let piece = Data(repeating: UInt8(ascii: "?"), count: 300_000)
+        for _ in 0..<5 { long.consume(piece) }
+        // Not the middle of it: a few bytes that have a client's emulator
+        // read the rest as a string too.
+        XCTAssertLessThan(long.pending.count, 8)
+        long.consume(Data("\u{1b}\\text".utf8))
+        XCTAssertEqual(long.pending, Data())
     }
 
     func testModesAreRememberedAsLastSet() {

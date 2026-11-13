@@ -44,6 +44,13 @@ struct OutputTracker {
     /// image for one, is not kept: a client attaching in the middle of it
     /// misses that image.
     private static let pendingLimit = 1024 * 1024
+    /// True from where what has begun grew past the limit until it ends.
+    /// Its later pieces are not kept either: they would be its middle.
+    private var pendingDropped = false
+    /// Stands in for a string that was too long to keep. It opens a string
+    /// of no meaning, so a client's emulator reads the rest of the real one
+    /// as a string, up to its end, and draws none of it.
+    private static let droppedString = Data([0x1B, 0x5D])
     private static let parameterLimit = 256
     private static let penLimit = 64
 
@@ -67,14 +74,19 @@ struct OutputTracker {
 
         if state == .ground {
             pending.removeAll(keepingCapacity: true)
+            pendingDropped = false
         } else if let start {
             pending = Data(data.suffix(from: data.startIndex + start))
-        } else {
+            pendingDropped = false
+        } else if !pendingDropped {
             // Nothing began in this piece, so all of it belongs to what an
             // earlier piece began.
             pending.append(data)
         }
-        if pending.count > Self.pendingLimit { pending.removeAll() }
+        if pending.count > Self.pendingLimit {
+            pendingDropped = true
+            if case .string = state { pending = Self.droppedString } else { pending.removeAll() }
+        }
     }
 
     /// True when `byte` ended what `was` was reading by starting something new.
@@ -85,7 +97,11 @@ struct OutputTracker {
         case .character:
             // A character cut short by the start of another one.
             return state != .ground && !(0x80...0xBF).contains(byte)
-        case .ground, .string, .stringEscape:
+        case .string, .stringEscape:
+            // The escape that ends a string, or cuts it short by starting
+            // something else: either way what came before it is over.
+            return byte == 0x1B
+        case .ground:
             return false
         }
     }
@@ -142,11 +158,15 @@ struct OutputTracker {
             case 0x1B: state = .stringEscape(endsWithBell: endsWithBell)
             default: break
             }
-        case .stringEscape(let endsWithBell):
+        case .stringEscape:
             switch byte {
             case 0x5C: state = .ground  // \, the end of the string
             case 0x1B: break
-            default: state = .string(endsWithBell: endsWithBell)
+            default:
+                // Not the end of the string but the start of something
+                // else: the string is over all the same, as an emulator has it.
+                state = .escape
+                step(byte)
             }
         }
     }

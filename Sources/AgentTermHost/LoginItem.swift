@@ -65,11 +65,15 @@ public struct LoginItem: Equatable, Sendable {
         try FileManager.default.removeItem(at: file)
     }
 
-    /// The app may have been moved or updated since the switch was turned
-    /// on: what launchd starts at login has to be the host that is here now.
+    /// The app may have been moved since the switch was turned on: launchd
+    /// would then start a host that is no longer there. Only then is this
+    /// host put in its place. One that is still there is left alone: this
+    /// may be another copy of the app, or a host started by hand in some
+    /// other way, and neither is what the user asked to have at login.
     public func refresh() {
         guard isOn, let current = NSDictionary(contentsOf: file) as? [String: Any] else { return }
-        if (current["ProgramArguments"] as? [String]) != [executable] + arguments { try? turnOn() }
+        if let program = (current["ProgramArguments"] as? [String])?.first, FileManager.default.isExecutableFile(atPath: program) { return }
+        try? turnOn()
     }
 }
 #endif

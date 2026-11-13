@@ -95,7 +95,7 @@ struct RootView: View {
             isPresented: Binding(get: { files.pendingClose != nil }, set: { if !$0 { files.pendingClose = nil } }),
             titleVisibility: .visible, presenting: files.pendingClose
         ) { path in
-            Button("Save") { if files.save(path) { files.close(path) } }
+            Button("Save") { files.saveAndClose(path) }
             Button("Don't Save", role: .destructive) { files.close(path) }
             Button("Cancel", role: .cancel) {}
         }

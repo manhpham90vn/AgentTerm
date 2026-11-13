@@ -15,6 +15,11 @@ import SwiftTerm
 final class ScreenMirror: TerminalDelegate {
     private var terminal: Terminal!
     private var tracker = OutputTracker()
+    /// The screen as last written out, until the session writes more or is
+    /// resized. Writing out a long session takes a good part of a second,
+    /// on the queue all the host's work goes through, and clients come in
+    /// numbers: the Mac app and the phones, each after every reconnect.
+    private var written: Data?
 
     /// - Parameter scrollback: How many lines above the screen are kept.
     init(size: TermSize, scrollback: Int) {
@@ -23,12 +28,14 @@ final class ScreenMirror: TerminalDelegate {
     }
 
     func feed(_ data: Data) {
+        written = nil
         tracker.consume(data)
         terminal.feed(byteArray: [UInt8](data))
     }
 
     func resize(_ size: TermSize) {
         guard size.cols != terminal.cols || size.rows != terminal.rows else { return }
+        written = nil
         terminal.resize(cols: size.cols, rows: size.rows)
     }
 
@@ -52,6 +59,7 @@ final class ScreenMirror: TerminalDelegate {
     /// mode. A cursor that waits past the last column to wrap is put on the
     /// last column.
     func snapshot() -> Data {
+        if let written { return written }
         let escape = "\u{1b}["
         // An emulator that was used before starts empty too.
         var out = "\(escape)?1049l\(escape)r\(escape)H\(escape)2J\(escape)3J"
@@ -102,6 +110,7 @@ final class ScreenMirror: TerminalDelegate {
         var data = Data(out.utf8)
         // The beginning of what the live output is in the middle of.
         data.append(tracker.pending)
+        written = data
         return data
     }
 

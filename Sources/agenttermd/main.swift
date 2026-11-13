@@ -152,7 +152,7 @@ do {
         configuration.agentsDirectory = agentsDirectory
     }
     // Started at login, when the user asked for that. The app may have been
-    // moved or updated since: launchd has to start the host that is here now.
+    // moved since: launchd has to start a host that is there.
     configuration.loginItem = LoginItem.forThisHost()
     configuration.loginItem?.refresh()
     server = HostServer(configuration: configuration)
