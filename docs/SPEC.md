@@ -80,6 +80,28 @@ itself.
 - Antigravity does not say when it waits for permission: while it runs a
   tool, its state is not shown, and its session says why.
 
+### Shells an agent opens
+
+- An agent can open a shell as a session the user sees: asked to "open an
+  SSH session to the build server and check the logs", it opens it as a
+  tab, works in it, and the user watches and can type in it too. On the
+  Mac it is a tab and a row in its agent's folder, on the iPhone a row,
+  marked as opened by an agent.
+- It is done through AgentTerm's MCP server, which AgentTerm installs in
+  the settings of Claude Code, Codex, Copilot CLI and Antigravity for the
+  whole user, by default, the first time it runs. Settings ("Agents can
+  open shells you see", on the Mac and the iPhone) removes it from them,
+  and puts it back.
+- Its tools: open a shell (with a command or without), list its shells,
+  read a shell's screen, type into it (text and keys by name), wait until
+  its screen is still or shows a text, close it.
+- An agent reaches only the shells it opened: never the user's sessions,
+  nor another agent's shells. It opens shells only, never another agent.
+- When the agent's session ends, the shells it opened stay, and are the
+  user's from then on.
+- Outside a session of AgentTerm (an agent run in another terminal), the
+  server offers no tools.
+
 ### Usage
 
 Under an agent's terminal, on the Mac and on the iPhone, a band shows the

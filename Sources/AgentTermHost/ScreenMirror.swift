@@ -33,6 +33,16 @@ final class ScreenMirror: TerminalDelegate {
         terminal.feed(byteArray: [UInt8](data))
     }
 
+    /// The screen as text, with up to `linesAbove` of the lines above it,
+    /// without the blank lines at its end: what an agent reads (#10).
+    func text(linesAbove: Int) -> String {
+        var lines = terminal.contentSnapshot(region: .history(maximumScrollbackRows: max(0, linesAbove))).rows.map {
+            $0.text.replacingOccurrences(of: "\\s+$", with: "", options: .regularExpression)
+        }
+        while lines.last?.isEmpty == true { lines.removeLast() }
+        return lines.joined(separator: "\n")
+    }
+
     func resize(_ size: TermSize) {
         guard size.cols != terminal.cols || size.rows != terminal.rows else { return }
         written = nil

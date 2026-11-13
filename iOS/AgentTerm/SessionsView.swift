@@ -556,6 +556,12 @@ private struct SessionRow: View {
                 .font(.body)
                 .lineLimit(1)
             Spacer(minLength: 8)
+            if session.openedBy != nil {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Opened by an agent")
+            }
             StateMark(session: session)
             Text("\(session.size.cols)×\(session.size.rows)")
                 .font(.system(size: 12, design: .monospaced))

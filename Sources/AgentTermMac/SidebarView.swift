@@ -322,6 +322,13 @@ struct SessionRow: View {
                 }
             }
             Spacer(minLength: 0)
+            if let owner = session.openedBy {
+                // Opened by an agent through MCP: it may type here too.
+                Image(systemName: "sparkles")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.secondary)
+                    .help("Opened by " + (model.sessions.first { $0.id == owner }?.displayName ?? "an agent whose session has ended"))
+            }
             AgentStateMark(session: session)
             if model.foreignSizes[session.id] != nil {
                 Image(systemName: "iphone")
@@ -359,7 +366,7 @@ struct SessionRow: View {
         .onTapGesture { model.select(session: session) }
         .help(session.summary.map { "\(session.title): \($0)" } ?? session.title)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(AgentStateMark.label("\(session.displayName), session", session))
+        .accessibilityLabel(AgentStateMark.label("\(session.displayName), session" + (session.openedBy == nil ? "" : ", opened by an agent"), session))
         .accessibilityIdentifier("session-\(session.id)")
         .accessibilityAddTraits(model.selectedSession == session.id ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { model.select(session: session) }

@@ -234,6 +234,25 @@ private struct SettingsView: View {
                     .accessibilityIdentifier("start-at-login")
                 }
             }
+            if let agentShells = model.agentShells {
+                SettingsCard {
+                    Toggle(isOn: Binding(get: { agentShells }, set: { model.setAgentShells($0) })) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Agents can open shells you see")
+                                .font(.system(size: 13, weight: .medium))
+                            Text(
+                                "Claude Code, Codex, Copilot CLI and Antigravity get AgentTerm's MCP server in their own settings. An agent can then open a shell as a tab here, an SSH session or a dev server, and work in it while you watch and type. It reaches only the shells it opened, and cannot start agents. Turning this off removes the server from their settings."
+                            )
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .accessibilityLabel("Agents can open shells you see")
+                    .accessibilityIdentifier("agent-shells")
+                }
+            }
             if let keepAwake = model.keepAwake {
                 SettingsCard {
                     Toggle(isOn: Binding(get: { keepAwake }, set: { model.setKeepAwake($0) })) {

@@ -42,6 +42,55 @@ if arguments.first == "hook" {
     exit(0)
 }
 
+// `agenttermd mcp` is the MCP server agents are given (#10). Inside a session
+// of an agent AgentTerm started, it asks the host on this Mac, as that
+// session, for what the agent's tools do; elsewhere it offers no tools.
+if arguments.first == "mcp" {
+    var ask: AgentShellsMCP.Ask?
+    let named = ProcessInfo.processInfo.environment[HostServer.agentShellsVariable]?.split(separator: " ").map(String.init) ?? []
+    if named.count == 2, let port = UInt16(named[0]), let token = try? HostEnvironment.loadOrCreateToken() {
+        let key = named[1]
+        let connection = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "MCP")
+        let lock = NSLock()
+        var answers: [Int: AgentShellResult] = [:]
+        var waiting: [Int: DispatchSemaphore] = [:]
+        var next = 0
+        connection.onMessage = { message in
+            guard case .agentShellResult(let id, let result) = message else { return }
+            lock.lock()
+            answers[id] = result
+            let semaphore = waiting.removeValue(forKey: id)
+            lock.unlock()
+            semaphore?.signal()
+        }
+        DispatchQueue.main.async { connection.connect() }
+        ask = { request in
+            lock.lock()
+            next += 1
+            let id = next
+            let semaphore = DispatchSemaphore(value: 0)
+            waiting[id] = semaphore
+            lock.unlock()
+            DispatchQueue.main.async { connection.send(.agentShell(id: id, key: key, request: request)) }
+            guard semaphore.wait(timeout: .now() + 15) == .success else { return .refused("AgentTerm's host did not answer.") }
+            lock.lock()
+            defer { lock.unlock() }
+            return answers.removeValue(forKey: id) ?? .refused("AgentTerm's host did not answer.")
+        }
+    }
+    let server = AgentShellsMCP(ask: ask, version: AppChannel.current.appName)
+    // Lines are read and answered in turn, off the main queue, where the
+    // connection's answers arrive.
+    Thread.detachNewThread {
+        while let line = readLine(strippingNewline: true) {
+            guard !line.trimmingCharacters(in: .whitespaces).isEmpty, let reply = server.handle(line) else { continue }
+            print(reply)
+        }
+        exit(0)
+    }
+    dispatchMain()
+}
+
 // `agenttermd pairing-link` asks the running daemon for a pairing code and
 // prints the link an iPhone can pair with. Meant for the iOS Simulator, which
 // has no camera, and for tests.
@@ -163,6 +212,12 @@ do {
         statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil)
     configuration.protocolVersion = protocolVersion
     configuration.hooksDirectory = HostEnvironment.supportDirectory.appendingPathComponent("hooks", isDirectory: true)
+    // Installs the MCP server in the agents' own configuration, for this
+    // Mac's host only: not for one with a state folder of its own (a test,
+    // a trial run), which must leave the user's agents alone.
+    if (ProcessInfo.processInfo.environment["AGENTTERM_STATE_DIR"] ?? "").isEmpty, agentsDirectory == nil, let tool = Bundle.main.executablePath {
+        configuration.agentShells = AgentShellsInstall(directory: HostEnvironment.supportDirectory, tool: tool)
+    }
     // Notes that it runs, so the next host knows whether this one died.
     configuration.stateDirectory = HostEnvironment.supportDirectory
     if let agentsDirectory {

@@ -46,6 +46,9 @@ public final class HostServer {
         /// Where the host keeps what it gives Copilot CLI and Antigravity
         /// for their hooks: a plugin, a folder. Nil gives those two none.
         public var hooksDirectory: URL?
+        /// Installs the MCP server in the agents' configuration (#10). Nil
+        /// installs nothing: a test's host, a trial run.
+        public var agentShells: AgentShellsInstall?
         /// Asks the agents' services what their accounts have left. `nil`
         /// asks nobody, which is what tests want.
         public var fetchAccountUsage: ((String) -> AccountUsage?)?
@@ -155,6 +158,9 @@ public final class HostServer {
         var lastEvent: Data?
         /// Its agent was given hooks: its state can be known.
         var hooked = false
+        /// What its agent's MCP server names it by, to open and reach the
+        /// shells it opens (#10). Agents' sessions only.
+        var agentKey: String?
 
         init(info: SessionInfo, process: PTYProcess, screenLines: Int) {
             self.info = info
@@ -395,6 +401,8 @@ public final class HostServer {
         queue.sync {
             summaryTimer = summaries
             watchEvents()
+            // Installed by default the first time, and again after the app moved.
+            setAgentShells(nil)
             systemTimer = system
             scheduleKeepAwakeEnd()
         }
@@ -756,6 +764,10 @@ public final class HostServer {
             requestAgents(for: client, refresh: refresh)
         case .create(let request):
             create(request, for: client)
+        case .agentShell(let id, let key, let request):
+            handleAgentShell(id: id, key: key, request: request, from: client)
+        case .setAgentShells(let on):
+            setAgentShells(on)
         case .attach(let id, let size, let have):
             guard let session = sessions[id] else {
                 send(.error("no such session"), to: client)
@@ -1310,6 +1322,7 @@ public final class HostServer {
         send(.tabLayout(tabLayout), to: client)
         send(.keepAwake(keepAwake), to: client)
         send(.keepAwakeOptions(keepAwakeOptions), to: client)
+        if let install = configuration.agentShells { send(.agentShells(install.isOn), to: client) }
         send(.commitWriter(commitWriter), to: client)
         if let item = configuration.loginItem { send(.startAtLogin(item.isOn), to: client) }
         // Without any yet, the client is sent none and hands over its own.
@@ -1395,7 +1408,8 @@ public final class HostServer {
 
     // MARK: Sessions
 
-    private func create(_ request: CreateRequest, for client: Client, conversationID: String? = nil) {
+    @discardableResult
+    private func create(_ request: CreateRequest, for client: Client, conversationID: String? = nil, openedBy: SessionID? = nil) -> SessionID? {
         var cwd = request.cwd ?? HostEnvironment.homeDirectory
         var isDirectory: ObjCBool = false
         if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDirectory) || !isDirectory.boolValue {
@@ -1425,6 +1439,9 @@ public final class HostServer {
         {
             command = Handoff.shellQuote((directory as NSString).appendingPathComponent(agent)) + text.dropFirst(agent.count)
         }
+        // The agent's MCP server tells the host which session's it is.
+        let agentKey = agent.map { _ in UUID().uuidString + UUID().uuidString }
+        if let agentKey { environment[Self.agentShellsVariable] = "\(boundPort) \(agentKey)" }
         let process: PTYProcess
         do {
             process = try PTYProcess(
@@ -1437,7 +1454,7 @@ public final class HostServer {
             )
         } catch {
             send(.error("\(error)"), to: client)
-            return
+            return nil
         }
 
         nextSessionID += 1
@@ -1454,6 +1471,8 @@ public final class HostServer {
         )
         let session = Session(info: info, process: process, screenLines: configuration.screenLines)
         session.hooked = hooked
+        session.agentKey = agentKey
+        session.info.openedBy = openedBy
         sessions[id] = session
 
         process.onOutput = { [weak self, weak session] data in
@@ -1468,6 +1487,78 @@ public final class HostServer {
         broadcastSessions()
         // An agent that was not in use until now: ask its service right away.
         refreshAccountUsage(olderThan: Self.accountInterval)
+        return id
+    }
+
+    // MARK: Shells an agent opens (#10)
+
+    /// The variable that gives an agent's session its port and key, for
+    /// the MCP server the agent starts.
+    public static let agentShellsVariable = "AGENTTERM_MCP"
+
+    /// Does what an agent asks of the shells it opened, as the session its
+    /// key names, and answers the client that asked.
+    private func handleAgentShell(id: Int, key: String, request: AgentShellRequest, from client: Client) {
+        func answer(_ result: AgentShellResult) { send(.agentShellResult(id: id, result: result), to: client) }
+        guard !key.isEmpty, let owner = sessions.values.first(where: { $0.agentKey == key }) else {
+            return answer(.refused("This is not the session of an agent AgentTerm started, or that session has ended."))
+        }
+        /// A shell this agent opened and that still runs.
+        func own(_ session: SessionID) -> Session? {
+            sessions[session].flatMap { $0.info.openedBy == owner.info.id ? $0 : nil }
+        }
+        let notOwn = "That is not a shell this agent opened, or it has ended. Use list_shells."
+        switch request {
+        case .open(let command, let title):
+            // Shells only: one agent starting another spends an account
+            // without anyone having asked.
+            if let command, SessionSummaries.agent(forCommand: command) != nil {
+                return answer(.refused("Starting an agent is not allowed: open a shell, with a command or without."))
+            }
+            let first = command?.split(whereSeparator: \.isWhitespace).first.map(String.init)
+            let request = CreateRequest(command: command, cwd: owner.info.cwd, title: title ?? first ?? "shell", size: owner.info.size)
+            guard let created = create(request, for: client, openedBy: owner.info.id), let session = sessions[created] else {
+                return answer(.refused("The shell could not be started."))
+            }
+            answer(.opened(session.info))
+        case .list:
+            answer(.shells(sessions.values.filter { $0.info.openedBy == owner.info.id }.map(\.info).sorted { $0.id < $1.id }))
+        case .read(let session, let linesAbove):
+            guard let shell = own(session) else { return answer(.refused(notOwn)) }
+            answer(.screen(shell.mirror.text(linesAbove: min(linesAbove, configuration.screenLines))))
+        case .send(let session, let text, let keys):
+            guard let shell = own(session) else { return answer(.refused(notOwn)) }
+            var bytes = text ?? ""
+            for key in keys {
+                guard let typed = TerminalKeys.bytes(for: key) else { return answer(.refused("There is no key called “\(key)”.")) }
+                bytes += typed
+            }
+            shell.process.write(Data(bytes.utf8))
+            answer(.done)
+        case .close(let session):
+            guard let shell = own(session) else { return answer(.refused(notOwn)) }
+            shell.endAsked = true
+            shell.process.hangUp()
+            queue.asyncAfter(deadline: .now() + 3) { [weak shell] in shell?.process.forceKill() }
+            answer(.done)
+        }
+    }
+
+    /// Installs or removes the MCP server, off the queue the sessions use,
+    /// and tells every client.
+    private func setAgentShells(_ on: Bool?) {
+        guard let install = configuration.agentShells else { return }
+        let known = agents
+        let detect = configuration.detectAgents
+        workQueue.async { [weak self] in
+            let installed = known ?? detect()
+            if let on { install.set(on: on, agents: installed) } else { install.ensure(agents: installed) }
+            let isOn = install.isOn
+            self?.queue.async {
+                guard let self else { return }
+                for client in self.clients.values where client.authenticated { self.send(.agentShells(isOn), to: client) }
+            }
+        }
     }
 
     private func attach(_ client: Client, to session: Session, size: TermSize, have: Int? = nil) {

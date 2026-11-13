@@ -607,6 +607,43 @@ What cannot be known:
   others. Escape alone or Control C typed to a working session makes its
   state not known until the agent says more.
 
+## Shells an agent opens
+
+AgentTerm's MCP server is `agenttermd mcp` (`AgentShellsMCP`): JSON-RPC, one
+message to a line, on standard input and output. Its tools are
+`open_shell`, `list_shells`, `read_screen`, `send_input`, `wait` and
+`close_shell`. `wait` reads the screen every 0.2 seconds until a text
+appears, or the screen has been the same for a while, or the time is up.
+
+**Which session's agent it is.** The host gives every agent's session a key
+of its own, with its port, in `AGENTTERM_MCP`; the agent passes its
+environment on to the server it starts. The server signs in to the host as
+any app on the Mac does, with the Mac's own token from the state folder,
+and sends each request as `agentShell(id:key:request:)`. The host looks up
+the session whose key it is and answers `agentShellResult(id:result:)` to
+that connection only. A key names a running agent's session or nothing.
+Without the variable, the server offers no tools.
+
+**What it may reach.** A shell it opens is a session like any other, in the
+agent's folder and at its size, with `SessionInfo.openedBy` naming the
+agent's session. Reading, typing and closing are done only on a session
+whose `openedBy` is the asking session: never the user's sessions, never
+another agent's shells. A command whose first word is an agent's is
+refused. Typing is the same as typing: text, and keys by name turned into
+the bytes a terminal sends (`TerminalKeys`). When the agent's session ends,
+the server it started ends with it, and its shells stay.
+
+**Installed in the agents.** `AgentShellsInstall` runs each installed agent's
+own command, through the login shell: `claude mcp add --scope user
+agentterm -- <agenttermd> mcp`, `codex mcp add agentterm -- …`, `copilot
+mcp add agentterm -- …`, `agy mcp add agentterm -- …`, and `mcp remove
+agentterm` to take it out. `agent-shells.json` in the state folder keeps
+whether it is on (on unless turned off) and which agents have it, with the
+program it names: only those are ever removed, and an agent is asked again
+when the host's program moved. The host does it at start and on
+`setAgentShells`, off its queue, and tells every client `agentShells(Bool)`.
+A host with a state folder of its own (a test, a trial run) never does.
+
 ## Handoff
 
 `Handoff.prepare` turns a `Conversation` into a handoff file and a command:

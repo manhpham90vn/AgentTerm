@@ -64,11 +64,14 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
     /// Why the state of this session's agent is not known, or not all of
     /// it, and what to do about it, when there is something to say.
     public var stateNote: String?
+    /// The agent's session that opened this shell through MCP (#10), when
+    /// one did. The shell stays, and is the user's, when that one ends.
+    public var openedBy: SessionID?
 
     public init(
         id: SessionID, title: String, cwd: String, size: TermSize, createdAt: Date,
         agent: String? = nil, summary: String? = nil, conversationID: String? = nil, usage: SessionUsage? = nil,
-        state: AgentState? = nil, stateNote: String? = nil
+        state: AgentState? = nil, stateNote: String? = nil, openedBy: SessionID? = nil
     ) {
         self.id = id
         self.title = title
@@ -81,6 +84,7 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
         self.usage = usage
         self.state = state
         self.stateNote = stateNote
+        self.openedBy = openedBy
     }
 
     /// What to call the session in a list: its summary, or its title until
@@ -261,6 +265,12 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// The user has seen the report of a part that stopped: it is no longer
     /// sent, to this client or any other. Answered with `failures` to all.
     case dismissFailure(id: String)
+    /// An agent's request about the shells it opened (#10): sent by
+    /// `agenttermd mcp`, with the key of the agent's session. Answered with
+    /// `agentShellResult` to that client only.
+    case agentShell(id: Int, key: String, request: AgentShellRequest)
+    /// Installs the MCP server in each agent's configuration, or removes it.
+    case setAgentShells(Bool)
 }
 
 /// JSON text frames sent by the host.
@@ -340,6 +350,10 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// the user has not seen yet, oldest first. Sent on connecting and
     /// whenever the list changes.
     case failures([PartFailure])
+    case agentShellResult(id: Int, result: AgentShellResult)
+    /// Whether the MCP server is installed in the agents' configuration.
+    /// Not sent by a host that does not install it (a test's, a trial run).
+    case agentShells(Bool)
 }
 
 public enum MessageCoding {

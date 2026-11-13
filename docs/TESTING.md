@@ -402,6 +402,20 @@ A second host stands in for the other Mac, with a project of its own.
 | AGENT-9 | A stand-in agent that waits for permission | The Mac app shows it | A mark next to its name in the folder list and on its tab, read as "waiting for permission"; its folder's row says a session waits | M |
 | AGENT-10 | The same | The iPhone shows it | A mark in the sessions list, and the state in the terminal's title | hand, until the iPhone tests cover it |
 
+### Shells an agent opens
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| MCP-1 | The MCP server outside a session of AgentTerm | It is started, asked for its tools | It answers MCP's handshake and offers no tools | H |
+| MCP-2 | The MCP server in a session, a host standing in | Each tool is called | Each asks the host what it does and says what came of it; a refusal is an error | H |
+| MCP-3 | A screen that changes, then stays | `wait` for a text; `wait` for stillness; `wait` for a text that never comes | Returns when the text is there, when the screen is still, or when the time is up, with the screen | H |
+| MCP-4 | Two agents installed, one not | AgentTerm runs for the first time; again; after its program moved; turned off; on | Each installed agent is asked once with its own `mcp add` for the whole user; nothing the second time; replaced after a move; removed with `mcp remove` when off, and only from those it was installed in | H |
+| MCP-5 | A stand-in agent that starts the real `agenttermd mcp` | It opens a shell running `cat`, types into it, waits, reads it | A session in its folder, marked as opened by it, that a second device lists; what it types reaches the program and is on the screen it reads | H |
+| MCP-6 | Two agents, and the user's own session | Each reads, types into and closes what is not its own | Refused every time; the second agent lists no shells | H |
+| MCP-7 | An agent | It opens a shell running `claude` | Refused | H |
+| MCP-8 | An agent with a shell it opened | The agent's session ends; another agent closes a shell of its own | The first shell stays; the second ends | H |
+| MCP-9 | The Mac app and the iPhone | Settings | A switch, "Agents can open shells you see", that turns the server off and on for every device | hand, until the UI tests cover it |
+
 ### Vietnamese input
 
 | ID | Input | Action or event | Expected response | Checked by |

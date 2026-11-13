@@ -89,6 +89,10 @@ private struct SettingsTab: View {
                         Toggle("Start at Login", isOn: Binding(get: { startAtLogin }, set: { model.setStartAtLogin($0) }))
                             .accessibilityIdentifier("start-at-login")
                     }
+                    if let agentShells = model.agentShells {
+                        Toggle("Agents can open shells you see", isOn: Binding(get: { agentShells }, set: { model.setAgentShells($0) }))
+                            .accessibilityIdentifier("agent-shells")
+                    }
                     Picker("Temperature", selection: Binding(get: { temperatureUnit }, set: { unit in model.setDisplay { $0.temperatureUnit = unit } })) {
                         Text("Celsius (°C)").tag(SystemStats.celsius)
                         Text("Fahrenheit (°F)").tag(SystemStats.fahrenheit)
