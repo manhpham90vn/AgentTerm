@@ -47,7 +47,7 @@ public final class AgentShellsMCP {
                     ? "Not in a session of AgentTerm: no tools."
                     : useShells
                         ? AgentShellsInstructions.useShells
-                        : "Open shells the user can see in AgentTerm, next to your session, and work in them. Use them for what keeps running or what the user should watch: an SSH session, a dev server, a REPL."
+                        : "Open shells the user can see in AgentTerm, next to your session, and work in them. Use them for what keeps running or what the user should watch: an SSH session, a dev server, a REPL. The shells agents open are shared: use one that is open and free, with list_shells, before opening another."
                     ,
             ])
         case "ping":
@@ -71,7 +71,10 @@ public final class AgentShellsMCP {
             "open_shell",
             "Opens a shell in a new AgentTerm tab, in your folder, that the user sees and can type in. With a command (`ssh build-server`, `npm run dev`) it runs that; without, a login shell. Starting an agent is refused.",
             ["command": string("The command to run; none for a plain login shell"), "title": string("The tab's name")], required: []),
-        tool("list_shells", "The shells you opened that still run, with their numbers.", [:], required: []),
+        tool(
+            "list_shells",
+            "The shells open in AgentTerm that agents opened, yours and other agents', with their numbers and folders. Use one that is free, in your folder, before opening another.",
+            [:], required: []),
         tool(
             "read_screen", "The shell's screen as text, with lines above it when asked.",
             ["session": integer("The shell's number"), "lines_above": integer("How many lines above the screen to include; 0 by default")],
@@ -89,7 +92,7 @@ public final class AgentShellsMCP {
                 "quiet_seconds": number("How long the screen must stay the same; 1 by default"), "timeout_seconds": number("At most this long; 30 by default"),
             ],
             required: ["session"]),
-        tool("close_shell", "Ends a shell you opened.", ["session": integer("The shell's number")], required: ["session"]),
+        tool("close_shell", "Ends a shell an agent opened, when no one needs it.", ["session": integer("The shell's number")], required: ["session"]),
     ]
 
     private static func tool(_ name: String, _ description: String, _ properties: [String: Any], required: [String]) -> [String: Any] {
@@ -164,8 +167,8 @@ public final class AgentShellsMCP {
         switch result {
         case .opened(let shell): return ("Opened shell \(shell.id), “\(shell.title)”, in \(shell.cwd).", false)
         case .shells(let list):
-            if list.isEmpty { return ("You have no shells open.", false) }
-            return (list.map { "\($0.id): \($0.title)" }.joined(separator: "\n"), false)
+            if list.isEmpty { return ("No agent has a shell open.", false) }
+            return (list.map { "\($0.id): \($0.title), in \($0.cwd)" }.joined(separator: "\n"), false)
         case .screen(let text): return (text, false)
         case .done: return ("Done.", false)
         case .refused(let why): return (why, true)

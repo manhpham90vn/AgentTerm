@@ -188,18 +188,22 @@ itself.
   whole user, by default, the first time it runs. Settings ("Agents can
   open shells you see", on the Mac and the iPhone) removes it from them,
   and puts it back.
-- Its tools: open a shell (with a command or without), list its shells,
+- Its tools: open a shell (with a command or without), list the shells,
   read a shell's screen, type into it (text and keys by name), wait until
   its screen is still or shows a text, close it.
-- An agent reaches only the shells it opened: never the user's sessions,
-  nor another agent's shells. It opens shells only, never another agent.
-- When the agent's session ends, the shells it opened stay, and are the
-  user's from then on.
+- The shells agents open are every agent's: an agent lists them, with
+  their folders, and uses one that is free rather than open one more, so
+  that each agent does not leave shells of its own behind. An agent never
+  reaches the user's own sessions, nor an agent's session. It opens shells
+  only, never another agent.
+- When the agent's session ends, the shells it opened stay, for the user
+  and for the other agents.
 - Outside a session of AgentTerm (an agent run in another terminal), the
   server offers no tools.
 - **Agents run their commands in shells you see**, on by default, next to
-  the switch above: each agent is asked to run its commands in a shell it
-  opens through the server, rather than in its own out of sight. Claude
+  the switch above: each agent is asked to run its commands in a shell of
+  the server, one already open if there is one free in its folder, rather
+  than in its own out of sight, and to leave it open for the next task. Claude
   Code is told so in its system prompt; the others through the server's
   instructions, which each agent takes in as it does (Copilot CLI only for
   servers it allows). An agent still decides for itself.

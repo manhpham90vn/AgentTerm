@@ -742,12 +742,14 @@ default) the variable ends with `use`: the server's instructions are then
 
 **What it may reach.** A shell it opens is a session like any other, in the
 agent's folder and at its size, with `SessionInfo.openedBy` naming the
-agent's session. Reading, typing and closing are done only on a session
-whose `openedBy` is the asking session: never the user's sessions, never
-another agent's shells. A command whose first word is an agent's is
+agent's session. Listing, reading, typing and closing are done on any
+session with an `openedBy`, whichever agent opened it, so that agents share
+their shells rather than each open its own; never on the user's sessions or
+an agent's session. Two agents typing into one shell at once is not
+prevented. A command whose first word is an agent's is
 refused. Typing is the same as typing: text, and keys by name turned into
 the bytes a terminal sends (`TerminalKeys`). When the agent's session ends,
-the server it started ends with it, and its shells stay.
+the server it started ends with it, and its shells stay, for the others.
 
 **Installed in the agents.** `AgentShellsInstall` runs each installed agent's
 own command, through the login shell: `claude mcp add --scope user

@@ -1949,18 +1949,21 @@ public final class HostServer {
     /// the MCP server the agent starts.
     public static let agentShellsVariable = "AGENTTERM_MCP"
 
-    /// Does what an agent asks of the shells it opened, as the session its
-    /// key names, and answers the client that asked.
+    /// Does what an agent asks of the shells agents opened, as the session
+    /// its key names, and answers the client that asked. Those shells are
+    /// every agent's, so that one agent uses a shell another opened rather
+    /// than open one more; the user's own sessions, and the agents', are
+    /// never reached.
     private func handleAgentShell(id: Int, key: String, request: AgentShellRequest, from client: Client) {
         func answer(_ result: AgentShellResult) { send(.agentShellResult(id: id, result: result), to: client) }
         guard !key.isEmpty, let owner = sessions.values.first(where: { $0.agentKey == key }) else {
             return answer(.refused("This is not the session of an agent AgentTerm started, or that session has ended."))
         }
-        /// A shell this agent opened and that still runs.
+        /// A shell an agent opened and that still runs.
         func own(_ session: SessionID) -> Session? {
-            sessions[session].flatMap { $0.info.openedBy == owner.info.id ? $0 : nil }
+            sessions[session].flatMap { $0.info.openedBy != nil ? $0 : nil }
         }
-        let notOwn = "That is not a shell this agent opened, or it has ended. Use list_shells."
+        let notOwn = "That is not a shell an agent opened, or it has ended. Use list_shells."
         switch request {
         case .open(let command, let title):
             // Shells only: one agent starting another spends an account
@@ -1975,7 +1978,7 @@ public final class HostServer {
             }
             answer(.opened(session.info))
         case .list:
-            answer(.shells(sessions.values.filter { $0.info.openedBy == owner.info.id }.map(\.info).sorted { $0.id < $1.id }))
+            answer(.shells(sessions.values.filter { $0.info.openedBy != nil }.map(\.info).sorted { $0.id < $1.id }))
         case .read(let session, let linesAbove):
             guard let shell = own(session) else { return answer(.refused(notOwn)) }
             answer(.screen(shell.mirror.text(linesAbove: min(linesAbove, configuration.screenLines))))

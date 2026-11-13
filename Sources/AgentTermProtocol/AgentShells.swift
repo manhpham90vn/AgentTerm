@@ -51,5 +51,5 @@ public enum TerminalKeys {
 /// Code's system prompt.
 public enum AgentShellsInstructions {
     public static let useShells =
-        "You run inside AgentTerm, where the user watches what you do. Run shell commands in a shell you open with the agentterm MCP server's open_shell tool rather than with your own command tool: open one at the start of the task, type each command with send_input and the Return key, wait for it with wait, and read the result with read_screen. Keep using the same shell; open another only for something that keeps running, such as a dev server. Close the shells you no longer need when the task is done."
+        "You run inside AgentTerm, where the user watches what you do. Run shell commands in a shell of the agentterm MCP server rather than with your own command tool. The shells agents open there are shared, so first look with list_shells for one in your folder that is not running anything, and use it; open one with open_shell only when there is none. Type each command with send_input and the Return key, wait for it with wait, and read the result with read_screen. Keep using the same shell; open another only for something that keeps running, such as a dev server. Leave a shell open for the next task rather than close it, unless it runs something that should end."
 }

@@ -46,7 +46,7 @@ final class AgentShellsMCPTests: XCTestCase {
             }, version: "test")
         XCTAssertEqual(((call(server, "tools/list")["result"] as? [String: Any])?["tools"] as? [[String: Any]])?.count, 6)
         XCTAssertEqual(tool(server, "open_shell", ["command": "ssh build-server", "title": "build"]).text, "Opened shell 7, “ssh”, in /p.")
-        XCTAssertEqual(tool(server, "list_shells").text, "7: ssh")
+        XCTAssertEqual(tool(server, "list_shells").text, "7: ssh, in /p")
         XCTAssertEqual(tool(server, "read_screen", ["session": 7, "lines_above": 20]).text, "$ ls\nREADME.md")
         XCTAssertFalse(tool(server, "send_input", ["session": 7, "text": "ls", "keys": ["Return"]]).failed)
         XCTAssertTrue(tool(server, "close_shell", ["session": 8]).failed)
@@ -321,7 +321,7 @@ final class AgentShellsHostTests: XCTestCase {
         return (Agent(input: try FileHandle(forWritingTo: pipe), output: output), id)
     }
 
-    func testAnAgentOpensAShellTheUserSeesAndReachesOnlyItsOwn() throws {
+    func testAnAgentOpensAShellTheUserSeesThatEveryAgentShares() throws {
         let mac = Client(port: port, token: token)
         waitUntil("connected") { !mac.messages.isEmpty }
         let (first, firstID) = try startAgent("claude", title: "first", client: mac)
@@ -337,7 +337,7 @@ final class AgentShellsHostTests: XCTestCase {
         let shell = try XCTUnwrap(mac.sessions.first { $0.title == "echo" })
         XCTAssertEqual(shell.openedBy, firstID)
         XCTAssertEqual(shell.cwd, root.appendingPathComponent("first").path)
-        XCTAssertEqual(first.tool("list_shells", in: self).text, "\(shell.id): echo")
+        XCTAssertEqual(first.tool("list_shells", in: self).text, "\(shell.id): echo, in \(shell.cwd)")
 
         // What it types reaches the program; the screen it reads shows it.
         XCTAssertFalse(first.tool("send_input", ["session": shell.id, "text": "hello", "keys": ["Return"]], in: self).failed)
@@ -345,12 +345,15 @@ final class AgentShellsHostTests: XCTestCase {
         XCTAssertTrue(waited.text.hasPrefix("“hello” is on the screen"), waited.text)
         XCTAssertTrue(first.tool("read_screen", ["session": shell.id], in: self).text.contains("hello"))
 
-        // MCP-6: never the user's session or another agent's shell.
+        // MCP-6: never the user's session, nor an agent's own.
         XCTAssertTrue(first.tool("read_screen", ["session": mine], in: self).failed)
         XCTAssertTrue(first.tool("send_input", ["session": mine, "text": "rm -rf ~"], in: self).failed)
-        XCTAssertTrue(second.tool("read_screen", ["session": shell.id], in: self).failed)
-        XCTAssertTrue(second.tool("close_shell", ["session": shell.id], in: self).failed)
-        XCTAssertEqual(second.tool("list_shells", in: self).text, "You have no shells open.")
+        XCTAssertTrue(second.tool("read_screen", ["session": firstID], in: self).failed)
+        // But the shells agents opened are every agent's: the second uses
+        // the first's rather than open one of its own.
+        XCTAssertEqual(second.tool("list_shells", in: self).text, "\(shell.id): echo, in \(shell.cwd)")
+        XCTAssertFalse(second.tool("send_input", ["session": shell.id, "text": "again", "keys": ["Return"]], in: self).failed)
+        XCTAssertTrue(second.tool("wait", ["session": shell.id, "until_text": "again", "timeout_seconds": 10], in: self).text.hasPrefix("“again”"))
 
         // MCP-7: starting an agent is refused.
         let agent = first.tool("open_shell", ["command": "claude --resume x"], in: self)
@@ -363,13 +366,12 @@ final class AgentShellsHostTests: XCTestCase {
         XCTAssertTrue(mac.sessions.contains { $0.id == shell.id }, "its shell stays")
         // Its MCP server ended with it, as an agent's does.
 
-        // Closed by the agent that opened it.
+        // The others still use it, and any of them closes it.
         let (third, _) = try startAgent("copilot", title: "third", client: mac)
-        let other = third.tool("open_shell", in: self)
-        XCTAssertFalse(other.failed, other.text)
-        let otherID = try XCTUnwrap(mac.sessions.first { $0.openedBy != nil && $0.id != shell.id }?.id)
-        XCTAssertFalse(third.tool("close_shell", ["session": otherID], in: self).failed)
-        waitUntil("the shell to be closed", timeout: 15) { !mac.sessions.contains { $0.id == otherID } }
+        XCTAssertTrue(third.tool("list_shells", in: self).text.contains("\(shell.id): echo"))
+        XCTAssertFalse(second.tool("close_shell", ["session": shell.id], in: self).failed)
+        waitUntil("the shell to be closed", timeout: 15) { !mac.sessions.contains { $0.id == shell.id } }
+        XCTAssertEqual(third.tool("list_shells", in: self).text, "No agent has a shell open.")
     }
 }
 
