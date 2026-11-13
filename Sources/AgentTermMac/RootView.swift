@@ -48,15 +48,14 @@ struct RootView: View {
                 }
                 .help(model.showSidebar ? "Hide the folder list" : "Show the folder list")
             }
-            // Next to it: which Mac all of the window is about.
-            ToolbarItem(placement: .navigation) {
-                HStack(spacing: 0) { MacSwitcher() }
-            }
-            // Middle: starting an agent is the main thing to do here, and
-            // pairing an iPhone or another Mac is what sets the app apart,
-            // so it sits with them and stands out.
+            // Middle: which Mac all of the window is about, then starting an
+            // agent on it, the main thing to do here. Pairing an iPhone or
+            // another Mac is what sets the app apart, so it sits with them
+            // and stands out.
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 10) {
+                    MacSwitcher()
+                    Theme.hairline.frame(width: 1, height: 16)
                     LaunchBar()
                     // Pairing a device is done on the Mac it is paired with.
                     if !model.isRemote {

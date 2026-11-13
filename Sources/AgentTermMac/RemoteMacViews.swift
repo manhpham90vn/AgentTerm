@@ -7,10 +7,12 @@ import SwiftUI
 struct MacSwitcher: View {
     @EnvironmentObject private var model: AppModel
     @State private var forgetting: RemoteMac?
+    @State private var hovering = false
 
-    /// Blue for this Mac, orange while another one is on screen.
+    /// The blue of the pairing button for this Mac, orange while another
+    /// one is on screen.
     private var tint: Color {
-        model.isRemote ? Color(red: 0.98, green: 0.62, blue: 0.22) : Color(red: 0.42, green: 0.62, blue: 1)
+        model.isRemote ? Color(red: 0.90, green: 0.50, blue: 0.12) : Color(red: 0.33, green: 0.52, blue: 0.96)
     }
 
     var body: some View {
@@ -42,30 +44,27 @@ struct MacSwitcher: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: model.isRemote ? "macbook" : "desktopcomputer")
-                    .font(.system(size: 12.5, weight: .bold))
-                    .foregroundStyle(tint)
+                    .font(.system(size: 11, weight: .bold))
                 Text(model.remote?.name ?? "This Mac")
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
                 Image(systemName: "chevron.up.chevron.down")
                     .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(.secondary)
+                    .opacity(0.75)
             }
-            .padding(.horizontal, 10)
+            .foregroundStyle(.white)
+            .padding(.horizontal, 11)
             .padding(.vertical, 5)
-            // A filled shape of its own, so it reads as the place that says
-            // which Mac this is rather than as one more toolbar button. On
+            // Filled, as the pairing button is: it says which Mac this is
+            // rather than being one more button to start something. On
             // another Mac it takes that Mac's color, which is hard to miss.
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(tint.opacity(model.isRemote ? 0.26 : 0.18))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .strokeBorder(tint.opacity(model.isRemote ? 0.75 : 0.4), lineWidth: 1)
+                    .fill(tint.opacity(hovering ? 1 : 0.88))
             )
             .contentShape(Rectangle())
         }
+        .onHover { hovering = $0 }
         // A plain button: the toolbar draws any other menu its own way,
         // with a gray icon and without the shape around it.
         .menuStyle(.button)
