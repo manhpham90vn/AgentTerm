@@ -3,8 +3,16 @@ name: CodeQL
 # Static analysis of this repository's code, in place of GitHub's "default
 # setup". That one builds everything while it watches the compiler, the
 # dependencies too, which takes a quarter of an hour or more for every push.
-# Here the dependencies are built first, unwatched and from a cache, and
-# only this repository's own code is compiled again under CodeQL.
+#
+# Here what was built is kept from one run to the next. CodeQL only looks
+# at what is compiled while it watches, and only this repository's own
+# sources are newer than what was kept: so the dependencies are neither
+# built again nor looked at, and a run compiles this repository's code only.
+#
+# Building the dependencies first without CodeQL does not help: under its
+# tracer the compiler is a copy in another place, and SwiftPM takes nothing
+# built by the real one as up to date. What is kept has to come from a
+# build that was watched.
 #
 # A trial: it runs for pushes to this branch only and uploads nothing, so
 # it can run next to the default setup until it is known to work.
@@ -29,7 +37,7 @@ jobs:
     # Xcode 27, SwiftPM could not start the package manifest under CodeQL's
     # tracer ("Bad CPU type in executable").
     runs-on: macos-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
 
@@ -40,16 +48,18 @@ jobs:
           swift --version
           uname -m
 
-      - name: Restore what was built of the dependencies
-        uses: actions/cache@v4
+      # The build folder of the last watched build, and what SwiftPM
+      # remembers of the packages' manifests, which it otherwise works out
+      # again one by one.
+      - name: Restore what the last watched build left
+        id: kept
+        uses: actions/cache/restore@v4
         with:
-          path: .build
-          key: codeql-spm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.resolved') }}
-
-      # Unwatched: the dependencies are other projects' code, and compiling
-      # them under the tracer is what takes the time.
-      - name: Build everything once, unwatched
-        run: swift build
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/org.swift.swiftpm
+          key: codeql-watched-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.resolved') }}
 
       - uses: github/codeql-action/init@v4
         with:
@@ -57,12 +67,28 @@ jobs:
           build-mode: manual
           config-file: .github/codeql/codeql-config.yml
 
-      # Only this repository's sources are newer than what was built, so
-      # only they are compiled again, this time with CodeQL watching.
-      - name: Build this repository's code again, watched
+      # With nothing kept, this builds everything, once. With the build
+      # folder restored, only this repository's sources are newer than
+      # what is in it.
+      - name: Build, watched
         run: |
           find Sources -type f \( -name '*.swift' -o -name '*.c' -o -name '*.h' \) -exec touch {} +
-          swift build
+          date
+          swift build 2>&1 | tee "$RUNNER_TEMP/build.log" | grep -E "Compiling|Build complete|error|warning: unre" | awk 'NR % 25 == 1'
+          date
+          echo "Compiled, by module:"
+          grep -oE "(Compiling|Emitting module) [A-Za-z0-9_+-]+" "$RUNNER_TEMP/build.log" | awk '{print $NF}' | sort | uniq -c | sort -rn | head -40
+
+      # Kept also when the analysis fails: the build is what took the time.
+      - name: Keep what was built
+        if: always() && steps.kept.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            .build
+            ~/Library/Caches/org.swift.swiftpm
+            ~/Library/org.swift.swiftpm
+          key: codeql-watched-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.resolved') }}
 
       - uses: github/codeql-action/analyze@v4
         with:
