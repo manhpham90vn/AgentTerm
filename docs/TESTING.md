@@ -50,13 +50,18 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | SES-4 | Two sessions running, one with a line typed and not sent | Quit the Mac app and open it again | Both sessions are listed again, under the same ids, with what was typed still at the prompt | M |
 | SES-5 | A session open on the iPhone | The connection drops and comes back | The app reconnects by itself and is back in that session | H (the host side), hand (the app) |
 | SES-6 | A session started on one device | A second device attaches to it | The second device gets the same output; a session started on the Mac is listed on the iPhone, and one started on the iPhone on the Mac | H, M, X |
-| SES-7 | A session that wrote more than 4 MB | A client attaches | The last 4 MB arrive whole, in pieces, starting at the beginning of a line, ending with the newest output | H |
+| SES-7 | A session that wrote 20,000 lines | A client attaches | The screen and the 10,000 newest lines above it arrive whole, in pieces, with no line lost or torn, ending where the session is now | H |
 | SES-8 | A client that was attached and got N bytes | It attaches again naming how far it is | Only what the session wrote since is sent; a place that is not this session's gets all of it again, and is told so | H |
 | SES-9 | A link that carries 100 KB a second; a link that carries nothing | A replay of 300 KB is sent; nothing is sent | The slow connection stays open and gets all of it; the silent one is closed as lost | H |
 | SES-10 | A session in front on the Mac; a session open on the iPhone | Choose End Session | The app asks first, nothing ends before the answer, and after it the session is gone from every device | P, M |
 | SES-11 | A client that is not attached to a session | It sends input for that session | The input does not reach the program | H |
 | SES-12 | Text written for a session and not sent | Leave the terminal, or close the app, and come back | iPhone: the text is in the message field again. Mac: it is still at the program's prompt | P; M as far as the host goes: the session is there and replays what was typed. What the Mac's terminal draws cannot be read through accessibility |
 | SES-13 | A replay holding a question the program once asked its terminal | The replay is fed slowly, longer than five seconds in all | The emulator's answer does not reach the program; a question asked after the replay is answered | H |
+| SES-14 | A full screen program on the other screen, with the cursor hidden, the mouse and pastes reported | A client attaches | Its emulator shows the same screen, cursor and modes without the program drawing again; when the program ends both are back at the shell's screen | H |
+| SES-15 | Output drawn for 80 columns, then a session resized to 40 | A client attaches | The lines are laid out for 40 columns, as in the session's own terminal | H |
+| SES-16 | Output that stops in the middle of a color sequence, a character of three bytes, or a title | A client attaches at that moment, and the rest is written | The client shows what the session's own terminal shows: nothing of the sequence appears as text | H |
+| SES-17 | A program that asked where the cursor is and which terminal this is | A client attaches | Nothing in what it is sent makes its emulator answer | H |
+| SES-18 | An emulator that already holds other text and is on the other screen | It is sent a session's screen | It is left as the session is, with nothing of before | H |
 
 ### Session names and usage
 
