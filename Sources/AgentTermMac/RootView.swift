@@ -14,6 +14,25 @@ struct RootView: View {
         return "End \(count) \(count == 1 ? "session" : "sessions") and close \(kept ? "every other tab" : "every tab")?"
     }
 
+    // The questions are worked out here rather than where they are asked:
+    // inside the long chain of the window's sheets and dialogs each of them
+    // is one more thing the compiler has to work out at once, and on a slow
+    // machine it gives up.
+    private var saveQuestion: String {
+        let name = files.pendingClose.map { ($0 as NSString).lastPathComponent } ?? ""
+        return "Save changes to \"\(name)\"?"
+    }
+
+    private var endQuestion: String {
+        let name = model.pendingEnd?.displayName ?? "this session"
+        return "End \(name)?"
+    }
+
+    private var pushQuestion: String {
+        guard let push = model.pendingFirstPush else { return "" }
+        return "Push “\(push.branch)” to \(push.remote)?"
+    }
+
     var body: some View {
         HSplitView {
             if model.showSidebar {
@@ -90,7 +109,7 @@ struct RootView: View {
             BrowseFoldersSheet()
         }
         .confirmationDialog(
-            "Save changes to \"\((files.pendingClose as NSString?)?.lastPathComponent ?? "")\"?",
+            saveQuestion,
             isPresented: Binding(get: { files.pendingClose != nil }, set: { if !$0 { files.pendingClose = nil } }),
             titleVisibility: .visible, presenting: files.pendingClose
         ) { path in
@@ -99,7 +118,7 @@ struct RootView: View {
             Button("Cancel", role: .cancel) {}
         }
         .confirmationDialog(
-            "End \(model.pendingEnd?.displayName ?? "this session")?",
+            endQuestion,
             isPresented: Binding(get: { model.pendingEnd != nil }, set: { if !$0 { model.pendingEnd = nil } }),
             titleVisibility: .visible, presenting: model.pendingEnd
         ) { session in
@@ -119,7 +138,7 @@ struct RootView: View {
             Text("What is running in the terminals stops. Files with unsaved changes stay open.")
         }
         .confirmationDialog(
-            model.pendingFirstPush.map { "Push “\($0.branch)” to \($0.remote)?" } ?? "",
+            pushQuestion,
             isPresented: Binding(get: { model.pendingFirstPush != nil }, set: { if !$0 { model.pendingFirstPush = nil } }),
             titleVisibility: .visible, presenting: model.pendingFirstPush
         ) { push in
