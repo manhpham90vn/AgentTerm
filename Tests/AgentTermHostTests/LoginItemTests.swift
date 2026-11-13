@@ -55,6 +55,7 @@ final class LoginItemTests: XCTestCase {
         return file.path
     }
 
+    /// LOGIN-4.
     func testAnAppThatMovedIsStartedFromWhereItIsNow() throws {
         // Where the app was when the switch was turned on: nothing is there now.
         try item(executable: folder.appendingPathComponent("Old/agenttermd").path).turnOn()
@@ -68,6 +69,7 @@ final class LoginItemTests: XCTestCase {
         XCTAssertFalse(moved.isOn)
     }
 
+    /// LOGIN-5.
     func testAnotherHostThatIsRunDoesNotTakeTheLoginItem() throws {
         let installed = item(executable: try program("Installed/agenttermd"))
         try installed.turnOn()

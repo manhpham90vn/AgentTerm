@@ -211,6 +211,7 @@ final class ScreenMirrorTests: XCTestCase {
         XCTAssertFalse(written.contains("\(escape)]"), "the snapshot sets colors or a title: \(written.debugDescription)")
     }
 
+    /// SES-19.
     func testAStringCutShortByAnotherSequenceIsOver() {
         // A program killed in the middle of a title: the emulator takes the
         // escape that follows as the start of something new.
@@ -230,6 +231,7 @@ final class ScreenMirrorTests: XCTestCase {
         assertSame(attach(to: cut), second)
     }
 
+    /// SES-20.
     func testAnImageTooLongToKeepIsNotDrawnAsText() {
         // More than is kept of one sequence, with a client attaching in
         // the middle of it: it misses the image, and draws none of it.
@@ -248,6 +250,7 @@ final class ScreenMirrorTests: XCTestCase {
         XCTAssertEqual(text(of: client).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }, ["before", "after"])
     }
 
+    /// SES-21, for the second half.
     func testManyLinesAreWrittenOutQuickly() {
         let mirror = ScreenMirror(size: TermSize(cols: 120, rows: 40), scrollback: 10_000)
         var piece = ""

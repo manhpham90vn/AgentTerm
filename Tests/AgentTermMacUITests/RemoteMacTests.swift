@@ -172,6 +172,7 @@ final class RemoteMacTests: MacUITestCase {
         return !found.isEmpty
     }
 
+    /// REMOTE-14.
     func testACommitTheOtherMacRefusesLateKeepsItsMessage() throws {
         try startOtherMac()
         // A hook that takes longer than the changes are read again, then says no.
@@ -189,6 +190,7 @@ final class RemoteMacTests: MacUITestCase {
         XCTAssertEqual(app.value(of: .text("Commit message")), "fix: a message worth keeping", "the message of a commit that failed is gone")
     }
 
+    /// REMOTE-15.
     func testAFileTheOtherMacCannotWriteKeepsItsChanges() throws {
         try startOtherMac()
         pair()
@@ -214,6 +216,7 @@ final class RemoteMacTests: MacUITestCase {
         app.wait(for: .containing("Save or discard the changes"))
     }
 
+    /// REMOTE-16.
     func testThisMacsTabsAreNotArrangedOnTheOtherMac() throws {
         try startOtherMac()
         let phone = try device()
@@ -236,6 +239,7 @@ final class RemoteMacTests: MacUITestCase {
         XCTAssertEqual(phone.tabLayout?.order, [own.layoutID])
     }
 
+    /// REMOTE-17.
     func testTheMacOnScreenIsNotForgottenOverUnsavedChanges() throws {
         try startOtherMac()
         pair()
@@ -257,6 +261,7 @@ final class RemoteMacTests: MacUITestCase {
         app.wait(for: .button("Other Mac"), menus: true)
     }
 
+    /// REMOTE-18.
     func testOpeningOnTheOtherMacStillStartsThisMacsHost() throws {
         try startOtherMac()
         pair()

@@ -88,6 +88,7 @@ final class SlowLinkTests: XCTestCase {
         XCTAssertTrue(condition(), "timed out waiting for: \(what)")
     }
 
+    /// SES-22.
     func testWhatIsSentBeforeTheConnectionIsUpWaitsForTheGreeting() {
         // An app asks for things on a timer, also while it is connecting
         // again. The host closes a client whose first word is not its hello.

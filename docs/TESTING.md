@@ -34,6 +34,117 @@ and stand-in agents (small scripts) instead of the installed ones: the
 installed app, its sessions, its paired devices and the user's accounts are
 never touched.
 
+## Running them
+
+Everything is run from the root of the repository. Each script builds what
+it needs first, prints one line per test, and on a failure says where the
+full log is.
+
+| To check | Run | Takes about |
+|---|---|---|
+| The host, the protocol and the shared code | `swift test` | 2 minutes |
+| The Mac app | `scripts/test-mac.sh` | 5 minutes |
+| The iPhone app | `scripts/test-ios.sh "iPhone Air"` | 10 minutes |
+| The iPhone app on its side | `LANDSCAPE=only scripts/test-ios.sh "iPhone Air"` | a few minutes |
+| Both apps on one host | `scripts/test-both.sh "iPhone Air"` | 5 minutes |
+
+Before a release all of them are run, in that order: the first is the
+quickest to say that something is broken, the last needs everything else
+to work.
+
+What they need, once:
+
+- For M and X: the terminal they are run from, or the app a coding agent
+  runs in, allowed under System Settings > Privacy & Security >
+  Accessibility. Without it the Mac tests are skipped, not failed: a run
+  that says "Executed 0 tests" or lists them as skipped checked nothing.
+- For P, L and X: Xcode with an iPhone simulator, and `brew install
+  xcodegen`. Name the simulator: the test resets its keychain, so it should
+  not be the one an app you use is paired in. `scripts/test-ios.sh --list`
+  shows the simulators.
+
+One test, or a few:
+
+```sh
+swift test --filter OutputTrackerTests                    # a class
+swift test --filter "ScreenMirrorTests|LoginItemTests"    # several
+swift test --filter testAStringEndsWhereAnotherSequenceBegins
+scripts/test-mac.sh RemoteMacTests                        # a class of the Mac app's
+scripts/test-mac.sh "RemoteMacTests/testACommit"          # tests whose name starts so
+scripts/test-mac.sh "RemoteMacTests/test(ACommit|AFile)"  # a pattern, as --filter takes
+```
+
+When a Mac test fails, its message ends with everything that was on screen
+at that moment, element by element: most often that says what went wrong.
+For a picture of the window as well:
+
+```sh
+SHOTS=/tmp/shots scripts/test-mac.sh RemoteMacTests               # of each test that fails
+SHOTS=/tmp/shots ALL_SHOTS=1 scripts/test-mac.sh RemoteMacTests   # of every test, at its end
+```
+
+`ALL_SHOTS=1` is also the way to look at a change to the window without
+opening the app: run a test that ends where the change shows, and look at
+its picture. The iPhone scripts take `SHOTS` the same way.
+
+### The pictures
+
+The pictures of both apps, in the README, on the product page and in the
+App Store, are taken the same way the apps are tested, by
+`scripts/screenshots.sh`:
+
+```sh
+KEEP=/tmp/pictures scripts/screenshots.sh   # take them there, to look at first
+scripts/screenshots.sh                      # put them where the pages take them from
+ONLY=mac scripts/screenshots.sh             # only the Mac's three
+ONLY=ios scripts/screenshots.sh             # only the iPhone's six
+```
+
+It builds the app into a folder of its own, starts a host with a demo
+project, a second folder and stand-in agents (`scripts/demo-agent.py`,
+which draws an agent's screen and reports usage without any account),
+then runs `ScreenshotTests` of the Mac app and of the iPhone app. What a
+picture shows is decided there: the demo project in the script, what the
+agent says in `demo-agent.py`, where each picture is taken in the two
+`ScreenshotTests`. They are taken again whenever a release changes what
+they show, and looked at before they are committed. The iPhone's are
+taken on the iPhone Air, whose screen is the size the App Store asks for.
+
+### Where a new test goes
+
+| What is tested | Where | Start from |
+|---|---|---|
+| What the host answers, what a client is sent | `Tests/AgentTermHostTests/EndToEndTests.swift` | a test there that connects a client |
+| What a client is sent on attach | `Tests/AgentTermHostTests/ScreenMirrorTests.swift` | `session(_:)` and `attach(to:)`, which give the session's own terminal and a client's to compare |
+| The connection itself | `Tests/AgentTermHostTests/SlowLinkTests.swift` | a host on a port of its own and a real `AgentTermConnection` |
+| The Mac app | a class under `Tests/AgentTermMacUITests` | `MacUITestCase`: `app.press`, `app.write`, `app.menu`, `app.wait(for:)`, and `device()` for a second device |
+| The Mac app on another Mac | `RemoteMacTests` | `startOtherMac()` and `pair()` |
+| The iPhone app | `iOS/AgentTermUITests` | the test `scripts/test-ios.sh` runs |
+
+A Mac test finds an element by what VoiceOver would say of it:
+`.button("Stage notes.txt")`, `.text("Commit message")`,
+`.containing("the hook says no")`, `.id("mac-switcher")`. An element that
+cannot be found that way has no name for VoiceOver either, which is worth
+fixing in the app rather than working around in the test.
+
+### A bug, before it is fixed
+
+A bug that can be shown is shown first: a test that fails because of it,
+run and seen to fail, then the fix, then the same test passing. The test
+stays. What makes each kind of bug show:
+
+- Something that depends on timing: make the slow thing slow. A git hook
+  that sleeps (REMOTE-14), a link that carries little (`SlowProxy`,
+  SES-9), output cut where the bug needs it cut (SES-16, SES-19).
+- Something that fails on the other side: make it fail there. A folder
+  nothing can be written in (REMOTE-15), a host that is stopped
+  (REMOTE-18), a device that is removed (REMOTE-8).
+- Something one device does to another: a second client on the same host
+  (`device()`), which also remembers everything the host told it
+  (REMOTE-16).
+- Something slow: time it in the test and compare with itself, not with
+  a number of seconds that holds on one machine only (SES-21).
+
 ## Cases
 
 "The fixture project" is a git repository with a remote, one commit, and
@@ -62,6 +173,10 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | SES-16 | Output that stops in the middle of a color sequence, a character of three bytes, or a title | A client attaches at that moment, and the rest is written | The client shows what the session's own terminal shows: nothing of the sequence appears as text | H |
 | SES-17 | A program that asked where the cursor is and which terminal this is | A client attaches | Nothing in what it is sent makes its emulator answer | H |
 | SES-18 | An emulator that already holds other text and is on the other screen | It is sent a session's screen | It is left as the session is, with nothing of before | H |
+| SES-19 | A title that never ends: its program was killed, or the output is binary; then colored text | A client attaches, also right after the escape that cut the title short | The client shows what the session's own terminal shows, once, in its colors | H |
+| SES-20 | An image of 1.5 MB being written, more than is kept of one sequence | A client attaches in the middle of it, and the rest is written | The client is sent a few kilobytes, misses the image and draws none of it as text; what follows the image shows | H |
+| SES-21 | A session with 10,000 lines that says nothing meanwhile | Ten clients attach one after the other | The screen is written out once: the ten take less time together than the first did. After more output it is written out anew | H |
+| SES-22 | A client that is still connecting | It is asked to send something | That waits and follows the greeting; the host answers it instead of closing a client whose first word was not its hello | H |
 
 ### Session names and usage
 
@@ -165,6 +280,8 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | LOGIN-1 | A host that can be started at login | A client switches Start at Login on, then off | A launch agent naming this host's program is written, then removed; every client is told | H |
 | LOGIN-2 | A host with a state folder of its own | Connect | No client shows the switch | H |
 | LOGIN-3 | Start at Login on | Log out and in again | The host is running without the app having been opened | hand |
+| LOGIN-4 | Start at Login on, and the app moved since: the program the launch agent names is gone | The host starts from where the app is now | The launch agent names this host's program | H |
+| LOGIN-5 | Start at Login on for the installed app | Another copy's host starts, or the same program is started by hand with other arguments | The launch agent is left as it was | H |
 
 ### Menu bar, permissions, another copy's host
 
@@ -219,6 +336,11 @@ A second host stands in for the other Mac, with a project of its own.
 | REMOTE-11 | A file staged on the other Mac, a stand-in agent there | Press Write, then Commit | The other Mac's agent writes the message into the field, and its git has the commit | M |
 | REMOTE-12 | That commit, which the other Mac's remote does not have | Press Push | The other Mac's remote has the commit | M |
 | REMOTE-13 | A conversation an agent had on the other Mac | Choose Hand Off on it, press Hand Off | The prompt comes from the other Mac's host; the receiving agent starts there and the handoff file is on its disk | M |
+| REMOTE-14 | A file staged on the other Mac, whose git has a hook that takes six seconds and then refuses | Write a message, press Commit | What the hook said is shown, and the message is still in the field | M |
+| REMOTE-15 | A file of the other Mac open, in a folder nothing can be written in | Change it, save, press Refresh in the Files tab | It is said that the file could not be saved; the changes are still in the editor, still count as not saved, and the other Mac's disk is as it was | M |
+| REMOTE-16 | A session on this Mac, so its host has a tab to arrange | Pair with the other Mac, start a session there, come back | The other Mac's host was never told of this Mac's tab, and this Mac's arrangement is as it was | M |
+| REMOTE-17 | A file of the other Mac open with unsaved changes | Choose Forget for the Mac on screen, confirm | Refused, with a message to save or discard first; the other Mac stays on screen and in the menu | M |
+| REMOTE-18 | The app last on the other Mac, and this Mac's host not running, as after a restart | Open the app | It comes back to the other Mac, and this Mac's host is started all the same | M |
 
 ### iPhone only
 
@@ -262,6 +384,30 @@ what the layers are good for:
   menu holds (End Session, Close Other Tabs, Hand Off, Rename, Move to
   Trash) was only in a menu that opens under the pointer (TAB-1, TAB-4,
   FILE-2, FILE-3, GIT-4, HIST-3, HAND-6).
+
+The review of 0.5.0 found these by reading the code. Each was then shown by
+a test that failed, and fixed:
+
+- A commit on another Mac that a slow hook refused lost its message: the
+  changes read again meanwhile were taken for the commit's answer
+  (REMOTE-14).
+- A file on another Mac that could not be saved counted as saved, and the
+  next look at the files put the old text over the changes (REMOTE-15).
+- Opening the app on another Mac did not start this Mac's host
+  (REMOTE-18).
+- This Mac's arrangement of tabs was sent to a host that had none
+  (REMOTE-16).
+- Forgetting the Mac on screen with unsaved changes left it on screen and
+  out of the menu (REMOTE-17).
+- A title that was never ended had everything after it sent twice to a
+  client that attached (SES-19), and an image too long to keep was sent in
+  part and drawn as text (SES-20).
+- A host started in another way, or another copy's, rewrote the launch
+  agent (LOGIN-5).
+- What an app sent while connecting again arrived before its hello, and
+  the host closed the connection (SES-22).
+- Each attach wrote out the whole screen again, most of a second for a
+  long session, on the queue all of the host's work goes through (SES-21).
 
 ## What stays by hand
 
