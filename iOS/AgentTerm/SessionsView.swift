@@ -552,9 +552,17 @@ private struct SessionRow: View {
             }
             // The conversation's title once the agent has saved one, the
             // agent's name until then.
-            Text(session.displayName)
-                .font(.body)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(session.displayName)
+                    .font(.body)
+                    .lineLimit(1)
+                if let branch = session.branch {
+                    Label(branch, systemImage: "arrow.triangle.branch")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
             Spacer(minLength: 8)
             if session.schedule != nil {
                 Image(systemName: "calendar.badge.clock")

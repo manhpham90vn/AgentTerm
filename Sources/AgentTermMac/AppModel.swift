@@ -31,8 +31,36 @@ final class AppModel: ObservableObject {
     @Published private(set) var sessions: [SessionInfo] = []
     @Published private(set) var agents: [AgentInfo] = []
     @Published private(set) var agentsLoaded = false
-    @Published var selectedFolder: String? { didSet { if selectedFolder != oldValue { folderChanged() } } }
-    @Published var selectedSession: SessionID?
+    @Published var selectedFolder: String? {
+        didSet {
+            guard selectedFolder != oldValue else { return }
+            // Another folder: its own worktree, unless a session says otherwise.
+            if let shownWorktree, let selectedFolder, WorktreePath.belongs(shownWorktree, to: selectedFolder) == false || shownWorktree == selectedFolder {
+                self.shownWorktree = nil
+            } else if selectedFolder == nil {
+                shownWorktree = nil
+            }
+            folderChanged()
+        }
+    }
+    /// The worktree of the selected folder the side panel shows (#23, #33),
+    /// nil for the folder itself.
+    @Published var shownWorktree: String? { didSet { if shownWorktree != oldValue { folderChanged() } } }
+    /// What the side panel shows: the worktree picked, or the folder.
+    var panelFolder: String? { shownWorktree ?? selectedFolder }
+    @Published var selectedSession: SessionID? {
+        // The side panel shows the worktree of the session in front, however
+        // it came to be selected (#23).
+        didSet {
+            guard selectedSession != oldValue, let session = sessions.first(where: { $0.id == selectedSession }) else { return }
+            if let project = WorktreePath.project(of: session.cwd), folders.contains(where: { $0.path == project }) {
+                if selectedFolder != project { selectedFolder = project }
+                shownWorktree = session.cwd
+            } else if folders.contains(where: { $0.path == session.cwd }) {
+                shownWorktree = nil
+            }
+        }
+    }
     /// Sessions currently sized by another device, with that device's grid.
     @Published private(set) var foreignSizes: [SessionID: TermSize] = [:]
     @Published private(set) var diff: DiffSnapshot?
@@ -178,6 +206,18 @@ final class AppModel: ObservableObject {
     /// The schedules of the Mac on screen (#11), as its host keeps them.
     @Published private(set) var schedules: [Schedule] = []
 
+    /// Each folder's git worktrees (#23, #33), as its host lists them.
+    @Published private(set) var worktrees: [String: [WorktreeInfo]] = [:]
+    @Published private(set) var worktreeSetups: [String: String] = [:]
+    /// What became of the last worktree that was finished.
+    @Published var worktreeSaid: String?
+
+    func listWorktrees(_ folder: String) { connection?.send(.listWorktrees(folder: folder)) }
+    func finishWorktree(_ worktree: WorktreeInfo, of folder: String, _ finish: WorktreeFinish, deleteBranch: Bool) {
+        connection?.send(.finishWorktree(folder: folder, path: worktree.path, finish: finish, deleteBranch: deleteBranch))
+    }
+    func setWorktreeSetup(_ command: String?, for folder: String) { connection?.send(.setWorktreeSetup(folder: folder, command: command)) }
+
     func save(_ schedule: Schedule) { connection?.send(.saveSchedule(schedule)) }
     func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
 
@@ -277,13 +317,13 @@ final class AppModel: ObservableObject {
     /// Asks an agent for the message of what is staged in the selected
     /// folder. The host runs it; the answer lands in the message field.
     func writeCommitMessage() {
-        guard let directory = selectedFolder, status == .connected, !writingCommitMessage.contains(directory) else { return }
+        guard let directory = panelFolder, status == .connected, !writingCommitMessage.contains(directory) else { return }
         writingCommitMessage.insert(directory)
         connection?.send(.writeCommitMessage(path: directory))
     }
 
     func cancelCommitMessage() {
-        guard let directory = selectedFolder, writingCommitMessage.contains(directory) else { return }
+        guard let directory = panelFolder, writingCommitMessage.contains(directory) else { return }
         connection?.send(.cancelCommitMessage(path: directory))
     }
 
@@ -329,7 +369,7 @@ final class AppModel: ObservableObject {
     /// Pushes the selected folder's branch. A branch that follows nothing
     /// yet is asked about first, saying where it would go.
     func push() {
-        guard let directory = selectedFolder, let diff, let branch = diff.branch else { return }
+        guard let directory = panelFolder, let diff, let branch = diff.branch else { return }
         if diff.upstream == nil, let remote = diff.pushRemote {
             pendingFirstPush = FirstPush(folder: directory, branch: branch, remote: remote)
         } else {
@@ -342,7 +382,7 @@ final class AppModel: ObservableObject {
     }
 
     func pull() {
-        guard let directory = selectedFolder else { return }
+        guard let directory = panelFolder else { return }
         sync("pull", in: directory) { GitActions.pull(in: $0) }
     }
 
@@ -506,7 +546,7 @@ final class AppModel: ObservableObject {
 
     /// A folder's sessions in the order of the tabs, so the list on the
     /// left and the strip of tabs agree, and arranging one arranges both.
-    func sessions(in folder: Folder) -> [SessionInfo] { inTabOrder(sessions.filter { $0.cwd == folder.path }) }
+    func sessions(in folder: Folder) -> [SessionInfo] { inTabOrder(sessions.filter { WorktreePath.belongs($0.cwd, to: folder.path) }) }
 
     func inTabOrder(_ list: [SessionInfo]) -> [SessionInfo] {
         let place = Dictionary(tabLayout.order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
@@ -519,7 +559,8 @@ final class AppModel: ObservableObject {
     /// Sessions started somewhere that is not one of the listed folders.
     var looseSessions: [SessionInfo] {
         let known = Set(folders.map(\.path))
-        return sessions.filter { !known.contains($0.cwd) }
+        // A session in a worktree of a folder is that folder's (#23).
+        return sessions.filter { !known.contains($0.cwd) && !known.contains(WorktreePath.project(of: $0.cwd) ?? "") }
     }
 
     /// Where a new session starts. Nil on another Mac with no folder picked:
@@ -972,6 +1013,11 @@ final class AppModel: ObservableObject {
             agentShells = on
         case .schedules(let list):
             schedules = list
+        case .worktrees(let folder, let list, let setup):
+            worktrees[folder] = list
+            worktreeSetups[folder] = setup
+        case .worktreeFinished(_, _, let said):
+            worktreeSaid = said
         case .agentShellResult, .macInUse:
             // For `agenttermd mcp`, and for the iPhone.
             break
@@ -1096,7 +1142,7 @@ final class AppModel: ObservableObject {
                 commitMessages[path] = nil
                 files.refresh()
             }
-            guard path == selectedFolder else { break }
+            guard path == panelFolder else { break }
             diffGeneration += 1
             apply(snapshot, to: path)
         case .diffFile(let path, let file):
@@ -1122,7 +1168,7 @@ final class AppModel: ObservableObject {
                     notice = "\(session.title) has no conversation to hand off in this session yet. It saves one after your first message."
                 }
             }
-            if historyShowsAll ? path == nil : (path != nil && path == selectedFolder), history != conversations { history = conversations }
+            if historyShowsAll ? path == nil : (path != nil && path == panelFolder), history != conversations { history = conversations }
         case .directory(let listing):
             browseListing = listing
         case .handoffPlan(let id, let prompt):
@@ -1155,6 +1201,28 @@ final class AppModel: ObservableObject {
         Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
         connection?.send(.create(CreateRequest(command: agent?.id, cwd: startingDirectory, title: agent?.name, size: size)))
     }
+
+    /// Starts an agent, or a shell, in a new git worktree of the selected
+    /// folder, on a branch of its own (#23). With changes not committed, the
+    /// user is asked first: the agent there will not see them.
+    func launchInWorktree(_ agent: AgentInfo?, confirmed: Bool = false) {
+        guard status == .connected, let folder = selectedFolder else { return }
+        if !confirmed, let diff, !(diff.staged.isEmpty && diff.unstaged.isEmpty) {
+            worktreeQuestion = agent.map { .agent($0) } ?? .shell
+            return
+        }
+        lastError = nil
+        selectNextAttached = true
+        Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
+        connection?.send(.createInWorktree(request: CreateRequest(command: agent?.id, cwd: folder, title: agent?.name, size: startingSize), branch: nil))
+    }
+
+    enum WorktreeLaunch: Equatable {
+        case agent(AgentInfo)
+        case shell
+    }
+    /// Asked before a worktree is made while the folder has changes.
+    @Published var worktreeQuestion: WorktreeLaunch?
 
     /// Makes the terminal text larger or smaller, or default when `delta` is nil.
     func changeFontSize(by delta: Double?) {
@@ -1193,7 +1261,13 @@ final class AppModel: ObservableObject {
         files.active = nil
         diffInFront = false
         selectedSession = session.id
-        if folders.contains(where: { $0.path == session.cwd }) { selectedFolder = session.cwd }
+        if let project = WorktreePath.project(of: session.cwd), folders.contains(where: { $0.path == project }) {
+            selectedFolder = project
+            shownWorktree = session.cwd
+        } else if folders.contains(where: { $0.path == session.cwd }) {
+            selectedFolder = session.cwd
+            shownWorktree = nil
+        }
     }
 
     func addFolder() {
@@ -1259,8 +1333,9 @@ final class AppModel: ObservableObject {
 
     private func folderChanged() {
         diff = nil
+        if let selectedFolder { listWorktrees(selectedFolder) }
         // The diff tab stays: it belongs to its own folder, not to the one on show.
-        files.setRoot(selectedFolder)
+        files.setRoot(panelFolder)
         refreshDiff()
         // The list of every conversation does not depend on the folder.
         if !historyShowsAll {
@@ -1465,7 +1540,7 @@ final class AppModel: ObservableObject {
 
     func refreshHistory() {
         let everywhere = historyShowsAll
-        let directory = selectedFolder
+        let directory = panelFolder
         guard everywhere || directory != nil else {
             history = []
             return
@@ -1480,7 +1555,7 @@ final class AppModel: ObservableObject {
             let found = everywhere ? AgentHistory.allConversations() : AgentHistory.conversations(in: directory ?? "")
             DispatchQueue.main.async {
                 guard let self, generation == self.historyGeneration,
-                    self.historyShowsAll == everywhere, everywhere || self.selectedFolder == directory
+                    self.historyShowsAll == everywhere, everywhere || self.panelFolder == directory
                 else { return }
                 if self.history != found { self.history = found }
             }
@@ -1498,7 +1573,7 @@ final class AppModel: ObservableObject {
     }
 
     func refreshDiff() {
-        guard let directory = selectedFolder else {
+        guard let directory = panelFolder else {
             diff = nil
             return
         }
@@ -1513,7 +1588,7 @@ final class AppModel: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let snapshot = GitDiff.snapshot(directory: directory)
             DispatchQueue.main.async { [weak self] in
-                guard let self, generation == self.diffGeneration, self.selectedFolder == directory else { return }
+                guard let self, generation == self.diffGeneration, self.panelFolder == directory else { return }
                 self.apply(snapshot, to: directory)
             }
         }
@@ -1544,12 +1619,12 @@ final class AppModel: ObservableObject {
 
     /// The change to mark in the Git tab's list: the diff tab's, while the
     /// list is of its folder.
-    var diffTabFileInList: FileDiff? { diffTab?.folder == selectedFolder ? diffTab?.file : nil }
+    var diffTabFileInList: FileDiff? { diffTab?.folder == panelFolder ? diffTab?.file : nil }
 
     /// Shows a change's diff in the middle pane. There is one diff tab; it
     /// follows the change picked in the Git tab.
     func openDiff(_ file: FileDiff) {
-        guard let folder = selectedFolder else { return }
+        guard let folder = panelFolder else { return }
         diffTab = OpenDiff(folder: folder, file: file)
         // From another Mac the list has no diffs in it: this file's is asked for.
         if isRemote {
@@ -1576,7 +1651,7 @@ final class AppModel: ObservableObject {
     /// Stages files for the next commit. No files means every change.
     func stage(_ files: [FileDiff]) {
         let paths = files.map(\.path)
-        if isRemote, let directory = selectedFolder {
+        if isRemote, let directory = panelFolder {
             sendForDiff(.gitStage(path: directory, files: paths), in: directory)
             return
         }
@@ -1586,7 +1661,7 @@ final class AppModel: ObservableObject {
     /// Takes files out of the next commit. No files means all of them.
     func unstage(_ files: [FileDiff]) {
         let paths = files.map(\.path)
-        if isRemote, let directory = selectedFolder {
+        if isRemote, let directory = panelFolder {
             sendForDiff(.gitUnstage(path: directory, files: paths), in: directory)
             return
         }
@@ -1595,7 +1670,7 @@ final class AppModel: ObservableObject {
 
     /// Commits what is staged in the selected folder with the message written for it.
     func commit() {
-        guard let directory = selectedFolder, !isCommitting else { return }
+        guard let directory = panelFolder, !isCommitting else { return }
         let message = commitMessages[directory] ?? ""
         isCommitting = true
         if isRemote {
@@ -1634,7 +1709,7 @@ final class AppModel: ObservableObject {
     /// Runs a git change in the selected folder off the main thread, then
     /// shows what git said if it failed and reads the changes again.
     private func git(_ action: @escaping (String) -> String?, then: ((Bool) -> Void)? = nil) {
-        guard let directory = selectedFolder else { return }
+        guard let directory = panelFolder else { return }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let problem = action(directory)
             DispatchQueue.main.async { [weak self] in

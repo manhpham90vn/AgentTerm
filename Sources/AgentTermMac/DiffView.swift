@@ -70,7 +70,7 @@ struct DiffView: View {
 
     @ViewBuilder
     private var content: some View {
-        if model.selectedFolder == nil {
+        if model.panelFolder == nil {
             placeholder("Select a folder to see its changes.")
         } else if let diff = model.diff {
             if !diff.isRepository {
@@ -149,7 +149,7 @@ private struct SyncBar: View {
     @EnvironmentObject private var model: AppModel
     let diff: DiffSnapshot
 
-    private var busy: String? { model.selectedFolder.flatMap { model.syncing[$0] } }
+    private var busy: String? { model.panelFolder.flatMap { model.syncing[$0] } }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -217,8 +217,8 @@ private struct CommitBox: View {
 
     private var message: Binding<String> {
         Binding(
-            get: { model.selectedFolder.flatMap { model.commitMessages[$0] } ?? "" },
-            set: { if let folder = model.selectedFolder { model.commitMessages[folder] = $0 } }
+            get: { model.panelFolder.flatMap { model.commitMessages[$0] } ?? "" },
+            set: { if let folder = model.panelFolder { model.commitMessages[folder] = $0 } }
         )
     }
 
@@ -226,7 +226,7 @@ private struct CommitBox: View {
         stagedCount > 0 && !model.isCommitting && !message.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var isWriting: Bool { model.selectedFolder.map(model.writingCommitMessage.contains) ?? false }
+    private var isWriting: Bool { model.panelFolder.map(model.writingCommitMessage.contains) ?? false }
 
     /// The agent that would write the message: the one chosen in Settings,
     /// or the first one installed.

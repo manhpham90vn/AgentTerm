@@ -80,6 +80,32 @@ itself.
 - Antigravity does not say when it waits for permission: while it runs a
   tool, its state is not shown, and its session says why.
 
+### Worktrees
+
+- **A session in a worktree of its own** (#23): an agent's launch button,
+  or the shell's, has "Start … in a New Worktree" in its menu. AgentTerm
+  makes a branch (`agentterm/<agent>-<number>` unless named) cut from the
+  folder's current commit, a git worktree for it in
+  `<folder>/.agentterm/worktrees/<branch>`, and starts the session there.
+  Nothing is brought along: no uncommitted change, nothing git ignores;
+  with changes not committed, the app asks first. A folder can name a
+  setup command (`npm install`) that is run in each new worktree first.
+- The session is listed under its folder with its branch, on the Mac and
+  the iPhone. Selecting it, the Git, History and Files tabs show its
+  worktree.
+- **The worktrees of the folder that is open** (#33): when a folder's
+  repository has more than its own, a bar at the top of the side panel
+  lists them all, whoever made them, with their branch, how far ahead they
+  are, what is changed, and those whose folder is gone, as missing; ones
+  outside the folder show their path. Picking one shows its changes,
+  history and files, with the same actions as the folder.
+- **Bringing the work back**: for a worktree, Finish merges its branch into
+  the folder's and removes it (with its branch, for one AgentTerm made),
+  opens a pull request with `gh`, or throws it away, which asks first and
+  says what is not merged. A worktree a session runs in is not removed.
+- `.agentterm/` is listed in the repository's own exclude file and is not
+  shown in the Files tab.
+
 ### Schedules
 
 - A schedule starts an agent with a prompt in a folder: once at a time,

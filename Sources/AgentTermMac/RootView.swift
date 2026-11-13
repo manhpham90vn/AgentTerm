@@ -163,6 +163,33 @@ struct RootView: View {
         } message: {
             Text(model.notice ?? "")
         }
+        // The new worktree starts from the last commit (#23).
+        .alert("The folder has changes that are not committed", isPresented: Binding(get: { model.worktreeQuestion != nil }, set: { if !$0 { model.worktreeQuestion = nil } })) {
+            Button("Start in a New Worktree") {
+                let question = model.worktreeQuestion
+                model.worktreeQuestion = nil
+                if case .agent(let agent)? = question { model.launchInWorktree(agent, confirmed: true) } else { model.launchInWorktree(nil, confirmed: true) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("A new worktree starts from the last commit, without them: the agent there will not see them. Nothing git ignores is brought along either, such as .env or node_modules; a setup command for the folder can bring what is needed.")
+        }
+        .alert("Worktree", isPresented: Binding(get: { model.worktreeSaid != nil }, set: { if !$0 { model.worktreeSaid = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(model.worktreeSaid ?? "")
+        }
+    }
+}
+
+/// "Start in a New Worktree", in an agent's launch menu (#23).
+private struct WorktreeLaunchItem: View {
+    @EnvironmentObject private var model: AppModel
+    let agent: AgentInfo?
+
+    var body: some View {
+        Button("Start \(agent?.name ?? "a Shell") in a New Worktree") { model.launchInWorktree(agent) }
+            .disabled(model.selectedFolder == nil || model.diff?.branch == nil)
     }
 }
 
@@ -174,10 +201,12 @@ struct LaunchBar: View {
         HStack(spacing: 6) {
             ForEach(model.installedAgents) { agent in
                 LaunchButton(title: agent.name, id: agent.id) { model.launch(agent) }
-                    .help("Start \(agent.name) in \(model.workingDirectory)")
+                    .help("Start \(agent.name) in \(model.workingDirectory). Its menu starts it in a new worktree.")
+                    .contextMenu { WorktreeLaunchItem(agent: agent) }
             }
             LaunchButton(title: "Shell", id: "shell") { model.launch(nil) }
                 .help("Start a shell in \(model.workingDirectory)")
+                .contextMenu { WorktreeLaunchItem(agent: nil) }
             SSHMenu()
         }
         .disabled(model.status != .connected)
@@ -608,8 +637,10 @@ struct WelcomeView: View {
             HStack(spacing: 10) {
                 ForEach(model.installedAgents) { agent in
                     LaunchButton(title: agent.name, id: agent.id, large: true) { model.launch(agent) }
+                        .contextMenu { WorktreeLaunchItem(agent: agent) }
                 }
                 LaunchButton(title: "Shell", id: "shell", large: true) { model.launch(nil) }
+                    .contextMenu { WorktreeLaunchItem(agent: nil) }
                 SSHMenu(large: true)
             }
             if model.agentsLoaded && model.installedAgents.isEmpty {

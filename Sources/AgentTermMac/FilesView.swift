@@ -258,7 +258,7 @@ struct DocumentView: View {
     /// project ("my-app/src"); anywhere else, its folder on the Mac.
     private var location: String {
         let directory = (document.path as NSString).deletingLastPathComponent
-        if let folder = model.selectedFolder, directory == folder || directory.hasPrefix(folder + "/") {
+        if let folder = model.panelFolder, directory == folder || directory.hasPrefix(folder + "/") {
             return (folder as NSString).lastPathComponent + directory.dropFirst(folder.count)
         }
         return (directory as NSString).abbreviatingWithTildeInPath

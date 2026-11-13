@@ -402,6 +402,19 @@ A second host stands in for the other Mac, with a project of its own.
 | AGENT-9 | A stand-in agent that waits for permission | The Mac app shows it | A mark next to its name in the folder list and on its tab, read as "waiting for permission"; its folder's row says a session waits | M |
 | AGENT-10 | The same | The iPhone shows it | A mark in the sessions list, and the state in the terminal's title | hand, until the iPhone tests cover it |
 
+### Worktrees
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| WT-1 | A project with a change not committed and an ignored `.env` | A worktree is made for Claude Code; another; one with a name taken | `agentterm/claude-1` in `.agentterm/worktrees`, at the project's commit, without the change or `.env`, not seen by git as a change; then `agentterm/claude-2`; the taken name refused | H |
+| WT-2 | Two worktrees | Each changes the same file; the first is merged before and after committing; the second thrown away without its branch | Neither sees the other's change; listed with what is changed and ahead; not merged with changes not committed; merged, removed with its branch; the second removed, its branch kept | H |
+| WT-3 | A worktree made by hand outside the project, one whose folder is gone | Listed, a session in a folder inside the first | The project's first; the others with their paths, the first in use, the second missing; nothing removed | H |
+| WT-4 | A folder with a setup command | A session is started in a new worktree | It runs in the worktree, with its branch and its agent known; the setup ran there first; the worktree is listed in use | H |
+| WT-5 | A worktree a session runs in | It is thrown away; the session ends; it is thrown away | Refused; then removed | H |
+| WT-6 | `.agentterm/` in a project | The Files tab lists the project | It is not listed | H |
+| WT-7 | The Mac app, a session in a new worktree with a change of its own | The session is selected | Listed under its project with its branch; the side panel's bar names the branch and the Git tab shows the worktree's change, not the project's | M |
+| WT-8 | The Mac app | Merge, open a pull request, throw away from the bar; a folder with uncommitted changes started in a new worktree | Each as WT-2 says; the question before starting | hand, until the UI tests cover it |
+
 ### Schedules
 
 | ID | Input | Action or event | Expected response | Checked by |

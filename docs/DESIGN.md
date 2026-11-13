@@ -607,6 +607,33 @@ What cannot be known:
   others. Escape alone or Control C typed to a working session makes its
   state not known until the agent says more.
 
+## Worktrees
+
+`GitWorktrees` (host): `create(in:agent:branch:)` runs `git worktree add -b
+<branch> <top>/.agentterm/worktrees/<branch> HEAD` after listing
+`.agentterm/` in the exclude file, and returns the folder's place inside
+the new worktree. Paths are written the way the folder is: git gives real
+paths, and a folder opened through a symbolic link (`/var`, `/tmp`) would
+otherwise not be found in them. `list(folder:inUse:)` reads `git worktree
+list --porcelain`: each worktree's branch, commits ahead of the folder's
+branch, files changed, and whether its folder is gone; a session counts
+for the deepest worktree it is in. `finish` merges (`--no-edit`, undone on
+a conflict, refused with uncommitted changes) and removes, pushes and runs
+`gh pr create --fill` through the login shell, or removes with `--force`.
+
+Messages: `createInWorktree(request:branch:)`, `listWorktrees(folder:)`,
+`finishWorktree(folder:path:finish:deleteBranch:)` (refused while a session
+runs in it), `setWorktreeSetup(folder:command:)`, kept in `worktrees.json`;
+answered with `worktrees(folder:list:setup:)` and `worktreeFinished`.
+`SessionInfo.branch` names a session's worktree branch; `WorktreePath`
+tells which folder a session in `.agentterm/worktrees` belongs to. The setup
+command runs through the login shell in the new worktree before the
+session, so the agent is still known by its command.
+
+On the Mac, `AppModel.panelFolder` is the worktree shown (`shownWorktree`)
+or the selected folder; the side panel's diff, commits, history and files
+follow it, and selecting a session in a worktree shows that worktree.
+
 ## Schedules
 
 `Schedule` (protocol): its agent, folder, prompt, `ScheduleTime` (`once`,

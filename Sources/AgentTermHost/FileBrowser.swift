@@ -31,8 +31,9 @@ public enum FileBrowser {
         return try? Data(contentsOf: url)
     }
 
-    /// Never listed: git's own data and Finder's litter.
-    private static let skipped: Set<String> = [".git", ".DS_Store"]
+    /// Never listed: git's own data, Finder's litter, and AgentTerm's own folder
+    /// of worktrees and handoffs, reached through their sessions (#23).
+    private static let skipped: Set<String> = [".git", ".DS_Store", ".agentterm"]
     private static let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "tiff", "bmp", "icns", "ico", "pdf"]
 
     /// The contents of a folder, folders first, by name. Dot files are

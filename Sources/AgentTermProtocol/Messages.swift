@@ -67,6 +67,8 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
     /// The agent's session that opened this shell through MCP (#10), when
     /// one did. The shell stays, and is the user's, when that one ends.
     public var openedBy: SessionID?
+    /// The branch of the worktree it runs in, when AgentTerm made one for it (#23).
+    public var branch: String?
     /// The schedule this session is a run of (#11), by name, and how its
     /// agent handles permissions.
     public var schedule: String?
@@ -285,6 +287,18 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// skips permissions is refused unless its warning was accepted.
     case saveSchedule(Schedule)
     case removeSchedule(id: String)
+    /// Starts a session in a new git worktree of `request.cwd`, on a branch
+    /// of its own cut from the folder's current commit (#23). Nil `branch`
+    /// names it after the agent.
+    case createInWorktree(request: CreateRequest, branch: String?)
+    /// The worktrees of a folder's repository (#23, #33). Answered with `worktrees`.
+    case listWorktrees(folder: String)
+    /// Merges, opens a pull request for, or throws away a worktree, and
+    /// removes it (but for a pull request), its branch too when asked.
+    case finishWorktree(folder: String, path: String, finish: WorktreeFinish, deleteBranch: Bool)
+    /// The command a folder runs in each new worktree before its agent
+    /// (`npm install`); nil or empty for none.
+    case setWorktreeSetup(folder: String, command: String?)
 }
 
 /// JSON text frames sent by the host.
@@ -373,6 +387,11 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case macInUse(Bool)
     /// Every schedule, with its last runs and when it runs next.
     case schedules([Schedule])
+    /// A folder's worktrees, the folder's own first, and its setup command.
+    case worktrees(folder: String, list: [WorktreeInfo], setup: String?)
+    /// What became of `finishWorktree`: a pull request's address, or that
+    /// it was merged or removed.
+    case worktreeFinished(folder: String, path: String, said: String)
 }
 
 public enum MessageCoding {

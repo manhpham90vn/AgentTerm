@@ -25,6 +25,14 @@ final class FileBrowserTests: XCTestCase {
         XCTAssertTrue(FileBrowser.list("/nonexistent/place").isEmpty)
     }
 
+    /// WT-6: AgentTerm's own folder, which holds the worktrees and the
+    /// handoffs, is not shown as part of the project (#23).
+    func testAgentTermsOwnFolderIsLeftOut() throws {
+        try FileManager.default.createDirectory(atPath: path(".agentterm/worktrees/agentterm/claude-1"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: path("src"), withIntermediateDirectories: true)
+        XCTAssertEqual(FileBrowser.list(root.path).map(\.name), ["src"])
+    }
+
     func testAFolderThatIsARepositoryOfItsOwnIsMarked() throws {
         for folder in ["web/.git", "docs", "tool"] { try FileManager.default.createDirectory(atPath: path(folder), withIntermediateDirectories: true) }
         // A worktree or submodule has a file named .git, not a folder.

@@ -238,12 +238,13 @@ struct FolderRow: View {
         model.selectedFolder = folder.path
         // Jump to this folder's most recent session, or its launch screen.
         model.selectedSession = model.sessions.last { $0.cwd == folder.path }?.id
+        model.shownWorktree = nil
     }
 
     private var isSelected: Bool { model.selectedFolder == folder.path && model.selectedSession == nil }
 
     /// Sessions of this folder whose agent waits for the user.
-    private var waiting: Int { model.sessions.filter { $0.cwd == folder.path && $0.state?.isWaiting == true }.count }
+    private var waiting: Int { model.sessions.filter { WorktreePath.belongs($0.cwd, to: folder.path) && $0.state?.isWaiting == true }.count }
 
     var body: some View {
         HStack(spacing: 7) {
@@ -313,6 +314,14 @@ struct SessionRow: View {
                     .font(.system(size: 12.5))
                     .lineLimit(1)
                     .truncationMode(.tail)
+                if let branch = session.branch {
+                    // In a worktree of its own (#23).
+                    Label(branch, systemImage: "arrow.triangle.branch")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 if showsPath {
                     Text((session.cwd as NSString).abbreviatingWithTildeInPath)
                         .font(.system(size: 10.5))
@@ -375,7 +384,10 @@ struct SessionRow: View {
         .onTapGesture { model.select(session: session) }
         .help(session.summary.map { "\(session.title): \($0)" } ?? session.title)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(AgentStateMark.label("\(session.displayName), session" + (session.openedBy == nil ? "" : ", opened by an agent"), session))
+        .accessibilityLabel(
+            AgentStateMark.label(
+                "\(session.displayName), session" + (session.branch.map { ", in worktree \($0)" } ?? "") + (session.openedBy == nil ? "" : ", opened by an agent"),
+                session))
         .accessibilityIdentifier("session-\(session.id)")
         .accessibilityAddTraits(model.selectedSession == session.id ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { model.select(session: session) }

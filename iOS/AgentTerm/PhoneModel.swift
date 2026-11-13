@@ -294,6 +294,18 @@ final class PhoneModel: ObservableObject {
 
     /// The Mac's schedules (#11), as its host keeps them.
     @Published private(set) var schedules: [Schedule] = []
+
+    /// Each folder's git worktrees (#23, #33), as its host lists them.
+    @Published private(set) var worktrees: [String: [WorktreeInfo]] = [:]
+    @Published private(set) var worktreeSetups: [String: String] = [:]
+    /// What became of the last worktree that was finished.
+    @Published var worktreeSaid: String?
+
+    func listWorktrees(_ folder: String) { connection?.send(.listWorktrees(folder: folder)) }
+    func finishWorktree(_ worktree: WorktreeInfo, of folder: String, _ finish: WorktreeFinish, deleteBranch: Bool) {
+        connection?.send(.finishWorktree(folder: folder, path: worktree.path, finish: finish, deleteBranch: deleteBranch))
+    }
+    func setWorktreeSetup(_ command: String?, for folder: String) { connection?.send(.setWorktreeSetup(folder: folder, command: command)) }
     func save(_ schedule: Schedule) { connection?.send(.saveSchedule(schedule)) }
     func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
 
@@ -462,11 +474,12 @@ final class PhoneModel: ObservableObject {
 
     var groups: [FolderGroup] {
         var result = folders.map { folder in
-            FolderGroup(path: folder, sessions: sessions.filter { $0.cwd == folder })
+            // A session in a worktree of the folder is the folder's (#23).
+            FolderGroup(path: folder, sessions: sessions.filter { WorktreePath.belongs($0.cwd, to: folder) })
         }
         // Sessions started outside the listed folders still need a home.
         let known = Set(folders)
-        let loose = Dictionary(grouping: sessions.filter { !known.contains($0.cwd) }, by: \.cwd)
+        let loose = Dictionary(grouping: sessions.filter { !known.contains($0.cwd) && !known.contains(WorktreePath.project(of: $0.cwd) ?? "") }, by: \.cwd)
         result += loose.keys.sorted().map { FolderGroup(path: $0, sessions: loose[$0] ?? []) }
         if result.isEmpty { result = [FolderGroup(path: nil, sessions: [])] }
         return result
@@ -808,6 +821,11 @@ final class PhoneModel: ObservableObject {
             macInUse = inUse
         case .schedules(let list):
             schedules = list
+        case .worktrees(let folder, let list, let setup):
+            worktrees[folder] = list
+            worktreeSetups[folder] = setup
+        case .worktreeFinished(_, _, let said):
+            worktreeSaid = said
         case .keepAwake(let on):
             keepAwake = on
         case .keepAwakeOptions(let options):
