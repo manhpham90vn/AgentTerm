@@ -85,13 +85,6 @@ struct SidebarView: View {
                 .padding(.horizontal, 8)
                 .padding(.bottom, 10)
             }
-
-            // Bottom left corner: the way into Settings, permissions included.
-            Theme.hairline.frame(height: 1)
-            SettingsLink { SettingsRowLabel() }
-                .buttonStyle(.plain)
-                .help("Settings and the permissions agents need (⌘,)")
-                .padding(8)
         }
         .background(Theme.panel)
         // A folder dragged in from the Finder is added to the list.
@@ -392,35 +385,5 @@ struct SessionRow: View {
         .accessibilityIdentifier("session-\(session.id)")
         .accessibilityAddTraits(model.selectedSession == session.id ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { model.select(session: session) }
-    }
-}
-
-/// The Settings row at the foot of the sidebar.
-private struct SettingsRowLabel: View {
-    @State private var hovering = false
-
-    var body: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "gearshape.fill")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.9))
-                .frame(width: 24, height: 24)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.12)))
-            Text("Settings")
-                .font(.system(size: 13, weight: .medium))
-            Spacer(minLength: 0)
-            Text(AppVersion.current == "dev" ? "dev" : "v" + AppVersion.current)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.tertiary)
-                .help("\(AppVersion.label), protocol \(agenttermProtocolVersion)")
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(hovering ? Color.white.opacity(0.10) : Color.white.opacity(0.05))
-        )
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
     }
 }

@@ -263,29 +263,60 @@ private struct AgentNoticeBanner: View {
     }
 }
 
-/// The Mac's schedules (#11), as on the Mac's Settings > Schedules.
+/// The Mac's schedules (#11), as the Mac's Schedules shows them: the runs
+/// going on, every schedule by when it runs next, and the runs that are
+/// over.
 private struct SchedulesScreen: View {
     @EnvironmentObject private var model: PhoneModel
 
     var body: some View {
+        let overview = ScheduleOverview(schedules: model.schedules, liveSessions: Set(model.sessions.map(\.id)))
         List {
-            ForEach(model.schedules) { schedule in
-                NavigationLink {
-                    ScheduleForm(schedule: schedule, isNew: false)
-                } label: {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(schedule.name)
-                        Text("\(Self.name(of: schedule.agent, in: model.agents)) · \(schedule.when.label())").font(.footnote).foregroundStyle(.secondary)
-                        Text(Self.status(schedule)).font(.footnote).foregroundStyle(.secondary)
+            Section("Running") {
+                if overview.running.isEmpty { Text("No run is going on.").foregroundStyle(.secondary) }
+                ForEach(overview.running) { run in
+                    // Opens the run's session.
+                    Button {
+                        guard let id = run.run.session else { return }
+                        model.tab = "sessions"
+                        model.path = [.session(id)]
+                    } label: {
+                        RunLabel(run: run, live: true)
                     }
+                    .accessibilityIdentifier("run-\(run.id)")
                 }
             }
-            if let first = model.agents.first(where: { $0.path != nil }), let folder = model.folders.first {
-                NavigationLink("New Schedule") {
-                    ScheduleForm(
-                        schedule: Schedule(name: "Every morning", agent: first.id, folder: folder, prompt: "", when: .daily(hour: 9, minute: 0)), isNew: true)
+            Section("Scheduled") {
+                ForEach(overview.scheduled) { schedule in
+                    NavigationLink {
+                        ScheduleForm(schedule: schedule, isNew: false)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(schedule.name)
+                            Text("\(Self.name(of: schedule.agent, in: model.agents)) · \(schedule.when.label())").font(.footnote).foregroundStyle(.secondary)
+                            Text(Self.status(schedule)).font(.footnote).foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityIdentifier("schedule-\(schedule.id)")
                 }
-                .accessibilityIdentifier("new-schedule")
+                if let first = model.agents.first(where: { $0.path != nil }), let folder = model.folders.first {
+                    NavigationLink("New Schedule") {
+                        ScheduleForm(
+                            schedule: Schedule(name: "Every morning", agent: first.id, folder: folder, prompt: "", when: .daily(hour: 9, minute: 0)), isNew: true)
+                    }
+                    .accessibilityIdentifier("new-schedule")
+                }
+            }
+            Section("Past Runs") {
+                if overview.past.isEmpty { Text("None yet.").foregroundStyle(.secondary) }
+                ForEach(overview.past) { run in
+                    NavigationLink {
+                        ScheduleForm(schedule: model.schedules.first { $0.id == run.schedule.id } ?? run.schedule, isNew: false)
+                    } label: {
+                        RunLabel(run: run, live: false)
+                    }
+                    .accessibilityIdentifier("run-\(run.id)")
+                }
             }
         }
         .navigationTitle("Schedules")
@@ -299,6 +330,26 @@ private struct SchedulesScreen: View {
         parts.append(schedule.permissions.label)
         if let last = schedule.runs.last { parts.append("Last: \(last.note.lowercased())") }
         return parts.joined(separator: " · ")
+    }
+}
+
+/// A run of a schedule: its name, when, and what came of it.
+private struct RunLabel: View {
+    let run: ScheduleOverview.Run
+    let live: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: live ? "circle.fill" : run.run.started ? "checkmark.circle" : "minus.circle")
+                .font(live ? .system(size: 9) : .body)
+                .foregroundStyle(live ? Color.green : run.run.started ? Color.secondary : Color.orange)
+                .frame(width: 20)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(run.schedule.name).foregroundStyle(.primary)
+                Text(run.run.at.formatted(date: .abbreviated, time: .shortened) + " · " + (live ? "running" : run.run.note))
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+        }
     }
 }
 

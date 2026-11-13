@@ -105,7 +105,7 @@ final class RemoteMacTests: MacUITestCase {
         }
 
         // REMOTE-13: a conversation of the other Mac, handed off there.
-        app.press(.button("History"))
+        app.press(.id("place-history"))
         app.perform("Hand Off", on: .id("conversation-c-9"), timeout: 15)
         app.wait(for: .text("Hand Off"), timeout: 15)
         wait("the prompt, from the other Mac's host", timeout: 15) {

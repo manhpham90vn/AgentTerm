@@ -228,11 +228,38 @@ final class AppModel: ObservableObject {
     func save(_ schedule: Schedule) { connection?.send(.saveSchedule(schedule)) }
 
     /// The schedule being made or changed in Settings > Schedules. Kept here
-    /// rather than in the view, which the Settings window keeps when it
-    /// closes: closing the window drops it.
+    /// rather than in the view: leaving Settings drops it.
     @Published var editingSchedule: Schedule?
-    /// The tab of Settings: General each time Settings opens.
+    /// The pane of Settings: General each time Settings is opened.
     @Published var settingsTab = "general"
+
+    /// The window's three places, chosen in the bar at its left edge, as
+    /// the iPhone's tabs are.
+    enum Place: String { case sessions, history, schedules, settings }
+    @Published private(set) var place = Place.sessions
+    /// The conversation picked in History, shown in the middle of the window.
+    @Published var historySelection: Conversation?
+    /// The conversation picked in the side panel's History, in a sheet over
+    /// Sessions.
+    @Published var panelConversation: Conversation?
+
+    /// Goes to a place, with its list shown. The place already shown hides
+    /// its list, or shows it again.
+    func show(_ place: Place, toggling: Bool = true) {
+        if place == self.place {
+            if toggling { showSidebar.toggle() } else { showSidebar = true }
+            return
+        }
+        if place != .sessions {
+            // What is typed there is not the terminal's.
+            NSApp.keyWindow?.makeFirstResponder(nil)
+        }
+        if place == .settings { settingsTab = "general" }
+        // A schedule half made is dropped when Schedules is left.
+        if self.place == .schedules { editingSchedule = nil }
+        self.place = place
+        showSidebar = true
+    }
     func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
 
     /// A schedule to start from: the folder in front, the first agent.
@@ -446,18 +473,12 @@ final class AppModel: ObservableObject {
         var keepDiff = false
         let id = UUID()
     }
-    /// Past agent conversations of the selected folder. `nil` while loading.
+    /// Every agent conversation on the Mac, as History lists them. `nil`
+    /// while loading.
     @Published private(set) var history: [Conversation]?
-    /// History lists the selected folder's conversations, or every
-    /// conversation on this Mac when this is on.
-    @Published var historyShowsAll = UserDefaults.standard.bool(forKey: "historyShowsAll") {
-        didSet {
-            guard historyShowsAll != oldValue else { return }
-            UserDefaults.standard.set(historyShowsAll, forKey: "historyShowsAll")
-            history = nil
-            refreshHistory()
-        }
-    }
+    /// The conversations of the folder on show, as the side panel's History
+    /// lists them: that folder's only. `nil` while loading.
+    @Published private(set) var folderHistory: [Conversation]?
     /// The folder list on the left.
     @Published var showSidebar = UserDefaults.standard.object(forKey: "showSidebar") as? Bool ?? true {
         didSet { UserDefaults.standard.set(showSidebar, forKey: "showSidebar") }
@@ -507,6 +528,17 @@ final class AppModel: ObservableObject {
     private var connectAttempts = 0
     private var launchedDaemon = false
     private var selectNextAttached = false
+    /// What is being started and not shown yet: a conversation resumed, a
+    /// handoff. The middle of the window says so until its session is.
+    @Published private(set) var starting: String?
+
+    private func beginStarting(_ what: String) {
+        starting = what
+        // Never for good: a session the host did not start says nothing.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            if self?.starting == what { self?.starting = nil }
+        }
+    }
     private var diffTimer: Timer?
     /// Watches the folder the side panel shows, on this Mac.
     private var panelWatch: FolderWatch?
@@ -534,6 +566,7 @@ final class AppModel: ObservableObject {
     }
     private var diffGeneration = 0
     private var historyGeneration = 0
+    private var folderHistoryGeneration = 0
     private let foldersKey = "folders"
     private var pendingFolderSelection: String?
 
@@ -563,20 +596,6 @@ final class AppModel: ObservableObject {
             .sink { [weak self] _ in
                 self?.refreshSSHHosts()
                 self?.tellWhetherInFront()
-            }
-            .store(in: &observers)
-        // The Settings window closing drops a schedule half made in it.
-        NotificationCenter.default.publisher(for: NSWindow.willCloseNotification)
-            .sink { [weak self] notification in
-                // SwiftUI's Settings window, not a sheet on it or another window.
-                guard let window = notification.object as? NSWindow, window.sheetParent == nil,
-                    window.identifier?.rawValue.localizedCaseInsensitiveContains("settings") == true
-                else { return }
-                // Once it has closed: taking the sheet away while it closes stops the close.
-                DispatchQueue.main.async {
-                    self?.editingSchedule = nil
-                    self?.settingsTab = "general"
-                }
             }
             .store(in: &observers)
         NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
@@ -817,6 +836,7 @@ final class AppModel: ObservableObject {
         diff = nil
         closeDiffTab()
         history = nil
+        folderHistory = nil
         commitMessages = [:]
         isCommitting = false
         agents = []
@@ -1134,6 +1154,7 @@ final class AppModel: ObservableObject {
                 }
                 selectNextAttached = false
                 selectedSession = info.id
+                starting = nil
             }
         case .replayed(let id):
             replaying.remove(id)
@@ -1151,6 +1172,7 @@ final class AppModel: ObservableObject {
                 selectedSession = sessions.last(where: { $0.cwd == workingDirectory })?.id ?? sessions.last?.id
             }
         case .error(let text):
+            starting = nil
             if isRemote, text == "invalid token", let mac = remote {
                 // The other Mac took this one off its paired devices. What
                 // was not saved there cannot be saved any more.
@@ -1230,7 +1252,10 @@ final class AppModel: ObservableObject {
                     notice = "\(session.title) has no conversation to hand off in this session yet. It saves one after your first message."
                 }
             }
-            if historyShowsAll ? path == nil : (path != nil && path == panelFolder), history != conversations { history = conversations }
+            // Every conversation is what History asks for; the folder on
+            // show's, the side panel's History.
+            if path == nil, history != conversations { history = conversations }
+            if let path, path == panelFolder, folderHistory != conversations { folderHistory = conversations }
         case .directory(let listing):
             browseListing = listing
         case .handoffPlan(let id, let prompt):
@@ -1400,11 +1425,8 @@ final class AppModel: ObservableObject {
         // The diff tab stays: it belongs to its own folder, not to the one on show.
         files.setRoot(panelFolder)
         refreshDiff()
-        // The list of every conversation does not depend on the folder.
-        if !historyShowsAll {
-            history = nil
-            refreshHistory()
-        }
+        folderHistory = nil
+        refreshHistory(ofFolder: true)
     }
 
     // MARK: Handoff
@@ -1531,6 +1553,7 @@ final class AppModel: ObservableObject {
         Telemetry.shared.record(
             .handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: folder != nil && folder != conversation.cwd))
         let size = startingSize
+        beginStarting("Handing off to \(target.name)…")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Result { try Handoff.prepare(conversation, to: target.id, plan: plan, prompt: prompt, note: note, in: folder) }
             DispatchQueue.main.async {
@@ -1549,6 +1572,7 @@ final class AppModel: ObservableObject {
                         self.connection?.send(.addFolder(path: prepared.directory))
                     }
                 case .failure(let error):
+                    self.starting = nil
                     self.notice = "\(error)"
                 }
             }
@@ -1575,6 +1599,7 @@ final class AppModel: ObservableObject {
         Telemetry.shared.record(
             .handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: folder != nil && folder != conversation.cwd))
         selectNextAttached = true
+        beginStarting("Handing off to \(target.name)…")
         connection?.send(
             .handoff(
                 agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd, target: target.id, plan: plan, prompt: prompt,
@@ -1601,26 +1626,29 @@ final class AppModel: ObservableObject {
 
     // MARK: History
 
-    func refreshHistory() {
-        let everywhere = historyShowsAll
+    /// Every conversation, or with `ofFolder` the folder on show's.
+    func refreshHistory(ofFolder: Bool = false) {
         let directory = panelFolder
-        guard everywhere || directory != nil else {
-            history = []
+        if ofFolder && directory == nil {
+            folderHistory = []
             return
         }
         if isRemote {
-            connection?.send(.history(path: everywhere ? nil : directory))
+            connection?.send(.history(path: ofFolder ? directory : nil))
             return
         }
-        historyGeneration += 1
-        let generation = historyGeneration
+        // Each list has its own count: one asked for does not drop the other.
+        if ofFolder { folderHistoryGeneration += 1 } else { historyGeneration += 1 }
+        let generation = ofFolder ? folderHistoryGeneration : historyGeneration
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let found = everywhere ? AgentHistory.allConversations() : AgentHistory.conversations(in: directory ?? "")
+            let found = ofFolder ? AgentHistory.conversations(in: directory ?? "") : AgentHistory.allConversations()
             DispatchQueue.main.async {
-                guard let self, generation == self.historyGeneration,
-                    self.historyShowsAll == everywhere, everywhere || self.panelFolder == directory
-                else { return }
-                if self.history != found { self.history = found }
+                guard let self, generation == (ofFolder ? self.folderHistoryGeneration : self.historyGeneration) else { return }
+                if ofFolder {
+                    if self.panelFolder == directory, self.folderHistory != found { self.folderHistory = found }
+                } else if self.history != found {
+                    self.history = found
+                }
             }
         }
     }
@@ -1632,6 +1660,7 @@ final class AppModel: ObservableObject {
         selectNextAttached = true
         let size = startingSize
         let name = agents.first { $0.id == conversation.agent }?.name
+        beginStarting("Resuming the conversation in \(name ?? conversation.agent)…")
         connection?.send(.create(CreateRequest(command: conversation.resumeCommand, cwd: conversation.cwd, title: name, size: size)))
     }
 

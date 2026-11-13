@@ -162,8 +162,8 @@ struct PermissionsView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .padding(24)
-        .frame(width: 600, alignment: .top)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: 680, alignment: .top)
+        .frame(maxWidth: .infinity)
         // The answer changes in System Settings, outside this app.
         .onReceive(poll) { _ in refresh += 1 }
     }

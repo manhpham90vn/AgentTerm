@@ -8,6 +8,9 @@ struct HandoffSheet: View {
     @EnvironmentObject private var model: AppModel
     @Environment(\.dismiss) private var dismiss
     let conversation: Conversation
+    /// In the middle of the window, under a conversation picked in History,
+    /// rather than in a sheet: no Cancel, and handing off goes to Sessions.
+    var inline = false
 
     /// The agent picked last time is offered first.
     @AppStorage("handoffTarget") private var rememberedTarget = ""
@@ -76,15 +79,20 @@ struct HandoffSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Hand Off")
-                    .font(.system(size: 17, weight: .semibold))
-                HStack(spacing: 6) {
-                    Circle().fill(Theme.accent(for: conversation.agent)).frame(width: 7, height: 7)
-                    Text("\(sourceName) · \(conversation.title)")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
+            if inline {
+                Text("Hand Off to Another Agent")
+                    .font(.system(size: 14, weight: .semibold))
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Hand Off")
+                        .font(.system(size: 17, weight: .semibold))
+                    HStack(spacing: 6) {
+                        Circle().fill(Theme.accent(for: conversation.agent)).frame(width: 7, height: 7)
+                        Text("\(sourceName) · \(conversation.title)")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                    }
                 }
             }
 
@@ -125,6 +133,11 @@ struct HandoffSheet: View {
                         TargetChip(agent: agent, selected: agent.id == target?.id) { targetID = agent.id }
                     }
                 }
+                if targets.isEmpty {
+                    Text("No other agent is installed to hand this off to.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
             }
 
             VStack(alignment: .leading, spacing: 7) {
@@ -141,7 +154,16 @@ struct HandoffSheet: View {
                             .help("Put the original prompt back")
                     }
                 }
-                editor($prompt, height: 86)
+                if plan == nil {
+                    // Another Mac's host works it out.
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text("Preparing the handoff…").font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 86)
+                } else {
+                    editor($prompt, height: 86)
+                }
                 Text("It can be edited. Keep the line that names the handoff file: that file has the conversation so far and the state of the working tree.")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
@@ -161,8 +183,10 @@ struct HandoffSheet: View {
 
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { dismiss() }
-                    .keyboardShortcut(.cancelAction)
+                if !inline {
+                    Button("Cancel", role: .cancel) { dismiss() }
+                        .keyboardShortcut(.cancelAction)
+                }
                 // Return adds a line in the instructions, so sending is Command-Return.
                 Button("Hand Off") { submit() }
                     .keyboardShortcut(.return, modifiers: .command)
@@ -171,11 +195,11 @@ struct HandoffSheet: View {
                     .help("Hand off (⌘↩)")
             }
         }
-        .padding(22)
-        .frame(width: 500)
+        .padding(inline ? 0 : 22)
+        .frame(width: inline ? nil : 500)
         .onAppear {
             targetID = targets.contains { $0.id == rememberedTarget } ? rememberedTarget : (targets.first?.id ?? "")
-            noteFocused = true
+            noteFocused = !inline
             if model.isRemote {
                 // The folders and the handoff file are on the other Mac.
                 model.requestRemoteHandoffPlan(for: conversation)
@@ -222,11 +246,21 @@ struct HandoffSheet: View {
             guard let remotePlan else { return }
             model.handoffOnRemote(
                 conversation, to: target, plan: remotePlan, prompt: promptIsEdited ? prompt : nil, note: note, in: folder.isEmpty ? nil : folder)
-            dismiss()
+            done()
             return
         }
         model.handoff(conversation, to: target, plan: plan, prompt: prompt, note: note, in: folder.isEmpty ? nil : folder)
-        dismiss()
+        done()
+    }
+
+    /// The receiving agent's session is what is looked at next.
+    private func done() {
+        if inline {
+            model.panelConversation = nil
+            model.show(.sessions, toggling: false)
+        } else {
+            dismiss()
+        }
     }
 }
 

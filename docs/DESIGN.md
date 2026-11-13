@@ -646,6 +646,12 @@ when it is made or its time changes), and the last limit reset each agent
 ran for. Clients send `saveSchedule`, `removeSchedule` and are told
 `schedules`.
 
+**Shown.** `ScheduleOverview` (protocol), which both apps use, groups the
+schedules with the sessions that still run: the runs whose session is one
+of them (running), every schedule by its next run (then those with none,
+then those off), and the other runs, newest first. Nothing is added to the
+protocol: a run names its session, and the session list says which run.
+
 **Saving.** Refused when the agent does not offer the mode, when it skips
 permissions without its warning accepted, or without a prompt. Then
 `ScheduleRunner.trustFolder` trusts the folder where the agent keeps that:

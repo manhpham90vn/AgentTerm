@@ -47,7 +47,7 @@ final class CrossTests: XCTestCase {
 
     private func openSettings(_ pane: String) {
         app.menu(["AgentTermMacUITest", "Settings…"])
-        app.press(.button(pane))
+        app.press(.id("settings-\(pane.lowercased())"))
     }
 
     /// Before the iPhone app runs: what the Mac does, for the phone to find.

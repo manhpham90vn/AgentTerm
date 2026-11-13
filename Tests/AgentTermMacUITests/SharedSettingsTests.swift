@@ -6,33 +6,71 @@ import XCTest
 final class SharedSettingsTests: MacUITestCase {
     private func openSettings(_ pane: String) {
         app.menu(["AgentTermMacUITest", "Settings…"])
-        app.press(.button(pane))
+        app.press(.id("settings-\(pane.lowercased())"))
     }
 
-    /// SCHED-13: a schedule being made is dropped when the Settings window
-    /// closes, and not shown again when it opens.
-    func testASchedulesBeingMadeIsNotShownAgainAfterSettingsCloses() throws {
-        openSettings("Schedules")
+    /// SCHED-13: a schedule being made is dropped when Schedules is left,
+    /// and not shown again when it is opened.
+    func testASchedulesBeingMadeIsNotShownAgainAfterSchedulesIsLeft() throws {
+        app.press(.id("place-schedules"))
         app.press(.id("new-schedule"))
-        app.wait(for: .text("New Schedule"))
-        app.closeWindow(titled: "Schedules")
-        app.waitGone(.text("New Schedule"))
-        // The folder it runs in is chosen in a row of its own.
-        openSettings("Schedules")
-        app.wait(for: .id("new-schedule"))
+        // The editor's Save, as the + is named "New Schedule" too.
+        app.wait(for: .button("Save"))
+        app.press(.id("place-sessions"))
+        app.waitGone(.button("Save"))
+        app.press(.id("place-schedules"))
+        app.wait(for: .text("Choose a schedule"))
         RunLoop.current.run(until: Date().addingTimeInterval(1))
-        XCTAssertFalse(app.exists(.text("New Schedule")), "the editor came back with the window")
+        XCTAssertFalse(app.exists(.button("Save")), "the editor came back")
     }
 
-    /// SET-1: Settings opens on General each time, not on the tab it was left on.
+    /// SET-1: Settings opens on General each time, not on the pane it was left on.
     func testSettingsOpensOnGeneral() throws {
-        openSettings("Schedules")
-        app.wait(for: .id("new-schedule"))
-        app.closeWindow(titled: "Schedules")
-        app.waitGone(.id("new-schedule"))
+        openSettings("Privacy")
+        app.wait(for: .containing("Send crash reports"))
+        app.press(.id("place-sessions"))
+        app.waitGone(.containing("Send crash reports"))
         app.menu(["AgentTermMacUITest", "Settings…"])
         app.wait(for: .id("menu-bar"))
-        XCTAssertFalse(app.exists(.id("new-schedule")))
+        XCTAssertFalse(app.exists(.containing("Send crash reports")))
+    }
+
+    /// SCHED-14: Schedules lists a run going on, which opens its session; the
+    /// schedules, by when they run next; and the runs that are over.
+    func testSchedulesShowsWhatRunsWhatIsScheduledAndWhatRan() throws {
+        let phone = try device()
+        let later = Schedule(
+            id: "later", name: "Every morning", agent: "claude", folder: project.path, prompt: "review", when: .daily(hour: 9, minute: 0),
+            warningAccepted: true)
+        let soon = Schedule(
+            id: "soon", name: "Soon", agent: "claude", folder: project.path, prompt: "check the build", when: .once(Date().addingTimeInterval(2)),
+            warningAccepted: true)
+        phone.send(.saveSchedule(later))
+        phone.send(.saveSchedule(soon))
+        app.press(.id("place-schedules"))
+        app.wait(for: .id("schedule-later"))
+        app.wait(for: .id("schedule-soon"))
+        app.wait(for: .text("No run is going on."))
+
+        // Its time comes, at the host's next look: its run is going on.
+        wait("the run's session", timeout: 45) { phone.sessions.contains { $0.schedule == "Soon" } }
+        app.wait(for: .containing("· running"), timeout: 10)
+        shot("sched-14-running")
+        app.press(.containing("· running"))
+        app.wait(for: .text("project, folder"))
+        let run = try XCTUnwrap(phone.sessions.first { $0.schedule == "Soon" })
+        XCTAssertTrue(app.exists(.id("session-\(run.id)")))
+
+        // Over, it is among the past runs; a schedule picked is shown to change.
+        phone.send(.kill(session: run.id))
+        wait("the run to end") { !phone.sessions.contains { $0.id == run.id } }
+        app.press(.id("place-schedules"))
+        app.wait(for: .containing("· Started"), timeout: 10)
+        XCTAssertFalse(app.exists(.containing("· running")))
+        app.press(.id("schedule-later"))
+        app.wait(for: .text("Edit Schedule"))
+        XCTAssertFalse(app.exists(.text("Runs")), "this schedule has not run")
+        shot("sched-14-past")
     }
 
     func testKeepAwakeIsTheSameOnBothDevices() throws {
@@ -51,7 +89,6 @@ final class SharedSettingsTests: MacUITestCase {
 
     func testTheUnitOfTheTemperatureAndTheDiffLayoutAreShared() throws {
         let phone = try device()
-        openSettings("General")
         // SYS-3: Fahrenheit chosen on the phone shows in the Mac's line of figures.
         var display = phone.display ?? DisplaySettings()
         display.temperatureUnit = SystemStats.fahrenheit
@@ -60,7 +97,7 @@ final class SharedSettingsTests: MacUITestCase {
         // GIT-6: two panels chosen on the phone is what Settings > Git shows here.
         display.diffLayout = "split"
         phone.send(.setDisplaySettings(display))
-        app.press(.button("Git"), menus: false)
+        openSettings("Git")
         wait("the Mac to show two panels as the choice", timeout: 15) { self.app.exists(.containing("Two panels")) }
     }
 

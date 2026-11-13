@@ -147,3 +147,36 @@ public struct ScheduleRun: Codable, Equatable, Sendable {
         self.note = note
     }
 }
+
+/// The schedules in three groups, as both apps' Schedules show them: the
+/// runs whose session still runs, every schedule by when it runs next, and
+/// the runs that are over, newest first.
+public struct ScheduleOverview: Sendable {
+    /// One run of a schedule.
+    public struct Run: Identifiable, Sendable {
+        public let schedule: Schedule
+        public let run: ScheduleRun
+        public var id: String { schedule.id + "@" + String(run.at.timeIntervalSince1970) }
+    }
+
+    public let running: [Run]
+    /// The next to run first, then those with no time to run at (one waiting
+    /// for a limit to start over), then those turned off; each by name.
+    public let scheduled: [Schedule]
+    public let past: [Run]
+
+    /// - Parameter liveSessions: The sessions that still run.
+    public init(schedules: [Schedule], liveSessions: Set<SessionID>) {
+        let runs = schedules.flatMap { schedule in schedule.runs.map { Run(schedule: schedule, run: $0) } }
+            .sorted { $0.run.at > $1.run.at }
+        func live(_ run: Run) -> Bool { run.run.started && run.run.session.map(liveSessions.contains) == true }
+        running = runs.filter(live)
+        past = runs.filter { !live($0) }
+        scheduled = schedules.sorted { a, b in
+            func rank(_ schedule: Schedule) -> Int { !schedule.enabled ? 2 : schedule.nextRun == nil ? 1 : 0 }
+            if rank(a) != rank(b) { return rank(a) < rank(b) }
+            if let first = a.nextRun, let second = b.nextRun, first != second { return first < second }
+            return a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
+        }
+    }
+}

@@ -5,7 +5,7 @@ import XCTest
 final class HistoryAndTabsTests: MacUITestCase {
     func testAConversationIsListedResumedAndHandedOff() throws {
         let phone = try device()
-        app.press(.button("History"))
+        app.press(.id("panel-history"))
         // HIST-2: the conversation the agent had in this folder.
         app.wait(for: .id("conversation-c-1"), timeout: 15)
         app.wait(for: .text("1 conversation"))
@@ -67,20 +67,91 @@ final class HistoryAndTabsTests: MacUITestCase {
         app.waitGone(.id("session-\(claude.id)"))
     }
 
+    /// WIN-4: the bar of places shows History and Settings at the left, and
+    /// Settings in the middle over the terminal, which is there again after.
+    func testTheBarOfPlaces() throws {
+        let phone = try device()
+        // A conversation in another folder: History lists it, the side panel not.
+        let demo = home.appendingPathComponent("Projects/demo").path
+        let other = home.appendingPathComponent(".claude/projects/" + demo.map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined())
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try #"{"type":"user","cwd":"\#(demo)","message":{"role":"user","content":"tidy the demo"}}"#.appending("\n").write(
+            to: other.appendingPathComponent("c-3.jsonl"), atomically: true, encoding: .utf8)
+        app.press(.button("Shell"))
+        wait("the shell") { phone.sessions.count == 1 }
+        app.wait(for: .id("session-\(phone.sessions[0].id)"))
+        app.wait(for: .text("project, folder"))
+
+        app.press(.id("place-history"))
+        app.wait(for: .text("HISTORY"))
+        app.wait(for: .id("conversation-c-1"), timeout: 15)
+        app.wait(for: .id("conversation-c-3"))
+        XCTAssertFalse(app.exists(.text("project, folder")), "the folders are still listed")
+        XCTAssertFalse(app.exists(.id("system-cpu")))
+        // Every conversation, each naming its folder: there is no switch to one folder's.
+        XCTAssertFalse(app.exists(.button("This Folder")))
+        // HIST-4: the middle asks for a conversation, not the folder's launch screen.
+        app.wait(for: .text("Choose a conversation"))
+        app.press(.id("conversation-c-1"))
+        app.wait(for: .button("Resume in Claude Code"))
+        app.wait(for: .button("Copy Resume Command"))
+        app.wait(for: .text("Hand Off to Another Agent"))
+        app.wait(for: .button("Codex"))
+        shot("win-4-history")
+
+        app.press(.id("place-settings"))
+        app.wait(for: .text("SETTINGS"))
+        for pane in ["General", "Git", "Permissions", "Privacy"] { app.wait(for: .button(pane)) }
+        app.wait(for: .id("menu-bar"))
+        XCTAssertFalse(app.exists(.id("conversation-c-1")))
+        // The line of figures is Sessions' only.
+        XCTAssertFalse(app.exists(.id("system-cpu")))
+        shot("win-4-settings")
+        app.press(.button("Privacy"))
+        app.wait(for: .containing("Send crash reports"))
+        app.press(.id("place-schedules"))
+        app.wait(for: .text("SCHEDULES"))
+        app.wait(for: .text("Choose a schedule"))
+        shot("win-4-schedules")
+
+        app.press(.id("place-sessions"))
+        app.wait(for: .text("project, folder"))
+        app.wait(for: .id("session-\(phone.sessions[0].id)"))
+        app.wait(for: .id("system-cpu"))
+        app.waitGone(.containing("Send crash reports"))
+
+        // HIST-5: the side panel's History, the folder's conversations only;
+        // one picked there is shown in History.
+        app.press(.id("panel-history"))
+        app.wait(for: .id("conversation-c-1"), timeout: 15)
+        RunLoop.current.run(until: Date().addingTimeInterval(1))
+        XCTAssertFalse(app.exists(.id("conversation-c-3")), "another folder's conversation")
+        app.press(.id("conversation-c-1"))
+        app.wait(for: .button("Resume in Claude Code"))
+        app.wait(for: .button("Close"))
+        shot("hist-5-sheet")
+        // Over Sessions, which stays.
+        XCTAssertTrue(app.exists(.text("FOLDERS")))
+        XCTAssertFalse(app.exists(.text("HISTORY")))
+        app.press(.button("Close"))
+        app.waitGone(.button("Resume in Claude Code"))
+        app.wait(for: .text("project, folder"))
+    }
+
     func testTheWindowsPanesAndTheTextSize() throws {
         // WIN-3: the folder list and the side panel hide and show.
         app.wait(for: .text("project, folder"))
-        app.press(.button("Folders"))
+        app.press(.id("place-sessions"))
         app.waitGone(.text("project, folder"))
         // Which Mac the window is about stays in the header.
         XCTAssertTrue(app.exists(.id("mac-switcher")))
-        app.press(.button("Folders"))
+        app.press(.id("place-sessions"))
         app.wait(for: .text("project, folder"))
         app.wait(for: .button("Git"))
         app.press(.button("Side Panel"))
-        app.waitGone(.button("History"))
+        app.waitGone(.button("Files"))
         app.press(.button("Side Panel"))
-        app.wait(for: .button("History"))
+        app.wait(for: .button("Files"))
 
         // SIZE-5: larger text means fewer columns for the session.
         let phone = try device()

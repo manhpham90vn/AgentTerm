@@ -209,7 +209,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | ID | Input | Action or event | Expected response | Checked by |
 |---|---|---|---|---|
 | SYS-1 | A host with a client connected | Three seconds pass | The six figures are measured and sent | H |
-| SYS-2 | The app connected | Look under the launch buttons (Mac), above the sessions (iPhone) | Processor, memory, network down and up, temperature, battery, uptime are shown | P, M |
+| SYS-2 | The app connected | Look under the launch buttons in Sessions (Mac), above the sessions (iPhone) | Processor, memory, network down and up, temperature, battery, uptime are shown | P, M |
 | SYS-3 | Temperature in Celsius | A second device chooses Fahrenheit | The Mac's line shows °F | H, M |
 
 ### Terminal size
@@ -250,7 +250,8 @@ new, `new.txt` new. "A second device" is another client on the same host.
 |---|---|---|---|---|
 | WIN-1 | A host with one folder | A second device adds a folder, then removes it | The Mac's list gains the folder, then loses it | H, P, M |
 | WIN-2 | A session started in a folder that is not listed | Look at the list | The session is under "Other" | P, M |
-| WIN-3 | The window with all three panes | Press the Folders button twice, the Side Panel button twice | Each pane goes and comes back | M |
+| WIN-3 | The window with all three panes | Press Sessions in the bar of places twice, the Side Panel button twice | Each pane goes and comes back | M |
+| WIN-4 | The window on Sessions, with a session, conversations in two folders | Press History, then Settings, then Sessions | History lists every conversation at the left; Settings lists its panes at the left and shows General in the middle, the terminal hidden; the line of figures is in neither; back on Sessions the folders, the line of figures and the session's terminal are there again | M |
 | TAB-1 | Three sessions | Pick one in the sidebar | It has a tab and its terminal is shown | M |
 | TAB-2 | The same | Pin the tab in front; add another to a new group | The host has the pin and the group | H, P, M |
 | TAB-3 | The arrangement from TAB-2 | Quit the Mac app and open it again; look on a second device | The same arrangement on both, also after the restart | H, P, M |
@@ -288,8 +289,10 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | ID | Input | Action or event | Expected response | Checked by |
 |---|---|---|---|---|
 | HIST-1 | Conversations of each agent in a folder, a subfolder and a look-alike sibling | The host lists the folder's conversations | Only that folder's, newest first | H |
-| HIST-2 | One conversation of Claude Code in the fixture project | Open the History tab | The conversation is listed, with "1 conversation" | P, M |
+| HIST-2 | One conversation of Claude Code in the fixture project | Open History | The conversation is listed, with "1 conversation"; on the Mac every conversation is, with no switch to one folder's | P, M |
 | HIST-3 | The same | Choose Resume | A new session of that agent starts with the conversation's id on its command line | H, P, M |
+| HIST-4 | History on the Mac, one conversation | Look in the middle; pick the conversation | "Choose a conversation", not a folder's launch screen; then the conversation: its agent, title and folder, Resume, Copy Resume Command, and the handoff form with the agents to hand it to | M |
+| HIST-5 | The Mac's Sessions, a conversation in the folder and one in another folder | Open the side panel's History; pick the conversation | Only the folder's is listed; picked, it is shown in a sheet over Sessions, which stays, with Resume and the handoff; Close puts it away | M |
 
 ### Keeping the Mac awake, starting at login
 
@@ -386,7 +389,7 @@ A second host stands in for the other Mac, with a project of its own.
 | IOS-4 | A session open, the phone on its side | Bring up the keyboard | There is still terminal to see, and a way back without the navigation bar | L |
 | IOS-5 | The Mac's home with folders | Open Another Folder, pick one, start a shell | The shell starts in that folder | H, P |
 | IOS-6 | The History or Settings tab in front | The Mac answers with an error | The message shows over whichever tab is in front | P |
-| IOS-7 | Paired | Look at the three tabs | Sessions, History, Settings, with the settings the Mac's Settings window has | P |
+| IOS-7 | Paired | Look at the three tabs | Sessions, History, Settings, with the settings the Mac's Settings has | P |
 
 ### Waiting
 
@@ -439,6 +442,8 @@ A second host stands in for the other Mac, with a project of its own.
 | SCHED-10 | Every day at nine, made at 9:31 | A moment passes | Nothing runs until tomorrow | H |
 | SCHED-11 | The Mac app and the iPhone | A schedule is made with "skip all permissions" | The warning is shown, and only once it is accepted is the schedule saved; both show it | hand, until the UI tests cover it |
 | SCHED-12 | A schedule for when the limit resets | The account's limit starts over | It runs two minutes later | hand: needs an account whose limit resets |
+| SCHED-13 | The Mac's Schedules with a schedule half made | Sessions is picked, then Schedules again | The schedule is dropped; the middle asks for one | M |
+| SCHED-14 | A daily schedule and a schedule a moment away | Its time comes; its run is picked; the run's session ends; the daily one is picked | Both under Scheduled, none running; then the run under Running, opening its session; then under Past Runs as started; the daily one in the middle to change, with no runs. The iPhone shows the same three groups | H, M, P |
 
 ### When an agent is done or needs you
 
@@ -487,7 +492,7 @@ A second host stands in for the other Mac, with a project of its own.
 | ID | Input | Action or event | Expected response | Checked by |
 |---|---|---|---|---|
 | TEST-1 | A host and an app started by a test or a test script | A session starts through the login shell | Its `HOME` is the test's home folder: none of the startup files of the person running the tests is read. The hosts and apps get the test's home as `HOME`, `ZDOTDIR` and `CFFIXED_USER_HOME` | M |
-| SET-1 | The Mac app's Settings left on Schedules | Closed and opened again | It opens on General | M |
+| SET-1 | The Mac app's Settings left on Privacy | Left for Sessions, opened again with ⌘, | It opens on General | M |
 
 ## What the tests found
 

@@ -246,6 +246,17 @@ final class FlowTests: XCTestCase {
             XCTAssertTrue(app.switches["keep-awake"].waitForExistence(timeout: 5), "Settings has no Keep Mac Awake switch")
             XCTAssertTrue(app.staticTexts["Commit Messages"].exists)
             capture("7-settings-tab")
+            // SCHED-14: Schedules in three groups, as the Mac shows them.
+            let schedules = app.buttons["schedules"].firstMatch
+            if !schedules.waitForExistence(timeout: 2) { app.swipeUp() }
+            schedules.tap()
+            XCTAssertTrue(app.navigationBars["Schedules"].waitForExistence(timeout: 5))
+            for group in ["RUNNING", "SCHEDULED", "PAST RUNS"] {
+                XCTAssertTrue(app.staticTexts[group].waitForExistence(timeout: 5) || app.staticTexts[group.capitalized].exists, "no \(group) group")
+            }
+            XCTAssertTrue(app.staticTexts["No run is going on."].exists)
+            capture("7-schedules")
+            app.navigationBars.buttons.firstMatch.tap()
             app.tabBars.buttons["History"].tap()
             XCTAssertTrue(app.navigationBars["History"].waitForExistence(timeout: 5))
             app.tabBars.buttons["Sessions"].tap()

@@ -111,8 +111,17 @@ itself.
 - A schedule starts an agent with a prompt in a folder: once at a time,
   every day at a time, on some weekdays at a time, or a little after the
   agent's account limit starts over. On or off without being deleted. Made
-  and changed in the Mac's Settings > Schedules and the iPhone's Settings >
-  Schedules; the host keeps them and runs them, with the app closed too.
+  and changed in the Mac's Schedules, a place of the window, and the
+  iPhone's Settings > Schedules; the host keeps them and runs them, with
+  the app closed too.
+- **Schedules** shows them in three groups, the same on both: **Running**,
+  the runs whose session still runs, each opening its session; **Scheduled**,
+  every schedule, the next to run first, then those waiting for a limit,
+  then those turned off; and **Past Runs**, the runs that are over, newest
+  first, with what came of each (started, skipped, missed). On the Mac the
+  list is at the left, each schedule with its switch, and the schedule
+  picked, or one being made with +, is in the middle with every run it
+  had; one half made is dropped when Schedules is left.
 - **Permissions.** A schedule says how its agent handles permissions:
   skip all (the default: nobody is there to answer), accept edits, or ask.
   Codex offers no "accept edits". Before a schedule that skips them is
@@ -257,7 +266,7 @@ rather than guessed.
 
 ### The Mac at a glance
 
-In a line under the Mac's launch buttons, and above the sessions on the
+In a line under the Mac's launch buttons while Sessions is shown, and above the sessions on the
 iPhone, six figures say how the Mac itself is doing, the ones a system monitor shows:
 processor in use across all cores, memory in use (as a share, and as
 gigabytes of what is installed), network speed down and up, temperature,
@@ -344,13 +353,23 @@ conversation over to a neighbouring project.
 
 ### macOS window
 
-Three panes, like a code editor. The toolbar follows them: the button that
-hides the folder list is at the far left, the launch buttons for the agents
-are in the middle, followed by the pairing button, which is filled so it
+Like a code editor: a bar of places at the left edge, then three panes. The
+bar has the window's places, as the iPhone has its tabs: **Sessions**,
+**History** and **Schedules** at its top, **Settings** (⌘,) at its foot. The
+place shown is marked; pressing it again hides its list, and pressing it
+once more shows it. The toolbar follows the panes: the launch buttons for
+the agents are in the middle, followed by the pairing button, which is filled so it
 stands out, and in the far right corner is the button that hides the side
 panel.
 
-- **Left: folders.** A Settings button sits in the bottom left corner. Project folders the user added, each with its running
+- **Left: the place's list.** In Sessions, the folders. In History, the
+  conversations (below). In Schedules, the runs and the schedules (see
+  Schedules). In Settings, its panes, General, Git, Permissions and
+  Privacy; the pane picked takes the middle of the window, over the
+  terminals, which keep running and come back as they were when another
+  place is picked. Settings opens on General each time. Settings is not a
+  window of its own.
+- **The folders.** Project folders the user added, each with its running
   sessions underneath. A session shows its agent's icon and a name. The list belongs to the host, so the iPhone shows the
   same folders. Sessions started elsewhere are listed under "Other".
   A folder is dragged onto another to go before it, or moved up and down
@@ -372,7 +391,11 @@ panel.
   its tabs; clicking the label folds the group away. A tab takes on the
   place it is dropped in: pinned among the pinned, in the group of the tab
   it lands next to, or on a group's label to join it.
-- **Right: side panel**, with three tabs. The panel can be hidden.
+- **Right: side panel**, with three tabs, Git, History and Files. The panel can be hidden.
+  - **History** of the panel: the conversations each agent had in the
+    selected folder only; conversations that ran in a subfolder belong to
+    that subfolder. One picked there is shown in a sheet over Sessions, with
+    what History shows of it (below); Sessions stays.
   - **Git.** Uncommitted git changes of the selected folder: the changed files
     with added and removed line counts. Clicking a file shows its diff in the
     middle pane, in one diff tab that follows the file picked. A button in
@@ -414,13 +437,15 @@ panel.
     Not part of it: staging part of a file, discarding changes, amending,
     force push, choosing a remote or another branch, and resolving a pull
     that conflicts.
-  - **History.** The conversations each agent had in the selected folder, one
-    section per agent, newest first, with a title and how
-    long ago it was. A conversation can be resumed, which opens it in its
-    agent in a new session, or handed off to another agent. Like the Git
-    tab it covers the selected folder only: conversations that ran in a
-    subfolder belong to that subfolder. A switch at the top changes the list
-    to **All**: every conversation on the Mac, each row naming its folder.
+- **History**, the place in the bar at the left: every conversation the
+    agents had on the Mac, one section per agent, newest first, each with a
+    title, its folder and how long ago it was. A conversation can be
+    resumed, which opens it in its agent in a new session, or handed off to
+    another agent. Picked, it is shown in the middle of the window, over the
+    terminals, as the iPhone shows one: its agent, title and folder, Resume,
+    Copy Resume Command, and the handoff's folder, agent, prompt and
+    instructions. Resuming or handing off goes to Sessions, on the new
+    session. With none picked, the middle says to choose one.
 
 ### Keeping the Mac awake
 
@@ -625,7 +650,7 @@ that Mac; pairing another adds it to the list, and holding a Mac forgets it.
 
 Inside a Mac there are three tabs: **Sessions** (how the Mac is doing, then
 the folders and their sessions), **History** (every conversation on the
-Mac) and **Settings**, in the order of the Mac's Settings window: General
+Mac) and **Settings**, in the order of the Mac's Settings: General
 (keeping the Mac awake with its options, the temperature's unit), Git
 (commit messages, diffs), Privacy, then the Mac itself (switching to
 another, forgetting this one) and About (the version and the links). The

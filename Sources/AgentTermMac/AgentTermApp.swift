@@ -47,6 +47,10 @@ struct AgentTermApp: App {
                 Button("Add Folder…") { model.addFolder() }
                     .keyboardShortcut("o")
             }
+            // Settings is a place in the window, not a window of its own.
+            CommandGroup(replacing: .appSettings) {
+                SettingsCommand(model: model)
+            }
             CommandGroup(replacing: .saveItem) {
                 SaveCommand(files: model.files)
             }
@@ -76,10 +80,6 @@ struct AgentTermApp: App {
             MenuBarMenu(model: model)
         }
 
-        Settings {
-            SettingsTabs()
-                .environmentObject(model)
-        }
     }
 }
 
@@ -144,7 +144,10 @@ private struct MenuBarMenu: View {
             model.showPairing = true
         }
         .disabled(model.isRemote)
-        SettingsLink { Text("Settings and Permissions…") }
+        Button("Settings and Permissions…") {
+            showWindow()
+            model.show(.settings, toggling: false)
+        }
         Divider()
         Button("Quit \(AppChannel.current.appName)") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
@@ -158,7 +161,6 @@ private struct MenuBarMenu: View {
     }
 }
 
-/// The panes of the Settings window. The one last looked at comes back.
 /// Asks once, at the first launch of a build that can send them, whether
 /// crash reports may be sent. Until answered, none are.
 private struct CrashReportQuestion: ViewModifier {
@@ -174,22 +176,7 @@ private struct CrashReportQuestion: ViewModifier {
     }
 }
 
-private struct SettingsTabs: View {
-    @EnvironmentObject private var model: AppModel
-
-    var body: some View {
-        // General each time Settings opens, not the tab it was left on.
-        TabView(selection: $model.settingsTab) {
-            SettingsView().tabItem { Label("General", systemImage: "gearshape") }.tag("general")
-            GitSettingsView().tabItem { Label("Git", systemImage: "arrow.triangle.branch") }.tag("git")
-            SchedulesView().tabItem { Label("Schedules", systemImage: "calendar.badge.clock") }.tag("schedules")
-            PermissionsView().tabItem { Label("Permissions", systemImage: "lock.shield") }.tag("permissions")
-            PrivacySettingsView().tabItem { Label("Privacy", systemImage: "hand.raised") }.tag("privacy")
-        }
-    }
-}
-
-private struct SettingsView: View {
+struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage(MenuBarMode.key) private var staysInMenuBar = MenuBarMode.defaultValue
     @AppStorage(SystemStats.temperatureUnitKey) private var temperatureUnit = SystemStats.celsius
@@ -274,8 +261,9 @@ private struct SettingsView: View {
                 }
             }
             .padding(24)
+            .frame(maxWidth: 680, alignment: .top)
+            .frame(maxWidth: .infinity)
         }
-        .frame(width: 600, height: 560)
     }
 }
 
@@ -363,7 +351,7 @@ private struct KeepAwakeOptionsView: View {
 
 /// Which agent writes commit messages in the Git tab, and how it is asked.
 /// The host keeps these, so the iPhone's Write button does the same.
-private struct GitSettingsView: View {
+struct GitSettingsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var modelName = ""
     @State private var prompt = ""
@@ -518,8 +506,8 @@ private struct GitSettingsView: View {
             .fixedSize(horizontal: false, vertical: true)
         }
         .padding(24)
-        .frame(width: 600, alignment: .top)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: 680, alignment: .top)
+        .frame(maxWidth: .infinity)
         .onAppear(perform: load)
         .onChange(of: model.commitWriter) { old, new in
             // The settings changed, here through the agent's picker or on
@@ -532,7 +520,7 @@ private struct GitSettingsView: View {
 }
 
 /// What AgentTerm reports to its developer, and the switches for it.
-private struct PrivacySettingsView: View {
+struct PrivacySettingsView: View {
     @StateObject private var preferences = TelemetryPreferences()
 
     var body: some View {
@@ -572,8 +560,8 @@ private struct PrivacySettingsView: View {
             }
         }
         .padding(24)
-        .frame(width: 600, alignment: .top)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: 680, alignment: .top)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -707,5 +695,20 @@ private struct TabCommands: View {
         .disabled(model.tabCount < 2)
         Button(model.sessions.isEmpty ? "Close All Tabs" : "Close All Tabs…") { model.closeTabs() }
             .disabled(model.tabCount == 0)
+    }
+}
+
+/// ⌘, : Settings, in the window, which is brought back if it was closed.
+private struct SettingsCommand: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Settings…") {
+            openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
+            model.show(.settings, toggling: false)
+        }
+        .keyboardShortcut(",")
     }
 }

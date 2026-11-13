@@ -34,14 +34,31 @@ struct RootView: View {
     }
 
     var body: some View {
+        HStack(spacing: 0) {
+            ActivityBar()
+            Theme.hairline.frame(width: 1)
+            panes
+        }
+        .background(Theme.canvas)
+    }
+
+    private var panes: some View {
         HSplitView {
             if model.showSidebar {
-                SidebarView()
-                    .frame(minWidth: 210, idealWidth: 250, maxWidth: 380)
+                Group {
+                    switch model.place {
+                    case .sessions: SidebarView()
+                    case .history: HistorySidebar()
+                    case .schedules: SchedulesSidebar()
+                    case .settings: SettingsSections()
+                    }
+                }
+                .frame(minWidth: 210, idealWidth: 250, maxWidth: 380)
             }
             VStack(spacing: 0) {
-                // Right under the launch buttons: how this Mac is doing.
-                SystemStatsLine(store: model.system)
+                // Right under the launch buttons: how this Mac is doing,
+                // with its sessions only.
+                if model.place == .sessions { SystemStatsLine(store: model.system) }
                 if let path = model.otherHost {
                     OtherHostBanner(path: path)
                 } else if model.hostMatch != .same {
@@ -55,7 +72,24 @@ struct RootView: View {
                 if let notice = model.agentNotice {
                     AgentNoticeBanner(notice: notice)
                 }
-                CenterView()
+                // History and Settings over the terminals rather than in
+                // their place, which would start them again when left.
+                ZStack {
+                    CenterView()
+                        .overlay {
+                            // A conversation resumed, a handoff: until its session is here.
+                            if let starting = model.starting { LoadingView(starting, cover: Theme.canvas.opacity(0.92)) }
+                        }
+                        .opacity(model.place == .sessions ? 1 : 0)
+                        .allowsHitTesting(model.place == .sessions)
+                        .accessibilityHidden(model.place != .sessions)
+                    switch model.place {
+                    case .sessions: EmptyView()
+                    case .history: ConversationDetail()
+                    case .schedules: SchedulesView().background(Theme.canvas)
+                    case .settings: SettingsPane()
+                    }
+                }
             }
             .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
             .layoutPriority(1)
@@ -66,16 +100,8 @@ struct RootView: View {
         }
         .background(Theme.canvas)
         .toolbar {
-            // Far left: the folder list's toggle, next to the list it hides.
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    model.showSidebar.toggle()
-                } label: {
-                    Label("Folders", systemImage: "sidebar.leading")
-                }
-                .help(model.showSidebar ? "Hide the folder list" : "Show the folder list")
-            }
-            // Middle: which Mac all of the window is about, then starting an
+            // The list at the left is hidden from the bar of places, at the
+            // window's edge. Middle: which Mac all of the window is about, then starting an
             // agent on it, the main thing to do here. Pairing an iPhone or
             // another Mac is what sets the app apart, so it sits with them
             // and stands out.
@@ -157,6 +183,9 @@ struct RootView: View {
         }
         .sheet(item: $model.pendingHandoff) { conversation in
             HandoffSheet(conversation: conversation)
+        }
+        .sheet(item: $model.panelConversation) { conversation in
+            ConversationSheet(conversation: conversation)
         }
         .alert("AgentTerm", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {
             Button("OK", role: .cancel) {}
