@@ -641,8 +641,8 @@ the same folder can therefore be mixed up; the History tab is exact.
 ## Another Mac
 
 The Mac app can show another Mac instead of the one it runs on
-(`AppModel.remote`), the way the iPhone shows a Mac. The menu at the top of
-the sidebar switches between this Mac and the paired ones.
+(`AppModel.remote`), the way the iPhone shows a Mac. The menu in the
+toolbar, before the agents, switches between this Mac and the paired ones.
 
 - Pairing is by link: a Mac has no camera pointed at the other's screen, so
   the link under the pairing code is pasted (`pairMac(link:)`). The code is
