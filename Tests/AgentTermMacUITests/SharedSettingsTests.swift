@@ -109,7 +109,8 @@ final class SharedSettingsTests: MacUITestCase {
         wait("the agent the phone chose") { self.app.all(.role(kAXPopUpButtonRole as String)).contains { $0.label == "Agent" && $0.value == "Codex" } }
         wait("the model the phone named") { self.app.all(.role(kAXTextFieldRole as String)).contains { $0.label == "Model" && $0.value == "a-model" } }
         wait("the prompt the phone wrote") { self.app.all(.role(kAXTextAreaRole as String)).contains { $0.value == "Viết bằng tiếng Việt." } }
-        // And the Write button names that agent.
+        // And the Write button names that agent, in Sessions' side panel.
+        app.press(.id("place-sessions"))
         app.wait(for: .containing("Write the commit message with Codex"))
     }
 

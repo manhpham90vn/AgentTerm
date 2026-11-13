@@ -1212,12 +1212,12 @@ public final class HostServer {
             schedulesFrom[id] = nil
             saveSchedules()
             broadcastSchedules()
-        case .attach(let id, let size, let have):
+        case .attach(let id, let size, let have, let history):
             guard let session = sessions[id] else {
                 send(.error("no such session"), to: client)
                 return
             }
-            attach(client, to: session, size: size, have: have)
+            attach(client, to: session, size: size, have: have, history: history)
         case .detach(let id):
             client.attached.remove(id)
             if let session = sessions[id], session.arbiter.remove(client.id) { applySize(of: session) }
@@ -2058,7 +2058,7 @@ public final class HostServer {
         }
     }
 
-    private func attach(_ client: Client, to session: Session, size: TermSize, have: Int? = nil) {
+    private func attach(_ client: Client, to session: Session, size: TermSize, have: Int? = nil, history: Int? = nil) {
         client.attached.insert(session.info.id)
         // Watching is not using: this only sets the size if nobody else is attached.
         let changed = session.arbiter.update(client.id, size: size)
@@ -2079,9 +2079,9 @@ public final class HostServer {
             // above it, written out for the size the session has. To the
             // client it is output like any other, and it counts on from the
             // end of it as it would after the session's own.
-            replay = session.mirror.snapshot()
+            replay = session.mirror.snapshot(linesAbove: history)
         }
-        send(.replaying(session: session.info.id, from: session.written - replay.count), to: client)
+        send(.replaying(session: session.info.id, from: session.written - replay.count, above: session.mirror.linesAbove), to: client)
         // In pieces: the whole of it may be larger than one message may be.
         var start = replay.startIndex
         while start < replay.endIndex {

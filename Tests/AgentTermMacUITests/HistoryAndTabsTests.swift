@@ -90,6 +90,9 @@ final class HistoryAndTabsTests: MacUITestCase {
         XCTAssertFalse(app.exists(.id("system-cpu")))
         // Every conversation, each naming its folder: there is no switch to one folder's.
         XCTAssertFalse(app.exists(.button("This Folder")))
+        // The side panel is not there: it has nothing to do with History.
+        XCTAssertFalse(app.exists(.id("panel-git")), "the side panel shows in History")
+        XCTAssertFalse(app.exists(.button("Side Panel")), "its button shows in History")
         // HIST-4: the middle asks for a conversation, not the folder's launch screen.
         app.wait(for: .text("Choose a conversation"))
         app.press(.id("conversation-c-1"))
@@ -101,6 +104,8 @@ final class HistoryAndTabsTests: MacUITestCase {
 
         app.press(.id("place-settings"))
         app.wait(for: .text("SETTINGS"))
+        XCTAssertFalse(app.exists(.id("panel-git")), "the side panel shows in Settings")
+        XCTAssertFalse(app.exists(.button("Side Panel")), "its button shows in Settings")
         for pane in ["General", "Git", "Permissions", "Privacy"] { app.wait(for: .button(pane)) }
         app.wait(for: .id("menu-bar"))
         XCTAssertFalse(app.exists(.id("conversation-c-1")))
@@ -111,13 +116,24 @@ final class HistoryAndTabsTests: MacUITestCase {
         app.wait(for: .containing("Send crash reports"))
         app.press(.id("place-schedules"))
         app.wait(for: .text("SCHEDULES"))
+        XCTAssertFalse(app.exists(.id("panel-git")), "the side panel shows in Schedules")
         app.wait(for: .text("Choose a schedule"))
         shot("win-4-schedules")
 
+        // WIN-5: an agent started from the header while Settings is shown
+        // is shown in Sessions.
+        app.press(.button("Shell"))
+        wait("the second shell") { phone.sessions.count == 2 }
+        app.wait(for: .text("FOLDERS"))
+        app.wait(for: .id("panel-git"))
+        app.press(.id("place-settings"))
+        app.wait(for: .text("SETTINGS"))
         app.press(.id("place-sessions"))
         app.wait(for: .text("project, folder"))
         app.wait(for: .id("session-\(phone.sessions[0].id)"))
         app.wait(for: .id("system-cpu"))
+        app.wait(for: .id("panel-git"))
+        app.wait(for: .button("Side Panel"))
         app.waitGone(.containing("Send crash reports"))
 
         // HIST-5: the side panel's History, the folder's conversations only;

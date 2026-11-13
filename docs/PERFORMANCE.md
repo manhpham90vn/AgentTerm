@@ -80,6 +80,22 @@ since Foundation's `Process` took some 70 ms to start one and see it end
 | Attaching to a session with 10,000 lines | 81 ms on the queue the sessions use | 81 ms | **over** (16 ms) |
 | A text file over 2 MB | cannot be opened | cannot be opened | **over** |
 
+## Scrolling on the iPhone
+
+Taken on 2026-11-13 on the simulator "iPhone Air" (`SCROLL=only
+scripts/test-ios.sh "iPhone Air"`, PERF-6): a terminal of 5,000 lines, a fast
+swipe, and the app's processor work while it coasts, five times. The
+simulator does not report late frames; a phone does.
+
+| | Drawn on the processor | Drawn on the GPU |
+|---|---|---|
+| Processor time while it coasts | 0.78 s | 0.57 s |
+| Instructions | 7.2 billion | 2.2 billion |
+| The coast | 2.43 s | 2.42 s |
+
+A long session is opened with 500 lines above the screen rather than all of
+it, and the rest comes a page at a time as it is scrolled up (HIST-6).
+
 ## Not measured yet
 
 These need what a test on this Mac does not have, and are still to do for

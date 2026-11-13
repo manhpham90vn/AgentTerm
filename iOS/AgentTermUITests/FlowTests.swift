@@ -19,6 +19,66 @@ final class FlowTests: XCTestCase {
     }
 
     /// The main screens with the phone on its side, from a session's terminal.
+    /// PERF-6: how smoothly a terminal of 5,000 lines scrolls, as the time
+    /// frames were late while it coasted after a fast swipe.
+    private func measureScrolling(_ app: XCUIApplication, compose: XCUIElement) {
+        compose.tap()
+        compose.typeText("seq 1 5000")
+        app.buttons["Send"].tap()
+        if app.buttons["hide-keyboard"].firstMatch.waitForExistence(timeout: 3) { app.buttons["hide-keyboard"].firstMatch.tap() }
+        sleep(4)
+        let terminal = app.descendants(matching: .any)["terminal"].firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 5))
+        let options = XCTMeasureOptions()
+        options.invocationOptions = [.manuallyStop]
+        options.iterationCount = 5
+        // On a simulator only the length of the coast comes from the scroll
+        // metric; the processor time the app spends drawing it says how
+        // costly each frame is, which is what drawing on the GPU changes.
+        measure(metrics: [XCTOSSignpostMetric.scrollDecelerationMetric, XCTCPUMetric(application: app)], options: options) {
+            terminal.swipeDown(velocity: .fast)
+            stopMeasuring()
+            terminal.swipeUp(velocity: .fast)
+            terminal.swipeUp(velocity: .fast)
+        }
+    }
+
+    /// HIST-6: a long session opened again comes with the screen and 500
+    /// lines above it; scrolled to their top, a strip says earlier lines
+    /// load, and they come, a page at a time.
+    private func pagedHistory(_ app: XCUIApplication, compose: XCUIElement) {
+        compose.tap()
+        compose.typeText("seq 1 3000")
+        app.buttons["Send"].tap()
+        if app.buttons["hide-keyboard"].firstMatch.waitForExistence(timeout: 3) { app.buttons["hide-keyboard"].firstMatch.tap() }
+        sleep(3)
+        // Opened again by an app that has none of it: now with only the
+        // lines near the screen. (Started here, it came whole, and going
+        // back and in again keeps what the terminal has.)
+        app.terminate()
+        app.launch()
+        if app.buttons["First Mac"].waitForExistence(timeout: 15) { app.buttons["First Mac"].tap() }
+        let row = app.staticTexts["zsh"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.tap()
+        let terminal = app.descendants(matching: .any)["terminal"].firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10))
+        sleep(2)
+        let loaded = app.descendants(matching: .any)["history-loaded"].firstMatch
+        func asked() -> Int { Int(loaded.value as? String ?? "") ?? 0 }
+        var seen: [Int] = []
+        for _ in 0..<120 where seen.count < 2 {
+            terminal.swipeDown(velocity: .fast)
+            sleep(1)
+            let now = asked()
+            if now > (seen.last ?? 500) {
+                seen.append(now)
+                capture("17-history-page-\(seen.count)")
+            }
+        }
+        XCTAssertEqual(seen, [1_500, 2_500], "scrolling up did not load earlier lines a page at a time")
+    }
+
     private func landscape(_ app: XCUIApplication, compose: XCUIElement) {
         XCUIDevice.shared.orientation = .landscapeLeft
         defer { XCUIDevice.shared.orientation = .portrait }
@@ -139,6 +199,14 @@ final class FlowTests: XCTestCase {
         // A run that only looks at the app on its side.
         if environment["AGENTTERM_ONLY_LANDSCAPE"] != nil {
             landscape(app, compose: compose)
+            return
+        }
+        if environment["AGENTTERM_ONLY_SCROLL"] != nil {
+            measureScrolling(app, compose: compose)
+            return
+        }
+        if environment["AGENTTERM_ONLY_HISTORY"] != nil {
+            pagedHistory(app, compose: compose)
             return
         }
 

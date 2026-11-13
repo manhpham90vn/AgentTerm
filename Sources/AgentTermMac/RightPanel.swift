@@ -260,13 +260,8 @@ private struct ConversationRow: View {
         // first would wait to know there is no second.
         .simultaneousGesture(TapGesture().onEnded(pick))
         .simultaneousGesture(TapGesture(count: 2).onEnded(resume))
-        // Resume and Hand Off are in the middle once it is picked.
-        .contextMenu {
-            Button("Copy Resume Command") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(conversation.resumeCommand, forType: .string)
-            }
-        }
+        // Resume, Copy Resume Command and Hand Off are where it opens, in
+        // the middle or in a sheet: the row has no menu of its own.
         .help(tip)
         // The row says what it is and offers what the middle does as its actions.
         .accessibilityElement(children: .ignore)

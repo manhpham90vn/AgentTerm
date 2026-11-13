@@ -176,6 +176,33 @@ final class EndToEndTests: XCTestCase {
         mac.connection.send(.kill(session: id))
     }
 
+    /// HIST-6: a client that attaches with `history` is sent the screen and
+    /// that many lines above it, and told how many the host keeps; it
+    /// attaches again with more as it scrolls up.
+    func testAPhoneIsSentOnlySoMuchHistoryAndMoreWhenItAsks() {
+        let mac = connect("mac")
+        let size = TermSize(cols: 40, rows: 10)
+        mac.connection.send(.create(CreateRequest(command: "seq 1 2000; exec sleep 600", cwd: NSTemporaryDirectory(), title: "long", size: size)))
+        waitUntil("the session") { mac.attached != nil }
+        let id = mac.attached!.id
+        waitUntil("its output") { mac.text(id).contains("2000") }
+
+        let phone = connect("phone")
+        func above() -> Int? { phone.messages.compactMap { if case .replaying(id, _, let above) = $0 { return above } else { return nil } }.last ?? nil }
+        func replays() -> Int { phone.messages.filter { $0 == .replayed(session: id) }.count }
+        phone.connection.send(.attach(session: id, size: size, history: 100))
+        waitUntil("the first replay") { replays() == 1 }
+        XCTAssertGreaterThanOrEqual(above() ?? 0, 1990, "the host keeps all of it")
+        let first = phone.text(id)
+        XCTAssertTrue(first.contains("1950"))
+        XCTAssertFalse(first.contains("\r\n1800\r\n"), "more than a hundred lines above the screen were sent")
+
+        phone.connection.send(.attach(session: id, size: size, history: 600))
+        waitUntil("the second replay") { replays() == 2 }
+        XCTAssertTrue(phone.text(id).contains("\r\n1500\r\n"), "the lines asked for next")
+        mac.connection.send(.kill(session: id))
+    }
+
     func testAnEmulatorAnsweringDoesNotTakeTheSessionAway() {
         // `cat -v` shows what reaches the program, with ESC as "^[".
         let phone = connect("phone")
@@ -271,7 +298,7 @@ final class EndToEndTests: XCTestCase {
         waitUntil("echoed") { first.text(id).contains("before-the-drop\r\nbefore-the-drop") }
 
         func start(_ client: TestClient) -> Int? {
-            client.messages.compactMap { if case .replaying(id, let from) = $0 { return from } else { return nil } }.last
+            client.messages.compactMap { if case .replaying(id, let from, _) = $0 { return from } else { return nil } }.last
         }
         // A phone opens the session: its screen, and where that ends up in
         // the session's output, which is where the session is now.

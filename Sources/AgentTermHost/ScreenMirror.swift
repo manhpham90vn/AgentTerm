@@ -68,13 +68,17 @@ final class ScreenMirror: TerminalDelegate {
     /// Not carried over: images, links, tab stops, character sets and origin
     /// mode. A cursor that waits past the last column to wrap is put on the
     /// last column.
-    func snapshot() -> Data {
-        if let written { return written }
+    ///
+    /// - Parameter linesAbove: At most this many of the lines above the
+    ///   screen, the nearest ones; nil for all of them. A phone opens a long
+    ///   session with a few hundred, and asks for more as it scrolls up.
+    func snapshot(linesAbove: Int? = nil) -> Data {
+        if linesAbove == nil, let written { return written }
         let escape = "\u{1b}["
         // An emulator that was used before starts empty too.
         var out = "\(escape)?1049l\(escape)r\(escape)H\(escape)2J\(escape)3J"
 
-        let normal = terminal.contentSnapshot(region: .all, buffer: .normal)
+        let normal = terminal.contentSnapshot(region: linesAbove.map { .history(maximumScrollbackRows: max(0, $0)) } ?? .all, buffer: .normal)
         let state = normal.inputState
         out += written(normal)
         out += cursorPosition(in: normal)
@@ -120,8 +124,17 @@ final class ScreenMirror: TerminalDelegate {
         var data = Data(out.utf8)
         // The beginning of what the live output is in the middle of.
         data.append(tracker.pending)
-        written = data
+        if linesAbove == nil { written = data }
         return data
+    }
+
+    /// How many lines are kept above the screen of the session's own
+    /// buffer, the one a person scrolls back through.
+    var linesAbove: Int {
+        if terminal.isCurrentBufferAlternate {
+            return max(0, terminal.contentSnapshot(region: .all, buffer: .normal).rows.count - terminal.rows)
+        }
+        return terminal.getTopVisibleRow()
     }
 
     /// The rows of a buffer as terminal output. Without the colors of this

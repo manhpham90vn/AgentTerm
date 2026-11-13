@@ -100,6 +100,33 @@ final class ScreenMirrorTests: XCTestCase {
         assertSame(client, original)
     }
 
+    /// HIST-6: a phone is sent the screen and only so many lines above it,
+    /// told how many the host keeps, and asks for more as it scrolls up.
+    func testOnlySoManyLinesAboveTheScreenAreWrittenOut() {
+        let output = (1...300).map { "line \($0)\r\n" } + ["$ "]
+        let (mirror, original) = session(output)
+        XCTAssertEqual(mirror.linesAbove, 291, "300 lines and the prompt, ten rows on the screen")
+
+        let client = Client(size: size)
+        client.feed(mirror.snapshot(linesAbove: 50))
+        let lines = text(of: client)
+        XCTAssertEqual(lines.count, 50 + size.rows)
+        XCTAssertEqual(lines.first, "line 242", "the fifty lines just above the screen")
+        // The screen, the cursor and the modes are those of the session.
+        XCTAssertEqual(Array(lines.suffix(size.rows)), Array(text(of: original).suffix(size.rows)))
+        XCTAssertEqual(cursor(of: client), cursor(of: original))
+
+        // More of them: the same lines, and those above them.
+        let more = Client(size: size)
+        more.feed(mirror.snapshot(linesAbove: 150))
+        XCTAssertEqual(text(of: more).count, 150 + size.rows)
+        XCTAssertEqual(Array(text(of: more).suffix(lines.count)), lines)
+        // More than it keeps is all it keeps.
+        let all = Client(size: size)
+        all.feed(mirror.snapshot(linesAbove: 10_000))
+        XCTAssertEqual(text(of: all), text(of: original))
+    }
+
     func testAFullScreenProgramShowsWithoutDrawingAgain() {
         let (mirror, original) = session([
             "before the program\r\n$ agent\r\n",

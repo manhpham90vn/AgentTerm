@@ -1189,6 +1189,9 @@ final class AppModel: ObservableObject {
                 if selectNextAttached {
                     files.active = nil
                     diffInFront = false
+                    // Started from the header, a menu or History: the
+                    // session is looked at in Sessions, wherever the window was.
+                    show(.sessions, toggling: false)
                 }
                 selectNextAttached = false
                 selectedSession = info.id

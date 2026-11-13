@@ -134,6 +134,22 @@ Keeping the Mac's own, larger grid and letting the narrower output flow into
 it was tried and dropped: it reads well for programs that draw relative to
 the cursor, but the picture on the Mac is then not the picture on the phone.
 
+### Earlier lines a page at a time
+
+`attach` takes `history`: how many lines above the screen to write out,
+the nearest ones (`ScreenMirror.snapshot(linesAbove:)`); nil for all.
+`replaying` says, in `above`, how many the host keeps. The iPhone attaches
+with 500 (`TerminalController.historyAsked`); when the view is scrolled to
+its top by a finger (watched on `contentOffset`, since the emulator does not
+say it scrolled while a finger moves it), and the host keeps more, it
+attaches again with 1,000 more. That replay is drawn over the same
+terminal, not a new one, and says so in a strip rather than over the
+screen; it does not take the session's size again. Once drawn, a swipe
+still coasting is stopped and the row that was at the top is put back by
+number, again after the emulator's next frames, which follow its output to
+the bottom, until it stays (HIST-6). A reconnect asks with `have` and the
+same `history`, and gets only what came since.
+
 ### The size a session starts with
 
 A session is created with the grid that fits the place its terminal will be

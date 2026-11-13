@@ -88,6 +88,28 @@ struct TerminalScreen: View {
                             LoadingView("Loading the session…", cover: Palette.canvas.opacity(0.92))
                         }
                     }
+                    .overlay(alignment: .top) {
+                        // Earlier lines on their way, scrolled to the top of
+                        // what was loaded: a strip, the screen stays (HIST-6).
+                        if model.loadingHistory == session {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("Loading earlier lines…").font(.footnote)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Capsule().fill(Palette.panel))
+                            .padding(.top, 6)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityIdentifier("loading-history")
+                        }
+                        // How many earlier lines were asked for, for the tests:
+                        // a strip may come and go faster than they can look.
+                        Color.clear.frame(width: 1, height: 1)
+                            .accessibilityElement()
+                            .accessibilityIdentifier("history-loaded")
+                            .accessibilityValue(model.historyLoaded.map(String.init) ?? "")
+                    }
                     // Room around the text, so it does not sit on the
                     // screen's edges; under the last row too, which can
                     // otherwise sit right on what is below.

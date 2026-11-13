@@ -254,7 +254,8 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | WIN-1 | A host with one folder | A second device adds a folder, then removes it | The Mac's list gains the folder, then loses it | H, P, M |
 | WIN-2 | A session started in a folder that is not listed | Look at the list | The session is under "Other" | P, M |
 | WIN-3 | The window with all three panes | Press Sessions in the bar of places twice, the Side Panel button twice | Each pane goes and comes back | M |
-| WIN-4 | The window on Sessions, with a session, conversations in two folders | Press History, then Settings, then Sessions | History lists every conversation at the left; Settings lists its panes at the left and shows General in the middle, the terminal hidden; the line of figures is in neither; back on Sessions the folders, the line of figures and the session's terminal are there again | M |
+| WIN-4 | The window on Sessions, with a session, conversations in two folders | Press History, then Settings, then Sessions | History lists every conversation at the left; the side panel is in Sessions only; Settings lists its panes at the left and shows General in the middle, the terminal hidden; the line of figures is in neither; back on Sessions the folders, the line of figures and the session's terminal are there again | M |
+| WIN-5 | The window on Settings, History or Schedules | Start a shell or an agent from the header | It is shown in Sessions | M |
 | TAB-1 | Three sessions | Pick one in the sidebar | It has a tab and its terminal is shown | M |
 | TAB-2 | The same | Pin the tab in front; add another to a new group | The host has the pin and the group | H, P, M |
 | TAB-3 | The arrangement from TAB-2 | Quit the Mac app and open it again; look on a second device | The same arrangement on both, also after the restart | H, P, M |
@@ -296,6 +297,8 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | HIST-3 | The same | Choose Resume | A new session of that agent starts with the conversation's id on its command line | H, P, M |
 | HIST-4 | History on the Mac, one conversation | Look in the middle; pick the conversation | "Choose a conversation", not a folder's launch screen; then the conversation: its agent, title and folder, Resume, Copy Resume Command, and the handoff form with the agents to hand it to | M |
 | HIST-5 | The Mac's Sessions, a conversation in the folder and one in another folder | Open the side panel's History; pick the conversation | Only the folder's is listed; picked, it is shown in a sheet over Sessions, which stays, with Resume and the handoff; Close puts it away | M |
+| HIST-6 | A session of 3,000 lines opened again on the iPhone | Scroll to the top, twice | It came with 500 lines above the screen; each time earlier lines load, 1,000 more, a strip saying so, and the line in view stays in view; the host writes out only as many as asked and says how many it keeps | H, P |
+| PERF-6 | A terminal of 5,000 lines on the iPhone | A fast swipe, five times (`SCROLL=only scripts/test-ios.sh`) | The app's processor work while it coasts is measured; the figures are in PERFORMANCE.md | P |
 
 ### Keeping the Mac awake, starting at login
 

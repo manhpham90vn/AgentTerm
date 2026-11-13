@@ -864,7 +864,7 @@ final class PhoneModel: ObservableObject {
                     if let controller, controller.session == open, let have = controller.position, hostVersion >= 6 {
                         // The terminal is still here with all it was sent:
                         // only what the session wrote since is asked for.
-                        connection?.send(.attach(session: open, size: session(open)?.size ?? .default, have: have))
+                        connection?.send(.attach(session: open, size: session(open)?.size ?? .default, have: have, history: controller.historyAsked))
                     } else {
                         controller = nil
                         self.open(open)
@@ -922,6 +922,8 @@ final class PhoneModel: ObservableObject {
             if openCreatedSession {
                 openCreatedSession = false
                 controller = makeController(for: info.id)
+                // Started here: the host sends all of it, as for any create.
+                controller?.historyAsked = nil
                 foreignSize = nil
                 showBrowser = false
                 // On top of wherever it was started from, so Back returns there.
@@ -933,11 +935,13 @@ final class PhoneModel: ObservableObject {
             // What follows is the session's earlier output, until `replayed`.
             if controller?.session == info.id {
                 controller?.beginReplay(size: info.size)
-                replaying = info.id
+                // Earlier lines asked for show in a strip; the screen stays.
+                if controller?.loadingHistory != true { replaying = info.id }
             }
-        case .replaying(let id, let from):
+        case .replaying(let id, let from, let above):
+            if let above, controller?.session == id { controller?.historyKept = above }
             guard let current = controller, current.session == id, current.position != from else { return }
-            if current.position != nil {
+            if current.position != nil, !current.loadingHistory {
                 // The Mac could not go on from where this terminal stopped
                 // and sends all it keeps: that is for a terminal that starts empty.
                 controller = makeController(for: id)
@@ -947,11 +951,15 @@ final class PhoneModel: ObservableObject {
         case .replayed(let id):
             if replaying == id { replaying = nil }
             if controller?.session == id {
+                // Earlier lines brought in are not the phone coming back: the
+                // session is in use here already, and taking it again would
+                // draw it for the screen's size, leaving the lines just read.
+                let paging = controller?.loadingHistory == true
                 controller?.endReplay()
                 // Open here is in use here: the session takes this screen's
                 // size, also when the phone comes back after it was away
                 // and the Mac had it at its own, without a button.
-                controller?.claimSize()
+                if !paging { controller?.claimSize() }
             }
         case .resized(let id, let size, let driver):
             if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].size = size }
@@ -1066,8 +1074,27 @@ final class PhoneModel: ObservableObject {
         controller.onInput = { [weak self] data in self?.connection?.sendInput(data, to: id) }
         controller.onResize = { [weak self] size in self?.connection?.send(.resize(session: id, size: size)) }
         controller.onClaim = { [weak self] size in self?.connection?.send(.takeControl(session: id, size: size)) }
+        // A few hundred lines above the screen to start with; more as it is
+        // scrolled up (HIST-6).
+        controller.historyAsked = Self.historyToStartWith
+        controller.onNeedsHistory = { [weak self] lines in
+            guard let self else { return }
+            self.connection?.send(.attach(session: id, size: self.session(id)?.size ?? .default, history: lines))
+        }
+        controller.onLoadingHistory = { [weak self, weak controller] loading in
+            self?.loadingHistory = loading ? id : nil
+            if !loading { self?.historyLoaded = controller?.historyAsked }
+        }
         return controller
     }
+
+    /// How many lines above the screen a session is opened with.
+    static let historyToStartWith = 500
+    /// The session whose earlier lines are on their way.
+    @Published private(set) var loadingHistory: SessionID?
+    /// How many lines above the screen the open terminal has asked for, as
+    /// the tests read it.
+    @Published private(set) var historyLoaded: Int?
 
     // MARK: Actions
 
@@ -1102,7 +1129,7 @@ final class PhoneModel: ObservableObject {
         controller = makeController(for: id)
         foreignSize = nil
         // Attach with the size the session already has; ours follows after layout.
-        connection?.send(.attach(session: id, size: session(id)?.size ?? .default))
+        connection?.send(.attach(session: id, size: session(id)?.size ?? .default, history: controller?.historyAsked ?? Self.historyToStartWith))
     }
 
     /// Stops watching a session. The Mac gets its own size back.

@@ -175,7 +175,10 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// session's output the sender's terminal already is, as `replaying`
     /// and what followed it told: the host then sends only what came after,
     /// when it still keeps that. Nil for a terminal that starts empty.
-    case attach(session: SessionID, size: TermSize, have: Int? = nil)
+    /// `history` is how many of the lines above the screen to send, the
+    /// nearest ones; nil for all of them. A phone opens a long session with
+    /// a few hundred and attaches again with more as it scrolls up.
+    case attach(session: SessionID, size: TermSize, have: Int? = nil, history: Int? = nil)
     case detach(session: SessionID)
     /// Reports that the sender's own grid changed (a window was resized, a
     /// keyboard appeared). The session follows only if the sender is the one
@@ -319,8 +322,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// the session's output what follows starts. It is the `have` the
     /// client attached with when the host could go on from there. Any other
     /// number means all that is kept comes again, for a terminal that
-    /// starts empty.
-    case replaying(session: SessionID, from: Int)
+    /// starts empty. `above` is how many lines the host keeps above the
+    /// screen, whether or not all of them follow.
+    case replaying(session: SessionID, from: Int, above: Int? = nil)
     /// Sent after `attached` and the session's earlier output that follows
     /// it: everything before this was a replay of what already happened.
     case replayed(session: SessionID)

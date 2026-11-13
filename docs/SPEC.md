@@ -51,6 +51,13 @@ itself.
   for it, and the 10,000 lines above it to scroll back through. All of it
   is laid out for the size the session has now. A terminal scrolls back
   20,000 lines, on the Mac and on the iPhone.
+- The iPhone opens a session with its screen and the 500 lines above it.
+  Scrolled to the top of those, a strip at the top says "Loading earlier
+  lines…", the next 1,000 come, and the line that was in view stays in
+  view. What it has is kept: going back to the session, or reconnecting,
+  brings only what was written since. A session started on the iPhone
+  comes whole. The Mac gets all of it.
+- The iPhone's terminal is drawn on the GPU.
 
 ### Session names
 
@@ -398,7 +405,7 @@ panel.
   its tabs; clicking the label folds the group away. A tab takes on the
   place it is dropped in: pinned among the pinned, in the group of the tab
   it lands next to, or on a group's label to join it.
-- **Right: side panel**, with three tabs, Git, History and Files. The panel can be hidden.
+- **Right: side panel**, with three tabs, Git, History and Files. The panel can be hidden. It is there in Sessions only, and so is its button: in History, Schedules and Settings what is in the middle is what the window is about.
   - **History** of the panel: the conversations each agent had in the
     selected folder only; conversations that ran in a subfolder belong to
     that subfolder. One picked there is shown in a sheet over Sessions, with

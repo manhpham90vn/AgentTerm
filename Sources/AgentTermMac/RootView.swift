@@ -93,7 +93,10 @@ struct RootView: View {
             }
             .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
             .layoutPriority(1)
-            if model.showDiff {
+            // In Sessions only: in History, Schedules and Settings what is in
+            // the middle is what is looked at, and the folder's changes and
+            // files have nothing to do with it.
+            if model.showDiff && model.place == .sessions {
                 RightPanel()
                     .frame(minWidth: 310, idealWidth: 420, maxWidth: 760)
             }
@@ -123,14 +126,16 @@ struct RootView: View {
                 Spacer()
             }
             // Far right: the side panel's toggle, in the corner above the
-            // panel it hides.
+            // panel it hides; only where the panel is, in Sessions.
             ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    model.showDiff.toggle()
-                } label: {
-                    Label("Side Panel", systemImage: "sidebar.trailing")
+                if model.place == .sessions {
+                    Button {
+                        model.showDiff.toggle()
+                    } label: {
+                        Label("Side Panel", systemImage: "sidebar.trailing")
+                    }
+                    .help(model.showDiff ? "Hide the side panel" : "Show the side panel")
                 }
-                .help(model.showDiff ? "Hide the side panel" : "Show the side panel")
             }
         }
         .sheet(isPresented: $model.showPairing) {
