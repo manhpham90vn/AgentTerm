@@ -176,7 +176,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | SES-8 | A client that was attached and got N bytes | It attaches again naming how far it is | Only what the session wrote since is sent; a place that is not this session's gets all of it again, and is told so | H |
 | SES-9 | A link that carries 100 KB a second; a link that carries nothing | A replay of 300 KB is sent; nothing is sent | The slow connection stays open and gets all of it; the silent one is closed as lost | H |
 | SES-10 | A session in front on the Mac; a session open on the iPhone | Choose End Session | The app asks first, nothing ends before the answer, and after it the session is gone from every device | P, M |
-| SES-25 | A session on the Mac and on the iPhone | End it from the × of its row or its tab on the Mac, from its row's menu on the iPhone | Each asks first, as End Session does | hand |
+| SES-25 | A session on the Mac and on the iPhone | End it from the × of its row or its tab on the Mac, from its row's menu on the iPhone | Each asks first, as End Session does | P (the row's menu); hand for the Mac's ×, which shows under the pointer only, and the Mac's UI tests never move it |
 | SES-11 | A client that is not attached to a session | It sends input for that session | The input does not reach the program | H |
 | SES-12 | Text written for a session and not sent | Leave the terminal, or close the app, and come back | iPhone: the text is in the message field again. Mac: it is still at the program's prompt | P; M as far as the host goes: the session is there and replays what was typed. What the Mac's terminal draws cannot be read through accessibility |
 | SES-13 | A replay holding a question the program once asked its terminal | The replay is fed slowly, longer than five seconds in all | The emulator's answer does not reach the program; a question asked after the replay is answered | H |
@@ -223,6 +223,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | SIZE-4 | A session started on the Mac | A second device takes control at 40 × 20 | The Mac says another device is using it, names 40 × 20, and offers "Use This Window's Size"; pressing it gives the Mac's size back | M |
 | SIZE-5 | A session at the size that fits | Make the text four steps larger, then back to the actual size | Fewer columns while it is larger; the same number again afterwards | P, M |
 | SIZE-6 | A session open on the iPhone | Turn the phone on its side, bring up the keyboard | The terminal keeps a usable height; one row holds back, the keys, the message field and the menu | L |
+| SIZE-7 | The Mac's launch screen, its line of figures shown | Start a shell | It starts at the size its pane shows it at, not one it is made smaller to afterwards | M |
 
 ### Quick launch and SSH
 
@@ -497,8 +498,8 @@ A second host stands in for the other Mac, with a project of its own.
 | SET-1 | The Mac app's Settings left on Privacy | Left for Sessions, opened again with ⌘, | It opens on General | M |
 | SET-2 | A setting the host tidies (a blank model, an unknown agent; keep awake options; the display) | A client asks for what, once tidied, the host keeps already | The asker is told what the host keeps | H |
 | SET-3 | Start at Login on | The launch agent is removed outside AgentTerm | Every client is told it is off, without asking | H |
-| SET-4 | The iPhone, its Mac out of reach | Look at Settings | The Mac's settings are shown as it last said and cannot be changed, and it says so; reached again, they can | hand |
-| SET-5 | The Mac or the iPhone, after another Mac | Switched to a Mac | None of the other Mac's keep awake options, commit message settings, schedules or worktrees show | hand |
+| SET-4 | The iPhone, its Mac out of reach | Look at Settings | The Mac's settings are shown as it last said and cannot be changed, and it says so; reached again, they can | P |
+| SET-5 | The Mac with another Mac on screen, which has a schedule | That Mac goes out of reach | None of its schedules shows | M |
 
 ## What the tests found
 

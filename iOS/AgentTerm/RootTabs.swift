@@ -361,6 +361,30 @@ private struct SchedulesScreen: View {
     }
 }
 
+/// A run in a schedule's form; one going on opens its session.
+private struct FormRunRow: View {
+    @EnvironmentObject private var model: PhoneModel
+    let run: ScheduleOverview.Run
+
+    private var liveSession: SessionID? {
+        guard let id = run.run.session, model.sessions.contains(where: { $0.id == id }) else { return nil }
+        return id
+    }
+
+    var body: some View {
+        if let id = liveSession {
+            Button {
+                model.tab = "sessions"
+                model.path = [.session(id)]
+            } label: {
+                RunLabel(run: run, live: true)
+            }
+        } else {
+            RunLabel(run: run, live: false)
+        }
+    }
+}
+
 /// A run of a schedule: its name, when, and what came of it.
 private struct RunLabel: View {
     let run: ScheduleOverview.Run
@@ -439,18 +463,7 @@ private struct ScheduleForm: View {
             if !runs.isEmpty {
                 Section("Runs") {
                     ForEach(Array(runs.enumerated()), id: \.offset) { _, run in
-                        let live = run.session.map { id in model.sessions.contains { $0.id == id } } == true
-                        if live, let id = run.session {
-                            // One going on opens its session.
-                            Button {
-                                model.tab = "sessions"
-                                model.path = [.session(id)]
-                            } label: {
-                                RunLabel(run: ScheduleOverview.Run(schedule: schedule, run: run), live: true)
-                            }
-                        } else {
-                            RunLabel(run: ScheduleOverview.Run(schedule: schedule, run: run), live: false)
-                        }
+                        FormRunRow(run: ScheduleOverview.Run(schedule: schedule, run: run))
                     }
                 }
             }

@@ -111,6 +111,17 @@ final class FlowTests: XCTestCase {
             app.buttons["failure-dismiss"].firstMatch.tap()
             XCTAssertTrue(card.waitForNonExistence(timeout: 10), "the report stayed after it was dismissed")
         }
+        // The second Mac is paired now, while its link is fresh: a link
+        // lives five minutes, and its part of the test comes later. Paired,
+        // it is the one on screen; the first comes back from the menu.
+        if let second = environment["AGENTTERM_SECOND_PAIR_URL"] {
+            app.open(try XCTUnwrap(URL(string: second)))
+            XCTAssertTrue(app.staticTexts["Second Mac"].waitForExistence(timeout: 15), "the second Mac did not pair")
+            app.buttons["mac-menu"].tap()
+            app.buttons["First Mac"].tap()
+            XCTAssertTrue(app.staticTexts["First Mac"].waitForExistence(timeout: 10))
+            XCTAssertTrue(start.waitForExistence(timeout: 15), "not connected to the first Mac again")
+        }
         capture("2-sessions")
         // The Mac's figures arrive a moment after the list and push it
         // down: a tap aimed at where the button was would land beside it.
@@ -235,6 +246,20 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["First Mac"].waitForExistence(timeout: 5))
         let session = app.staticTexts["zsh"].firstMatch
         XCTAssertTrue(session.waitForExistence(timeout: 5))
+        // SES-25: ending it from its row's menu asks first.
+        session.press(forDuration: 1.2)
+        let endItem = app.buttons["End Session…"].firstMatch
+        XCTAssertTrue(endItem.waitForExistence(timeout: 5), "the row's menu has no End Session")
+        endItem.tap()
+        let confirm = app.buttons["End Session"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "ending the session from its row did not ask first")
+        // Put away without answering: Cancel where the question has one,
+        // a tap beside it where it has none.
+        let cancel = app.buttons["Cancel"].firstMatch
+        if cancel.exists { cancel.tap() } else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap() }
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: confirm)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(session.waitForExistence(timeout: 5), "the session ended though it was not confirmed")
         if environment["AGENTTERM_TEST_PROJECT"] != nil {
             // How the Mac itself is doing, above its sessions.
             for figure in ["system-cpu", "system-memory", "system-temperature", "system-down", "system-battery", "system-uptime"] {
@@ -464,9 +489,10 @@ final class FlowTests: XCTestCase {
 
         // A second Mac can be paired. It becomes the one on screen, with
         // nothing of the first Mac's sessions.
-        guard let second = environment["AGENTTERM_SECOND_PAIR_URL"] else { return }
-        app.open(try XCTUnwrap(URL(string: second)))
-        XCTAssertTrue(app.staticTexts["Second Mac"].waitForExistence(timeout: 15), "the second Mac did not pair")
+        guard environment["AGENTTERM_SECOND_PAIR_URL"] != nil else { return }
+        app.buttons["mac-menu"].tap()
+        app.buttons["Second Mac"].tap()
+        XCTAssertTrue(app.staticTexts["Second Mac"].waitForExistence(timeout: 15), "the second Mac is not on screen")
         XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["zsh"].exists, "the first Mac's session must not show under the second")
         // The second Mac's host says it is of an older release: the phone says so.
@@ -474,6 +500,20 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(versionCard.waitForExistence(timeout: 5), "a Mac of another version is not pointed out")
         XCTAssertTrue(versionCard.label.contains("Second Mac is an older version"), versionCard.label)
         capture("8-second-mac")
+
+        // SET-4: the second Mac kept awake, then out of reach (the script
+        // stops its host): its settings stay as it last said them, and
+        // cannot be changed until it is reached again.
+        app.tabBars.buttons["Settings"].tap()
+        let awake = app.switches["keep-awake"].firstMatch
+        XCTAssertTrue(awake.waitForExistence(timeout: 10), "the second Mac's settings are not shown")
+        awake.switches.firstMatch.exists ? awake.switches.firstMatch.tap() : awake.tap()
+        let gone = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Not connected to Second Mac'")).firstMatch
+        XCTAssertTrue(gone.waitForExistence(timeout: 20), "nothing says the Mac is out of reach")
+        XCTAssertFalse(awake.isEnabled, "the setting of a Mac out of reach can still be changed")
+        XCTAssertEqual(awake.value as? String, "1", "the setting is not as the Mac last said")
+        capture("8a-second-mac-gone")
+        app.tabBars.buttons["Sessions"].tap()
 
         // The menu lists both, and switching goes back to the first Mac and
         // its session, which kept running.

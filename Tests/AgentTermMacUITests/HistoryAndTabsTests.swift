@@ -138,6 +138,31 @@ final class HistoryAndTabsTests: MacUITestCase {
         app.wait(for: .text("project, folder"))
     }
 
+    /// SIZE-7: a session started on the Mac starts at the size its pane has,
+    /// not one a little larger that it is made smaller to once it is shown:
+    /// the first prompt is drawn for the width the terminal has.
+    func testASessionStartsAtTheSizeOfItsPane() throws {
+        let phone = try device()
+        // As a person would, once the window has settled: the line of the
+        // Mac's figures comes a moment after the app connects, and takes
+        // its height from the terminal.
+        app.wait(for: .id("system-cpu"), timeout: 15)
+        app.press(.button("Shell"))
+        wait("the shell") { phone.sessions.count == 1 }
+        let id = phone.sessions[0].id
+        let started = try XCTUnwrap(
+            phone.messages.lazy.compactMap { message -> TermSize? in
+                guard case .sessions(let list) = message else { return nil }
+                return list.first { $0.id == id }?.size
+            }.first)
+        // Shown, and laid out, the pane says the size it fits. The phone
+        // only watches, and is told the size.
+        phone.send(.attach(session: id, size: .default))
+        RunLoop.current.run(until: Date().addingTimeInterval(2))
+        let shown = try XCTUnwrap(phone.size(of: id))
+        XCTAssertEqual(started, shown, "started at \(started.cols) × \(started.rows), shown at \(shown.cols) × \(shown.rows)")
+    }
+
     func testTheWindowsPanesAndTheTextSize() throws {
         // WIN-3: the folder list and the side panel hide and show.
         app.wait(for: .text("project, folder"))

@@ -79,6 +79,9 @@ struct SessionTabs: View {
             }
             .background(Theme.panel)
             .overlay(alignment: .bottom) { Theme.hairline.frame(height: 1) }
+            // How tall it is, for the room a first session will have when
+            // it is started while the strip is not there yet.
+            .background(GeometryReader { proxy in Color.clear.onAppear { model.tabStripHeight = proxy.size.height } })
         }
     }
 }

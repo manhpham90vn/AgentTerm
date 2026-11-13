@@ -1074,9 +1074,11 @@ final class PhoneModel: ObservableObject {
         let screen = UIScreen.main.bounds.size
         let window = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
         let safe = window?.safeAreaInsets ?? .zero
-        let width = (window?.bounds.width ?? screen.width) - safe.left - safe.right - 6
+        let bounds = window?.bounds.size ?? screen
+        let sides = 2 * TerminalInsets.horizontal(onItsSide: bounds.width > bounds.height)
+        let width = bounds.width - safe.left - safe.right - sides
         // Navigation bar, key bar and compose field take about this much.
-        let height = (window?.bounds.height ?? screen.height) - safe.top - safe.bottom - 44 - 52 - 56 - 4
+        let height = bounds.height - safe.top - safe.bottom - 44 - 52 - 56 - 2 * TerminalInsets.vertical
         return TerminalMetrics.grid(for: CGSize(width: width, height: height), fontSize: fontSize) ?? TermSize(cols: 48, rows: 30)
     }
 

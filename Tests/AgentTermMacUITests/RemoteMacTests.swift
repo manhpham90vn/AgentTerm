@@ -297,4 +297,22 @@ final class RemoteMacTests: MacUITestCase {
         app.press(.button("Dismiss"))
         app.waitGone(.containing("host on Other Mac stopped unexpectedly"))
     }
+
+    /// SET-5: what the Mac on screen said, its schedules here, is not shown
+    /// once it is out of reach, nor under the Mac switched to.
+    func testTheSchedulesOfAMacOutOfReachAreNotShown() throws {
+        try startOtherMac()
+        let otherDevice = try device("observer", state: otherState, port: otherPort)
+        otherDevice.send(
+            .saveSchedule(
+                Schedule(
+                    id: "other", name: "Other's nightly", agent: "claude", folder: otherProject.path, prompt: "test", when: .daily(hour: 2, minute: 0),
+                    warningAccepted: true)))
+        pair()
+        app.press(.id("place-schedules"))
+        app.wait(for: .id("schedule-other"), timeout: 15)
+        killHost(on: otherPort)
+        app.waitGone(.id("schedule-other"), timeout: 20)
+        app.wait(for: .text("No schedules yet."))
+    }
 }

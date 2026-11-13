@@ -503,6 +503,9 @@ final class AppModel: ObservableObject {
 
     /// The room the terminal has in the window, measured by the view.
     var terminalArea: CGSize = .zero
+    /// The strip of tabs' height, as last shown: it is not there before the
+    /// first session, which has less room than the launch screen once it is.
+    var tabStripHeight: CGFloat = 37
 
     /// The grid a new session should start with: what fits the terminal's
     /// place in the window, so its first output is drawn for the right width.

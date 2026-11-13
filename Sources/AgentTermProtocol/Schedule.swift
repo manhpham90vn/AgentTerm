@@ -156,6 +156,10 @@ public struct ScheduleOverview: Sendable {
     public struct Run: Identifiable, Sendable {
         public let schedule: Schedule
         public let run: ScheduleRun
+        public init(schedule: Schedule, run: ScheduleRun) {
+            self.schedule = schedule
+            self.run = run
+        }
         public var id: String { schedule.id + "@" + String(run.at.timeIntervalSince1970) }
     }
 

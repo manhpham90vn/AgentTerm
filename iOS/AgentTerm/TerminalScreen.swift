@@ -88,11 +88,11 @@ struct TerminalScreen: View {
                             LoadingView("Loading the session…", cover: Palette.canvas.opacity(0.92))
                         }
                     }
-                    .padding(.leading, model.foreignSize == nil ? 6 : 0)
-                    .padding(.top, model.foreignSize == nil ? 4 : 0)
-                    // Room under the last row, which can otherwise sit
-                    // right on the edge of what is below.
-                    .padding(.bottom, model.foreignSize == nil ? 4 : 0)
+                    // Room around the text, so it does not sit on the
+                    // screen's edges; under the last row too, which can
+                    // otherwise sit right on what is below.
+                    .padding(.horizontal, model.foreignSize == nil ? TerminalInsets.horizontal(onItsSide: isOnItsSide) : 0)
+                    .padding(.vertical, model.foreignSize == nil ? TerminalInsets.vertical : 0)
                 if isOnItsSide {
                     HStack(spacing: 0) {
                         Button {
@@ -386,4 +386,11 @@ private struct ComposeBar: View {
             controller.type([0x0d])
         }
     }
+}
+
+/// Room around the terminal. A new session's size is worked out with it
+/// taken off (`PhoneModel.startingSize`), so it starts at the size it is shown at.
+enum TerminalInsets {
+    static func horizontal(onItsSide: Bool) -> CGFloat { onItsSide ? 8 : 10 }
+    static let vertical: CGFloat = 6
 }

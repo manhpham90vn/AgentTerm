@@ -558,15 +558,15 @@ struct CenterView: View {
                             }
                             // The framed preview of another device's screen
                             // is centered, so it gets no one-sided padding.
-                            .padding(.leading, foreign == nil ? 10 : 0)
-                            .padding(.top, foreign == nil ? 6 : 0)
+                            .padding(.horizontal, foreign == nil ? TerminalInsets.horizontal : 0)
+                            .padding(.top, foreign == nil ? TerminalInsets.top : 0)
                             // Room under the last row. The rows fill the
                             // pane from the top, so what is left over under
                             // them is anything from nothing to almost a
                             // row: without this, the last line (an agent's
                             // status line) can sit right on the edge.
-                            .padding(.bottom, foreign == nil ? 6 : 0)
-                            .background(TerminalAreaReader(insets: foreign == nil ? .zero : CGSize(width: 10, height: 12)))
+                            .padding(.bottom, foreign == nil ? TerminalInsets.bottom : 0)
+                            .background(TerminalAreaReader(insets: foreign == nil ? TerminalInsets.total : CGSize(width: 10, height: 12)))
                         if let info, let agent = info.agent {
                             // What the agent's session has used, under its terminal.
                             Theme.hairline.frame(height: 1)
@@ -590,8 +590,9 @@ struct CenterView: View {
                     VStack(spacing: 0) {
                         SessionTabs()
                         WelcomeView().frame(maxWidth: .infinity, maxHeight: .infinity)
-                            // Where a terminal would go, less its padding.
-                            .background(TerminalAreaReader(insets: CGSize(width: 10, height: 6)))
+                            // Where a terminal would go, less its padding,
+                            // and less the strip of tabs it will have then.
+                            .background(TerminalAreaReader(insets: TerminalInsets.total, stripShown: !model.sessions.isEmpty || !files.documents.isEmpty || model.diffTabFile != nil))
                     }
                 }
             }
@@ -601,10 +602,22 @@ struct CenterView: View {
 
 /// Tells the model how much room a terminal has, so a new session can be
 /// started at the size it will be shown at.
+/// Room around the terminal, so its text does not sit on the pane's edges.
+enum TerminalInsets {
+    static let horizontal: CGFloat = 14
+    static let top: CGFloat = 10
+    static let bottom: CGFloat = 8
+    /// What the padding takes off the terminal's area.
+    static let total = CGSize(width: 2 * horizontal, height: top + bottom)
+}
+
 private struct TerminalAreaReader: View {
     @EnvironmentObject private var model: AppModel
     /// What to take off for the padding a terminal gets.
     let insets: CGSize
+    /// False on the launch screen with no session: the strip of tabs a
+    /// session brings is taken off too.
+    var stripShown = true
 
     var body: some View {
         GeometryReader { proxy in
@@ -615,7 +628,8 @@ private struct TerminalAreaReader: View {
     }
 
     private func report(_ size: CGSize) {
-        model.terminalArea = CGSize(width: size.width - insets.width, height: size.height - insets.height)
+        let strip = stripShown ? 0 : model.tabStripHeight
+        model.terminalArea = CGSize(width: size.width - insets.width, height: size.height - insets.height - strip)
     }
 }
 

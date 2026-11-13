@@ -135,6 +135,12 @@ its first prompt for the wrong width. zsh then leaves a stray "%" on screen:
 it prints that mark and pads the line to the width it believes in, and the
 padding wraps where the real width is smaller.
 
+That place is the terminal's pane less the room kept around the text
+(`TerminalInsets`: 14 points at the sides, 10 above and 8 below on the Mac;
+10 at the sides, 8 on its side, and 6 above and below on the iPhone). On the
+Mac the launch screen, where a first session is started from, has no strip
+of tabs yet, so the strip's height, as last shown, is taken off too (SIZE-7).
+
 The same mark can still show after the width changes later (rotating the
 phone, changing the text size, another device taking over), because the
 padded line is already on screen and gets wrapped again.

@@ -89,7 +89,11 @@ DAEMON=$!
 # The second one says it is of an older release, to see the phone's warning.
 AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" --port "$SECOND_PORT" --local-only --protocol-version 1 > "$SECOND_STATE/daemon.log" 2>&1 &
 SECOND_DAEMON=$!
-trap 'kill "$DAEMON" "$SECOND_DAEMON" 2>/dev/null || true; rm -rf "$STATE" "$SECOND_STATE"' EXIT
+# SET-4: once the phone keeps the second Mac awake, that Mac goes out of
+# reach, for the phone to show its settings as they were and not change them.
+( while ! grep -q '"keepAwake":true' "$SECOND_STATE/settings.json" 2>/dev/null; do sleep 0.3; done; kill "$SECOND_DAEMON" ) &
+GONE_WATCH=$!
+trap 'kill "$DAEMON" "$SECOND_DAEMON" "$GONE_WATCH" 2>/dev/null || true; rm -rf "$STATE" "$SECOND_STATE"' EXIT
 for _ in $(seq 1 50); do [ -s "$STATE/token" ] && [ -s "$SECOND_STATE/token" ] && break; sleep 0.1; done
 [ -s "$STATE/token" ] && [ -s "$SECOND_STATE/token" ] || { echo "test-ios.sh: the hosts did not start" >&2; cat "$STATE/daemon.log" "$SECOND_STATE/daemon.log" >&2; exit 1; }
 
@@ -126,7 +130,7 @@ if [ -n "${TAKEOVER:-}" ]; then
     [ "$TAKEOVER" = only ] && export TEST_RUNNER_AGENTTERM_ONLY_MAC_TAKEOVER=1
     AGENTTERM_STATE_DIR="$STATE" "$AGENTTERMD" take-control --port "$PORT" --after 8 --hold 60 --type 'seq 1 400' > "$STATE/takeover.log" 2>&1 &
     TAKEOVER_PID=$!
-    trap 'kill "$DAEMON" "$SECOND_DAEMON" "$TAKEOVER_PID" 2>/dev/null || true; rm -rf "$STATE" "$SECOND_STATE"' EXIT
+    trap 'kill "$DAEMON" "$SECOND_DAEMON" "$GONE_WATCH" "$TAKEOVER_PID" 2>/dev/null || true; rm -rf "$STATE" "$SECOND_STATE"' EXIT
 fi
 
 if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
