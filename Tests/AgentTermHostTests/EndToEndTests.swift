@@ -165,9 +165,14 @@ final class EndToEndTests: XCTestCase {
         phone.type("stty size\n", in: id)
         waitUntil("phone drives after typing") { mac.lastResize?.size == landscape && mac.lastResize?.driver == false }
 
-        // The phone disconnects: the Mac gets its size back.
+        // The phone disconnects: the session keeps its size (SIZE-8), and
+        // the Mac gets its own back when it types.
         phone.connection.close()
-        waitUntil("mac restored") { mac.lastResize?.driver == true && mac.lastResize?.size == widerMac }
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(mac.lastResize?.size, landscape, "the phone's size is kept")
+        XCTAssertEqual(mac.lastResize?.driver, false)
+        mac.type("stty size\n", in: id)
+        waitUntil("mac restored once it types") { mac.lastResize?.driver == true && mac.lastResize?.size == widerMac }
         mac.connection.send(.kill(session: id))
     }
 
@@ -840,6 +845,55 @@ final class EndToEndTests: XCTestCase {
             phone.messages.contains { if case .error(let text) = $0 { return text.contains("rejected") || text.contains("fetch first") } else { return false } }
         }
         waitUntil("still ahead") { latest(mine)?.upstream == "origin/main" && latest(mine)?.ahead == 1 }
+    }
+
+    /// SIZE-8 and NOTE-7: a phone that was used keeps the session at its
+    /// size when it goes, and no one is at the Mac, its app in front
+    /// notwithstanding, until the Mac app is used; typing in the session
+    /// on the Mac takes the size back.
+    func testAPhoneThatWasUsedKeepsTheSessionAndTheMacUntilTheMacIsUsed() throws {
+        var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, detectAgents: { [] })
+        configuration.refreshInterval = 0.3
+        // Someone is at the keyboard all along.
+        configuration.idleSeconds = { 1 }
+        let host = HostServer(configuration: configuration)
+        let hostPort = try host.start()
+        defer { host.stop() }
+        func inUse(_ client: TestClient) -> Bool? { client.messages.compactMap { if case .macInUse(let on) = $0 { return on } else { return nil } }.last }
+
+        let mac = TestClient(port: hostPort, token: token, name: "mac")
+        waitUntil("the Mac app") { mac.welcomed }
+        mac.connection.send(.appInFront(true))
+        mac.connection.send(.createPairingCode)
+        waitUntil("a code") { mac.pairingCode != nil }
+        let phone = TestClient(port: hostPort, credential: .pairingCode(mac.pairingCode!), name: "iPhone")
+        waitUntil("paired") { phone.pairedToken != nil && phone.welcomed }
+        waitUntil("someone at the Mac") { inUse(mac) == true }
+
+        let macSize = TermSize(cols: 120, rows: 40), phoneSize = TermSize(cols: 48, rows: 30)
+        mac.connection.send(.create(CreateRequest(command: "exec sleep 600", cwd: NSTemporaryDirectory(), title: "work", size: macSize)))
+        waitUntil("the session") { mac.attached != nil }
+        let id = try XCTUnwrap(mac.attached?.id)
+        phone.connection.send(.attach(session: id, size: phoneSize))
+        phone.connection.send(.takeControl(session: id, size: phoneSize))
+        waitUntil("the phone's size") { mac.lastResize?.size == phoneSize && mac.lastResize?.driver == false }
+        waitUntil("no one at the Mac, its app in front notwithstanding") { inUse(mac) == false }
+
+        // The phone goes: the session stays at its size, and no one is at the Mac.
+        phone.connection.close()
+        waitUntil("the phone gone") { phone.isClosed }
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(mac.lastResize?.size, phoneSize)
+        XCTAssertEqual(mac.lastResize?.driver, false)
+        XCTAssertEqual(inUse(mac), false)
+
+        // The Mac app used: someone is at the Mac; the session keeps the phone's size.
+        mac.connection.send(.used)
+        waitUntil("someone at the Mac again") { inUse(mac) == true }
+        XCTAssertEqual(mac.lastResize?.size, phoneSize)
+        // Typing in the session there takes it back.
+        mac.type("x", in: id)
+        waitUntil("the Mac's size") { mac.lastResize?.size == macSize && mac.lastResize?.driver == true }
     }
 
     func testStartingAtLoginIsSwitchedFromAnyClient() throws {

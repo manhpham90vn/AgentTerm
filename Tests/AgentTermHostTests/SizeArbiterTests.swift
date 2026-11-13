@@ -54,13 +54,35 @@ final class SizeArbiterTests: XCTestCase {
         XCTAssertFalse(arbiter.activity(1), "the driver typing again changes nothing")
     }
 
-    func testDriverLeavingHandsOverToThePreviousClient() {
+    /// SIZE-8: the phone that was used goes, and its size stays: nobody
+    /// drives until someone uses the session again, the Mac by typing.
+    func testTheDriverLeavingKeepsItsSizeUntilSomeoneUsesTheSession() {
         var arbiter = SizeArbiter()
         arbiter.takeControl(1, size: mac)
         arbiter.takeControl(2, size: phone)
-        XCTAssertTrue(arbiter.remove(2))
+        XCTAssertFalse(arbiter.remove(2), "the size stays the phone's")
+        XCTAssertNil(arbiter.driver)
+        XCTAssertEqual(arbiter.currentSize, phone)
+        // Emulator answers still have someone to come from.
+        XCTAssertEqual(arbiter.answerer, 1)
+        // Watching, or the Mac's window being resized, does not take it back.
+        XCTAssertFalse(arbiter.update(1, size: TermSize(cols: 150, rows: 40)))
+        XCTAssertFalse(arbiter.update(3, size: TermSize(cols: 90, rows: 30)))
+        XCTAssertNil(arbiter.driver)
+        XCTAssertEqual(arbiter.currentSize, phone)
+        // Typing does.
+        XCTAssertTrue(arbiter.activity(1))
         XCTAssertEqual(arbiter.driver, 1)
-        XCTAssertEqual(arbiter.currentSize, mac)
+        XCTAssertEqual(arbiter.currentSize, TermSize(cols: 150, rows: 40))
+    }
+
+    func testTheDriverComingBackTakesItsSize() {
+        var arbiter = SizeArbiter()
+        arbiter.takeControl(1, size: mac)
+        arbiter.takeControl(2, size: phone)
+        arbiter.remove(2)
+        XCTAssertFalse(arbiter.takeControl(2, size: phone), "the same size: no change")
+        XCTAssertEqual(arbiter.driver, 2)
     }
 
     func testSizeIsKeptWhenEveryoneLeaves() {

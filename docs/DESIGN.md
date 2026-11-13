@@ -84,8 +84,16 @@ implements "the client being used wins":
   later and the phone would only see a corner of it.
 - A client's reported size is kept while another client drives, so typing
   there later switches to its current size at once.
-- When the driver detaches, the most recently active remaining client becomes
-  the driver. With no client left the size stays as it is.
+- When the driver detaches, a driver that used the session (took control or
+  typed) leaves its size: nobody drives until a client uses the session
+  again, and the size stays (`SizeArbiter`, SIZE-8). The program's
+  questions to its terminal are answered meanwhile by the most recently
+  active client (`answerer`). A driver that only watched, being the only one
+  there, hands over to the most recently active remaining client. With no
+  client left the size stays as it is.
+- The iPhone takes control of the session open on it whenever its replay
+  ends, so coming back after it was away takes the phone's size at once. The
+  Mac app takes control when a key is typed or the terminal is clicked.
 - After every change the host sends `resized` to each attached client with a
   `driver` flag. A client that is not the driver shows the driver's grid
   rather than its own, so the content lines up.
@@ -698,8 +706,11 @@ forgotten in it, so that what it says next is new.
 when it changes: the Mac app says whether it is in front
 (`appInFront(Bool)`, only to its own Mac's host), and `MacUse.idleSeconds`
 reads macOS's `HIDIdleTime`. Five minutes without either is no one there.
-Every client is told `macInUse(Bool)`; the iPhone tells nothing while it
-is true.
+A device that types or takes control of a session makes it no one there,
+whatever the two say, until this Mac's own app types, takes control or
+says `used` (a key or a click in its window, sent once after it was told
+no one is there) (NOTE-7). Every client is told `macInUse(Bool)`; the
+iPhone tells nothing while it is true.
 
 **On the iPhone.** In front, a banner over the sessions list, for a session
 other than the one on screen. Behind, a local notification

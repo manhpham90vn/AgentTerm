@@ -946,7 +946,13 @@ final class PhoneModel: ObservableObject {
             controller?.position = from
         case .replayed(let id):
             if replaying == id { replaying = nil }
-            if controller?.session == id { controller?.endReplay() }
+            if controller?.session == id {
+                controller?.endReplay()
+                // Open here is in use here: the session takes this screen's
+                // size, also when the phone comes back after it was away
+                // and the Mac had it at its own, without a button.
+                controller?.claimSize()
+            }
         case .resized(let id, let size, let driver):
             if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].size = size }
             guard let controller, controller.session == id else { return }

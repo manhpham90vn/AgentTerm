@@ -7,7 +7,9 @@ public typealias ClientID = UInt64
 /// A PTY has exactly one size, but a Mac window and an iPhone screen rarely
 /// agree. The rule is "the client being used wins": whichever client last
 /// took control or typed is the driver and the PTY takes its size. When the
-/// driver leaves, the most recently active remaining client takes over.
+/// driver leaves its size stays, and nobody drives, until a client uses the
+/// session again: a phone put away leaves the session as it was using it,
+/// and the Mac takes it back when someone types there.
 ///
 /// Merely watching a session, or having one's window resized, never takes
 /// the size away from the client that is using it. Otherwise an app that is
@@ -17,12 +19,20 @@ public struct SizeArbiter: Sendable {
     private var order: [ClientID] = []
     private var sizes: [ClientID: TermSize] = [:]
     private let fallback: TermSize
+    /// The driver left: its size is kept until someone uses the session.
+    private var holding = false
+    /// Clients that took control or typed, rather than only watched: only
+    /// such a driver's size is kept when it leaves.
+    private var used: Set<ClientID> = []
 
     public init(fallback: TermSize = .default) {
         self.fallback = fallback
     }
 
-    public var driver: ClientID? { order.last }
+    public var driver: ClientID? { holding ? nil : order.last }
+    /// Whose emulator answers the program's questions: the driver's, or,
+    /// while nobody drives, the most recently active client's.
+    public var answerer: ClientID? { order.last }
     public var clients: [ClientID] { order }
     public var isEmpty: Bool { order.isEmpty }
 
@@ -51,6 +61,7 @@ public struct SizeArbiter: Sendable {
             // Behind everyone already there: the last to be handed control.
             order.insert(client, at: 0)
         }
+        if holding { return false }
         return recompute()
     }
 
@@ -58,19 +69,24 @@ public struct SizeArbiter: Sendable {
     /// Returns true when the effective size changed.
     @discardableResult
     public mutating func activity(_ client: ClientID) -> Bool {
-        guard sizes[client] != nil, driver != client else { return false }
+        guard sizes[client] != nil, holding || driver != client else { return false }
         return promote(client)
     }
 
     /// Returns true when the effective size changed.
     @discardableResult
     public mutating func remove(_ client: ClientID) -> Bool {
+        if driver == client, used.contains(client) { holding = true }
         order.removeAll { $0 == client }
         sizes[client] = nil
+        used.remove(client)
+        if holding { return false }
         return recompute()
     }
 
     private mutating func promote(_ client: ClientID) -> Bool {
+        holding = false
+        used.insert(client)
         order.removeAll { $0 == client }
         order.append(client)
         return recompute()

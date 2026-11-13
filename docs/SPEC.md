@@ -156,7 +156,10 @@ itself.
   again, one that keeps waiting is not. On connecting, what waits or is
   done and was not told yet is told at once.
 - Nothing is told on the iPhone while someone is at the Mac: its app in
-  front, or a key or the pointer used in the last five minutes.
+  front, or a key or the pointer used in the last five minutes. Once the
+  iPhone (or another device) was used, no one is at the Mac, also after the
+  phone is put away, until the Mac app is used again: a key or a click in
+  its window.
 - A notification for a question, or for a finished task, takes a short
   reply, written or dictated, sent as the next message; it asks for the
   phone to be unlocked first. One for a permission has no buttons: the
@@ -285,12 +288,16 @@ under 20% that is not charging turns amber.
 ### Terminal size
 
 - The terminal resizes to fit the device being used. Opening a session on the
-  iPhone, or typing in it there, gives the PTY the iPhone's size and the
-  program redraws for it.
+  iPhone, coming back to it there after the phone was away, or typing in it
+  there, gives the PTY the iPhone's size and the program redraws for it,
+  without a button.
+- A device that was using a session and goes (the phone put away, out of
+  reach) leaves it at its size: the session is not handed back to the Mac
+  until someone uses it there.
 - A device that only shows a session never changes its size. The Mac app
   lists and shows every session, including the ones a phone is typing in; it
-  takes a session's size only when the user types in it on the Mac or presses
-  "Use This Window's Size".
+  takes a session's size only when the user types or clicks in it on the Mac
+  or presses "Use This Window's Size".
 - While another device is using a session, the Mac shows that device's
   terminal centered in a frame, like a preview of its screen, with a line
   above saying so. This is the same for shells and for agents.

@@ -286,6 +286,9 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case answer(session: SessionID, to: AgentState, text: String)
     /// The Mac app is in front, or is no longer: then the Mac is in use.
     case appInFront(Bool)
+    /// Someone used the Mac app: a key or a click in its window. The Mac
+    /// is then in use again after a device was used.
+    case used
     /// Adds a schedule, or changes the one with its id (#11). One that
     /// skips permissions is refused unless its warning was accepted.
     case saveSchedule(Schedule)
@@ -388,7 +391,8 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// Whether the agents are asked to run their commands in shells the user sees.
     case agentsUseShells(Bool)
     /// Whether someone is at the Mac (#22, #24): its app in front, or a key
-    /// or the pointer used in the last five minutes.
+    /// or the pointer used in the last five minutes; and not since a device
+    /// (an iPhone, another Mac) was used, until the Mac app is used again.
     case macInUse(Bool)
     /// Every schedule, with its last runs and when it runs next.
     case schedules([Schedule])

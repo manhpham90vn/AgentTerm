@@ -879,12 +879,25 @@ public final class HostServer {
     /// one is at the Mac.
     static let idleBeforeAway: TimeInterval = 5 * 60
     private var macInUse = true
+    /// A device, not this Mac's own app, was the last to be used: until the
+    /// Mac app is used again, no one is at the Mac, whether its app is in
+    /// front or its keyboard was touched for something else. A phone put
+    /// away is still the one in use: what an agent says goes to it.
+    private var usedOnDevice = false
+
+    /// A client typed, took a session or said it was used.
+    private func used(by client: Client) {
+        let onDevice = client.identity != .local
+        guard onDevice != usedOnDevice else { return }
+        usedOnDevice = onDevice
+        updateMacInUse()
+    }
 
     /// Works it out again, and tells every client when it changed.
     private func updateMacInUse() {
         let front = clients.values.contains { $0.authenticated && $0.inFront }
         let idle = configuration.idleSeconds()
-        let now = front || idle.map { $0 < Self.idleBeforeAway } ?? true
+        let now = !usedOnDevice && (front || idle.map { $0 < Self.idleBeforeAway } ?? true)
         guard now != macInUse else { return }
         macInUse = now
         for client in clients.values where client.authenticated { send(.macInUse(now), to: client) }
@@ -1179,6 +1192,8 @@ public final class HostServer {
         case .appInFront(let front):
             client.inFront = front
             updateMacInUse()
+        case .used:
+            used(by: client)
         case .saveSchedule(let schedule):
             if let problem = save(schedule) { send(.error(problem), to: client) }
         case .createInWorktree(let request, let branch):
@@ -1213,6 +1228,7 @@ public final class HostServer {
             guard let session = sessions[id], client.attached.contains(id) else { return }
             let changed = session.arbiter.takeControl(client.id, size: size)
             if changed { applySize(of: session) } else { announceSize(of: session) }
+            used(by: client)
         case .kill(let id):
             guard let session = sessions[id] else { return }
             session.endAsked = true
@@ -1824,11 +1840,12 @@ public final class HostServer {
             // An emulator answering the program's question, not a person
             // typing. Only the answer of the client in use is passed on, and
             // it does not move the session to that client.
-            if session.arbiter.driver == client.id { session.process.write(frame.payload) }
+            if session.arbiter.answerer == client.id { session.process.write(frame.payload) }
             return
         }
         // Typing takes control of the session's size.
         if session.arbiter.activity(client.id) { applySize(of: session) }
+        used(by: client)
         session.process.write(frame.payload)
         // It may have stopped the turn, and not every agent says so.
         if session.info.state?.isWorking == true, AgentHooks.mayStopATurn(frame.payload) {

@@ -596,6 +596,13 @@ final class AppModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.syncTabs() }
             .store(in: &observers)
+        // A key or a click in the app: someone is at the Mac again, after a
+        // device was used. A click in a terminal another device sized
+        // takes it back for this Mac.
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self] event in
+            self?.used(by: event)
+            return event
+        }
         // The SSH configuration may have been edited while the app was behind.
         NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
             .sink { [weak self] _ in
@@ -626,6 +633,24 @@ final class AppModel: ObservableObject {
     var installedAgents: [AgentInfo] { agents.filter(\.isInstalled) }
 
     var currentController: TerminalController? { selectedSession.flatMap { controllers[$0] } }
+
+    /// What the host last said of whether someone is at the Mac: false once
+    /// a device was used, until this app is.
+    private var hostSaysMacInUse = true
+    private var eventMonitor: Any?
+
+    private func used(by event: NSEvent) {
+        if !hostSaysMacInUse {
+            // Said once: the host answers that the Mac is in use again.
+            hostSaysMacInUse = true
+            connection?.send(.used)
+        }
+        guard event.type == .leftMouseDown, let controller = currentController, foreignSizes[controller.session] != nil else { return }
+        let terminal = controller.view
+        guard event.window === terminal.window, terminal.bounds.contains(terminal.convert(event.locationInWindow, from: nil)) else { return }
+        // Clicking in it is using it, as typing is.
+        controller.claimSize()
+    }
 
     /// A folder's sessions in the order of the tabs, so the list on the
     /// left and the strip of tabs agree, and arranging one arranges both.
@@ -1111,8 +1136,10 @@ final class AppModel: ObservableObject {
             worktreeSetups[folder] = setup
         case .worktreeFinished(_, _, let said):
             worktreeSaid = said
-        case .agentShellResult, .macInUse:
-            // For `agenttermd mcp`, and for the iPhone.
+        case .macInUse(let inUse):
+            hostSaysMacInUse = inUse
+        case .agentShellResult:
+            // For `agenttermd mcp`.
             break
         case .keepAwake(let on):
             keepAwake = on

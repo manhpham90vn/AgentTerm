@@ -224,6 +224,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | SIZE-5 | A session at the size that fits | Make the text four steps larger, then back to the actual size | Fewer columns while it is larger; the same number again afterwards | P, M |
 | SIZE-6 | A session open on the iPhone | Turn the phone on its side, bring up the keyboard | The terminal keeps a usable height; one row holds back, the keys, the message field and the menu | L |
 | SIZE-7 | The Mac's launch screen, its line of figures shown | Start a shell | It starts at the size its pane shows it at, not one it is made smaller to afterwards | M |
+| SIZE-8 | A session the Mac and the iPhone show, the iPhone using it | The iPhone goes; the Mac's window is resized; the Mac app is used; the Mac types in it | The session stays at the iPhone's size and nobody drives until the Mac types, then it takes the Mac's; an iPhone coming back takes its own at once, without a button | H |
 
 ### Quick launch and SSH
 
@@ -455,6 +456,7 @@ A second host stands in for the other Mac, with a project of its own.
 | NOTE-1 | Sessions whose agents wait, work, are done | Their states change | Told once when done or waiting, again when asked something else, not while it keeps waiting; what waits is told on connecting; an ended session is forgotten | P |
 | NOTE-2 | An agent waiting for permission | A reply to what it asked before; then one to what it asks now | The first is dropped and the device is told the agent moved on; the second is typed, then Return | H |
 | NOTE-3 | The Mac left alone for six minutes | Its app comes to the front and goes behind; a key is pressed | Every client is told in use, not in use, in use | H |
+| NOTE-7 | The Mac app in front, someone at the keyboard | The iPhone takes a session; it goes; the Mac app is used | No one is at the Mac from the iPhone's use, also once it is gone, until the Mac app is used | H |
 | NOTE-4 | The Mac app with a shell in front and History shown, an agent in another session | The agent comes to wait for permission | A banner names the session and what it asks; Open selects it | M |
 | NOTE-5 | The iPhone in the sessions list, an agent in a session | The agent finishes | A banner over the list, which opens the session | hand, until the iPhone tests cover it |
 | NOTE-6 | The iPhone just left, an agent asks a question | The notification is answered with a reply | The reply is typed into the session after unlocking | hand: needs a real phone |
