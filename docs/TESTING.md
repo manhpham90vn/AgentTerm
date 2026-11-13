@@ -87,6 +87,14 @@ SHOTS=/tmp/shots ALL_SHOTS=1 scripts/test-mac.sh RemoteMacTests   # of every tes
 opening the app: run a test that ends where the change shows, and look at
 its picture. The iPhone scripts take `SHOTS` the same way.
 
+### The figures
+
+`scripts/measure.sh` (`CONFIGURATION=release` for the build users run)
+takes the figures of `docs/PERFORMANCE.md` again: heavy cases made in a
+folder of its own, each timed or weighed. Nothing fails on a figure;
+compare with the table there after a change that may make AgentTerm
+slower or larger.
+
 ### The pictures
 
 The pictures of both apps, in the README, on the product page and in the
