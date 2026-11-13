@@ -137,6 +137,11 @@ public enum Handoff {
         public var relativePath: String
         /// The prompt the receiving agent starts with, unless it is replaced.
         public var prompt: String
+
+        public init(relativePath: String, prompt: String) {
+            self.relativePath = relativePath
+            self.prompt = prompt
+        }
     }
 
     public static func plan(for conversation: Conversation, now: Date = Date()) -> Plan {

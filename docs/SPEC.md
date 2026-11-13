@@ -46,10 +46,11 @@ itself.
 - Sessions belong to the host daemon, not to a window. Closing the app or
   losing the phone's connection does not stop them.
 - Any number of clients can attach to a session and all see the same output.
-- A client that attaches gets the recent output replayed, the last 4 MB of
-  it, so it sees the current screen and can scroll back through what came
-  before. A terminal scrolls back 20,000 lines, on the Mac and on the
-  iPhone.
+- A client that attaches gets the session's screen as it is at that moment,
+  also that of a full screen program, which does not have to draw again
+  for it, and the 10,000 lines above it to scroll back through. All of it
+  is laid out for the size the session has now. A terminal scrolls back
+  20,000 lines, on the Mac and on the iPhone.
 
 ### Session names
 

@@ -86,7 +86,7 @@ struct DiffView: View {
                 }
             }
         } else {
-            ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+            LoadingView("Loading the changes…") { model.refreshDiff() }
         }
     }
 
@@ -388,23 +388,33 @@ private struct FileRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(file.marker)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(markerColor)
-                .frame(width: 12)
-            Text(name)
-                .font(.system(size: 12))
-                .strikethrough(file.status == .deleted)
-                .lineLimit(1)
-            if showsDirectory {
-                Text(directory)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+            // The file itself is one thing to press, which shows its diff.
+            // The button after it is another: pressing it must not be
+            // taken for pressing the row, with VoiceOver either.
+            HStack(spacing: 6) {
+                Text(file.marker)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(markerColor)
+                    .frame(width: 12)
+                Text(name)
+                    .font(.system(size: 12))
+                    .strikethrough(file.status == .deleted)
                     .lineLimit(1)
-                    .truncationMode(.head)
+                if showsDirectory {
+                    Text(directory)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+                Spacer(minLength: 4)
+                DiffCount(added: file.added, deleted: file.deleted)
             }
-            Spacer(minLength: 4)
-            DiffCount(added: file.added, deleted: file.deleted)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(name), \(file.isStaged ? "staged" : "not staged"), \(file.added) added, \(file.deleted) removed")
+            .accessibilityIdentifier((file.isStaged ? "staged-" : "change-") + file.path)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { model.openDiff(file) }
             Button(action: move) {
                 Image(systemName: file.isStaged ? "minus" : "plus")
                     .font(.system(size: 10, weight: .bold))
@@ -490,7 +500,10 @@ struct DiffDocumentView: View {
             .padding(.vertical, 6)
             .background(Theme.panel)
             Theme.hairline.frame(height: 1)
-            if file.patch.isEmpty {
+            if file.patch.isEmpty, model.loadingDiffFile {
+                // From another Mac the diff comes after the list it was picked in.
+                LoadingView("Loading the diff…")
+            } else if file.patch.isEmpty {
                 Text("Nothing to show for this file: it is empty or not text.")
                     .font(.callout)
                     .foregroundStyle(.secondary)

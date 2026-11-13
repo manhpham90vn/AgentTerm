@@ -15,8 +15,20 @@ public final class HostServer {
         /// it, to see what a client does with a host of another release.
         public var protocolVersion = agenttermProtocolVersion
         public var listenOnTailscale: Bool
-        /// Bytes of recent output kept per session and replayed on attach.
+        /// Bytes of recent output kept per session, for a client that comes
+        /// back after losing its connection: it is sent what it missed.
         public var scrollbackLimit: Int
+        /// Lines above the screen kept per session and sent, with the
+        /// screen, to a client that attaches.
+        public var screenLines = 10_000
+        /// A folder to take the agents' programs from, for tests: a
+        /// session's command that starts with an agent's name then runs the
+        /// program of that name in here, not the installed one the shell
+        /// would find.
+        public var agentsDirectory: String?
+        /// What starts this host at login, for a host that can be. Nil for
+        /// one that cannot: clients then show no switch for it.
+        public var loginItem: LoginItem?
         /// Overrides agent detection, mainly for tests.
         public var detectAgents: () -> [AgentInfo]
         /// Where the shared folder list is saved. `nil` keeps it in memory only.
@@ -46,7 +58,8 @@ public final class HostServer {
             port: UInt16 = agenttermDefaultPort,
             token: String,
             listenOnTailscale: Bool = true,
-            scrollbackLimit: Int = 4 * 1024 * 1024,
+            scrollbackLimit: Int = 1024 * 1024,
+            loginItem: LoginItem? = nil,
             detectAgents: @escaping () -> [AgentInfo] = AgentDetector.detect,
             foldersFile: URL? = nil,
             devicesFile: URL? = nil,
@@ -59,6 +72,7 @@ public final class HostServer {
             self.token = token
             self.listenOnTailscale = listenOnTailscale
             self.scrollbackLimit = scrollbackLimit
+            self.loginItem = loginItem
             self.detectAgents = detectAgents
             self.foldersFile = foldersFile
             self.devicesFile = devicesFile
@@ -102,10 +116,10 @@ public final class HostServer {
         var info: SessionInfo
         let process: PTYProcess
         var arbiter: SizeArbiter
+        /// The session's screen, which a client that attaches is sent.
+        let mirror: ScreenMirror
+        /// The last of the raw output, for a client that was here before.
         var scrollback = Data()
-        /// True once the oldest output was dropped: what is kept then
-        /// starts somewhere in the middle of what the program wrote.
-        var scrollbackIsCut = false
         /// Where the end of `scrollback` is in all the session ever wrote.
         /// It starts at a number of its own rather than at nothing: session
         /// numbers start over when the host does, and a client that comes
@@ -113,9 +127,10 @@ public final class HostServer {
         /// have a place in this one.
         var written = Int.random(in: 0..<(1 << 40))
 
-        init(info: SessionInfo, process: PTYProcess) {
+        init(info: SessionInfo, process: PTYProcess, screenLines: Int) {
             self.info = info
             self.process = process
+            self.mirror = ScreenMirror(size: info.size, scrollback: screenLines)
             self.arbiter = SizeArbiter(fallback: info.size)
         }
     }
@@ -558,6 +573,15 @@ public final class HostServer {
             guard let session = sessions[id] else { return }
             session.process.hangUp()
             queue.asyncAfter(deadline: .now() + 3) { [weak session] in session?.process.forceKill() }
+        case .setStartAtLogin(let wanted):
+            guard let item = configuration.loginItem else { return }
+            do {
+                if wanted { try item.turnOn() } else { try item.turnOff() }
+            } catch {
+                send(.error("Could not \(wanted ? "set the host to start" : "stop the host from starting") at login: \(error.localizedDescription)"), to: client)
+            }
+            // To everyone, and as it is now: also when it could not be changed.
+            for other in clients.values where other.authenticated { send(.startAtLogin(item.isOn), to: other) }
         case .setKeepAwake(let wanted):
             guard wanted != keepAwake else { return }
             keepAwake = wanted
@@ -1028,6 +1052,7 @@ public final class HostServer {
         send(.keepAwake(keepAwake), to: client)
         send(.keepAwakeOptions(keepAwakeOptions), to: client)
         send(.commitWriter(commitWriter), to: client)
+        if let item = configuration.loginItem { send(.startAtLogin(item.isOn), to: client) }
         // Without any yet, the client is sent none and hands over its own.
         send(.displaySettings(displaySettings), to: client)
         if let systemStats { send(.systemStats(systemStats), to: client) }
@@ -1120,6 +1145,11 @@ public final class HostServer {
             try? FileManager.default.removeItem(at: file)
             command = (command ?? "") + StatusLineRelay.launchArguments(tool: tool, file: file.path)
         }
+        if let directory = configuration.agentsDirectory, let agent = SessionSummaries.agent(forCommand: command), let text = command,
+            text == agent || text.hasPrefix(agent + " ")
+        {
+            command = Handoff.shellQuote((directory as NSString).appendingPathComponent(agent)) + text.dropFirst(agent.count)
+        }
         let process: PTYProcess
         do {
             process = try PTYProcess(
@@ -1146,7 +1176,7 @@ public final class HostServer {
             // conversation's, whoever typed the command.
             conversationID: conversationID ?? SessionSummaries.resumedConversation(inCommand: request.command)
         )
-        let session = Session(info: info, process: process)
+        let session = Session(info: info, process: process, screenLines: configuration.screenLines)
         sessions[id] = session
 
         process.onOutput = { [weak self, weak session] data in
@@ -1170,21 +1200,24 @@ public final class HostServer {
         if changed {
             session.info.size = session.arbiter.currentSize
             session.process.resize(session.info.size)
+            session.mirror.resize(session.info.size)
         }
         send(.attached(session.info), to: client)
-        // In pieces: the whole of it is larger than one message may be.
-        var replay = session.scrollback
-        if let have, have <= session.written, session.written - have <= replay.count {
+        let replay: Data
+        if let have, have <= session.written, session.written - have <= session.scrollback.count {
             // A client that was here before, a phone after its network
             // changed: its terminal has all up to `have`, so only what came
-            // since is sent, not megabytes it would only draw again.
-            replay = replay.suffix(session.written - have)
-        } else if session.scrollbackIsCut, let newline = replay.prefix(16 * 1024).firstIndex(of: 0x0A) {
-            // What was cut starts in the middle of a line, perhaps of an
-            // escape sequence. Start at the next whole line instead.
-            replay = replay.suffix(from: replay.index(after: newline))
+            // since is sent, not a screen it would only draw again.
+            replay = session.scrollback.suffix(session.written - have)
+        } else {
+            // Anyone else gets the screen as it is now, with the lines
+            // above it, written out for the size the session has. To the
+            // client it is output like any other, and it counts on from the
+            // end of it as it would after the session's own.
+            replay = session.mirror.snapshot()
         }
         send(.replaying(session: session.info.id, from: session.written - replay.count), to: client)
+        // In pieces: the whole of it may be larger than one message may be.
         var start = replay.startIndex
         while start < replay.endIndex {
             let end = replay.index(start, offsetBy: Self.replayPiece, limitedBy: replay.endIndex) ?? replay.endIndex
@@ -1204,6 +1237,7 @@ public final class HostServer {
     private static let replayPiece = 256 * 1024
 
     private func record(_ data: Data, in session: Session) {
+        session.mirror.feed(data)
         session.scrollback.append(data)
         session.written += data.count
         // Cut back to the limit only once it is well past it: cutting
@@ -1212,7 +1246,6 @@ public final class HostServer {
         let limit = configuration.scrollbackLimit
         if session.scrollback.count > limit + max(limit / 4, 64 * 1024) {
             session.scrollback = Data(session.scrollback.suffix(limit))
-            session.scrollbackIsCut = true
         }
         let frame = DataFrame(kind: .output, session: session.info.id, payload: data)
         for id in session.arbiter.clients {
@@ -1224,6 +1257,7 @@ public final class HostServer {
     private func applySize(of session: Session) {
         session.info.size = session.arbiter.currentSize
         session.process.resize(session.info.size)
+        session.mirror.resize(session.info.size)
         announceSize(of: session)
     }
 

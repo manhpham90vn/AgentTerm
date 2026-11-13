@@ -1,5 +1,6 @@
 import AgentTermEditor
 import AgentTermProtocol
+import AgentTermTerminal
 import SwiftUI
 
 /// A folder's files on the Mac: a tree to browse, create, rename and remove
@@ -97,7 +98,7 @@ struct FilesList: View {
                 }
                 .refreshable { reload() }
             } else {
-                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                LoadingView("Loading the files…") { reload() }
             }
         }
         .onAppear(perform: reload)
@@ -365,7 +366,7 @@ struct DocumentScreen: View {
                 Placeholder(text: "This file is \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)), too large to open here.")
             }
         } else {
-            ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            LoadingView("Opening the file…")
         }
     }
 

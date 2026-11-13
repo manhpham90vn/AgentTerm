@@ -47,6 +47,9 @@ extension AppModel {
     }
 
     func saveTabLayout() {
+        // Only this Mac's: another Mac's tabs are its host's to keep, and
+        // must not take the place of the ones saved here.
+        guard !isRemote else { return }
         if let data = try? JSONEncoder().encode(tabLayout) { UserDefaults.standard.set(data, forKey: Self.tabLayoutKey) }
     }
 

@@ -128,13 +128,21 @@ private struct SessionTab: View {
         .contextMenu {
             TabArrangeMenu(id: TabID.session(session))
             Divider()
-            Button("End Session") { model.close(session.id) }
+            Button("End Session") { model.requestEnd(session.id) }
             CloseOthersButton(request: .init(keepSession: session.id))
             TabStripMenu()
         }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(session.displayName)
+        .accessibilityIdentifier("tab-\(session.id)")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        // The tab's menu opens under the pointer only: what it holds is
+        // offered as the tab's own actions too.
+        .accessibilityAction { model.select(session: session) }
+        .accessibilityAction(named: "End Session") { model.requestEnd(session.id) }
+        .accessibilityAction(named: "Close Other Tabs") { model.closeTabs(.init(keepSession: session.id)) }
+        .accessibilityAction(named: "Close All Tabs") { model.closeTabs() }
+        .accessibilityAction(named: "Hand Off") { model.requestHandoff(session: session) }
     }
 }
 

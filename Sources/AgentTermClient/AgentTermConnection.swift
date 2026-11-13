@@ -35,6 +35,13 @@ public final class AgentTermConnection: @unchecked Sendable {
     /// Touched on the main queue only.
     private var closed = false
 
+    /// What was sent before the host was greeted. An app asks for things
+    /// on a timer, also while it is connecting, and the host closes a
+    /// client whose first word is anything but its hello or its code: so
+    /// these wait, and follow the greeting in the order they were sent.
+    private var waiting: [(data: Data, opcode: NWProtocolWebSocket.Opcode)]? = []
+    private let waitingLock = NSLock()
+
     // A connection that died without a word is the common case on a phone:
     // the network changed, the tunnel dropped, the app was asleep. Nothing
     // says so; what is sent simply goes nowhere, and TCP takes minutes to
@@ -88,10 +95,17 @@ public final class AgentTermConnection: @unchecked Sendable {
             guard let self else { return }
             switch state {
             case .ready:
+                let greeting: ClientMessage
                 switch self.credential {
-                case .token(let token): self.send(.hello(token: token, client: self.clientName))
-                case .pairingCode(let code): self.send(.pair(code: code, device: self.clientName))
+                case .token(let token): greeting = .hello(token: token, client: self.clientName)
+                case .pairingCode(let code): greeting = .pair(code: code, device: self.clientName)
                 }
+                // Under the lock, so nothing sent meanwhile gets in between.
+                self.waitingLock.lock()
+                self.transmit(MessageCoding.encode(greeting), opcode: .text)
+                for message in self.waiting ?? [] { self.transmit(message.data, opcode: message.opcode) }
+                self.waiting = nil
+                self.waitingLock.unlock()
                 self.deliver { if !self.closed { self.onState?(.connected) } }
                 self.receive()
                 self.startHeartbeat()
@@ -191,6 +205,16 @@ public final class AgentTermConnection: @unchecked Sendable {
     }
 
     private func send(_ data: Data, opcode: NWProtocolWebSocket.Opcode) {
+        waitingLock.lock()
+        defer { waitingLock.unlock() }
+        if waiting != nil {
+            waiting?.append((data, opcode))
+        } else {
+            transmit(data, opcode: opcode)
+        }
+    }
+
+    private func transmit(_ data: Data, opcode: NWProtocolWebSocket.Opcode) {
         let metadata = NWProtocolWebSocket.Metadata(opcode: opcode)
         let context = NWConnection.ContentContext(identifier: "message", metadata: [metadata])
         connection.send(content: data, contentContext: context, completion: .idempotent)

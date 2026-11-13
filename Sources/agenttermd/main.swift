@@ -14,6 +14,7 @@ var listenOnTailscale = true
 var askServices = true
 var protocolVersion = agenttermProtocolVersion
 var home = NSHomeDirectory()
+var agentsDirectory: String?
 var arguments = CommandLine.arguments.dropFirst()
 
 // `agenttermd statusline <file>` is what Claude Code sessions started by
@@ -107,6 +108,9 @@ while let argument = arguments.popFirst() {
     case "--home":
         guard let value = arguments.popFirst() else { fail("--home needs a folder", status: 2) }
         home = value
+    case "--agents":
+        guard let value = arguments.popFirst() else { fail("--agents needs a folder", status: 2) }
+        agentsDirectory = value
     case "--help", "-h":
         print(
             """
@@ -120,6 +124,8 @@ while let argument = arguments.popFirst() {
                              have left. Their sign-ins are then never read.
               --home DIR     Read agent history from DIR instead of the home folder,
                              and start the folder picker there (for tests)
+              --agents DIR   Take the agents' programs from DIR only, instead of
+                             looking for the installed ones (for tests)
 
             pairing-link prints a link that pairs one device with the running
             daemon. It works once and for five minutes. --host sets the name the
@@ -141,6 +147,14 @@ do {
         port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home,
         statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil)
     configuration.protocolVersion = protocolVersion
+    if let agentsDirectory {
+        configuration.detectAgents = { AgentDetector.detect(in: agentsDirectory) }
+        configuration.agentsDirectory = agentsDirectory
+    }
+    // Started at login, when the user asked for that. The app may have been
+    // moved since: launchd has to start the host of the app that is here now.
+    configuration.loginItem = LoginItem.forThisHost()
+    configuration.loginItem?.refresh()
     server = HostServer(configuration: configuration)
     let bound = try server.start()
     print("agenttermd listening on 127.0.0.1:\(bound)")

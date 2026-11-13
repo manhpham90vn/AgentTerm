@@ -12,6 +12,10 @@ struct OpenDocument: Equatable {
     var text: String
     /// The text as it is on disk.
     var savedText: String
+    /// A file on another Mac that was asked for and is not here yet.
+    var isLoading = false
+    /// The bytes of an image on another Mac: there is no file here to read it from.
+    var imageData: Data?
 
     var name: String { (path as NSString).lastPathComponent }
     var isText: Bool { if case .text = content { return true } else { return false } }
@@ -41,10 +45,127 @@ final class FilesModel: ObservableObject {
 
     private static let openFilesKey = "openFiles"
 
+    /// Set while another Mac is on screen: its files are not on this
+    /// disk, and are asked for through its host instead. Every request is
+    /// answered with a message that `handle` takes.
+    private var remote: ((ClientMessage) -> Void)?
+    var isRemote: Bool { remote != nil }
+    /// False while there is no connection to the other Mac: what is asked
+    /// of it then goes nowhere.
+    var isOnline = true
+    /// The text sent to the other Mac to be written, by path, until it
+    /// says the file is saved. Until then the file's changes are not saved.
+    private var saving: [String: String] = [:]
+    /// Files saved again while the other Mac was still writing them.
+    private var saveAgain: Set<String> = []
+    /// Files whose tab closes once the other Mac has saved them.
+    private var closeWhenSaved: Set<String> = []
+    /// How many times a file was asked for and not yet answered.
+    private var readsDue: [String: Int] = [:]
+    /// Files saved while a read was on its way: the answer to that read
+    /// may be the file as it was before, and is not shown.
+    private var staleReads: Set<String> = []
+
     init() {
-        // The files that were open last time come back as tabs, behind the terminal.
+        restoreOpenFiles()
+    }
+
+    /// The files that were open last time come back as tabs, behind the terminal.
+    private func restoreOpenFiles() {
         for path in UserDefaults.standard.stringArray(forKey: Self.openFilesKey) ?? [] where FileManager.default.fileExists(atPath: path) {
             documents.append(Self.load(path))
+        }
+    }
+
+    /// Whether a file has changes that are not saved.
+    var hasUnsavedChanges: Bool { documents.contains(where: \.isDirty) }
+
+    /// Starts over for another Mac, or for this one again (nil). The files
+    /// that were open belong to the Mac that is left.
+    func reset(remote: ((ClientMessage) -> Void)?) {
+        self.remote = remote
+        root = nil
+        children = [:]
+        expanded = []
+        documents = []
+        active = nil
+        error = nil
+        pendingClose = nil
+        forgetRequests()
+        if remote == nil { restoreOpenFiles() }
+    }
+
+    /// The connection to the other Mac is gone, and with it the answers
+    /// that were on their way. A file that was being saved keeps its changes.
+    func connectionLost() {
+        isOnline = false
+        forgetRequests()
+    }
+
+    /// The other Mac said something went wrong. It does not say with what,
+    /// so no file that was being saved is taken as saved.
+    func requestFailed() {
+        saving = [:]
+        saveAgain = []
+        closeWhenSaved = []
+    }
+
+    private func forgetRequests() {
+        requestFailed()
+        readsDue = [:]
+        staleReads = []
+    }
+
+    private func read(_ path: String) {
+        guard let remote else { return }
+        readsDue[path, default: 0] += 1
+        remote(.readFile(path: path))
+    }
+
+    /// What another Mac's host answered about its files.
+    func handle(_ message: ServerMessage) {
+        guard isRemote else { return }
+        switch message {
+        case .files(let directory, let entries):
+            guard root != nil, directory == root || expanded.contains(directory) else { return }
+            if children[directory] != entries { children[directory] = entries }
+        case .file(let path, let content, let data):
+            let due = max((readsDue[path] ?? 0) - 1, 0)
+            readsDue[path] = due == 0 ? nil : due
+            if staleReads.contains(path) {
+                // Asked for before the file was saved from here. The next
+                // look at the files reads it again.
+                if due == 0 { staleReads.remove(path) }
+                return
+            }
+            guard let index = documents.firstIndex(where: { $0.path == path }) else { return }
+            // One with edits of our own keeps them, as with a file on this disk.
+            if documents[index].isDirty { return }
+            var text = ""
+            if case .text(let loaded) = content { text = loaded }
+            if documents[index].isLoading || documents[index].savedText != text || documents[index].content != content {
+                documents[index] = OpenDocument(path: path, content: content, text: text, savedText: text, isLoading: false, imageData: data)
+            }
+        case .fileCreated(let path, let isDirectory):
+            let directory = (path as NSString).deletingLastPathComponent
+            if directory != root { expanded.insert(directory) }
+            if isDirectory { expanded.insert(path) } else { open(path) }
+            refresh()
+        case .fileSaved(let path):
+            guard let text = saving.removeValue(forKey: path) else { return }
+            let index = documents.firstIndex(where: { $0.path == path })
+            if let index { documents[index].savedText = text }
+            let again = saveAgain.remove(path) != nil
+            let closing = closeWhenSaved.remove(path) != nil
+            guard let index else { return }
+            if documents[index].isDirty {
+                // Changed again since: what closes it is the next save.
+                if again || closing { saveAndClose(path, closing: closing) }
+            } else if closing {
+                close(path)
+            }
+        default:
+            break
         }
     }
 
@@ -93,6 +214,13 @@ final class FilesModel: ObservableObject {
     /// Reads again what is on disk: every folder that is showing, and the
     /// open files, which an agent may have rewritten meanwhile.
     func refresh() {
+        if let remote {
+            if let root { for directory in [root] + expanded.sorted() { remote(.files(path: directory)) } }
+            for document in documents where document.isText && !document.isDirty && !document.isLoading && !staleReads.contains(document.path) {
+                read(document.path)
+            }
+            return
+        }
         if let root {
             for directory in [root] + expanded.sorted() {
                 if FileManager.default.fileExists(atPath: directory) {
@@ -115,6 +243,10 @@ final class FilesModel: ObservableObject {
     }
 
     private func load(_ directory: String) {
+        if let remote {
+            remote(.files(path: directory))
+            return
+        }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let entries = FileBrowser.list(directory)
             DispatchQueue.main.async {
@@ -136,7 +268,12 @@ final class FilesModel: ObservableObject {
     /// Shows a file in the middle pane, opening a tab for it if it has none.
     func open(_ path: String) {
         if !documents.contains(where: { $0.path == path }) {
-            documents.append(Self.load(path))
+            if isRemote {
+                documents.append(OpenDocument(path: path, content: .text(""), text: "", savedText: "", isLoading: true))
+                read(path)
+            } else {
+                documents.append(Self.load(path))
+            }
             rememberOpenFiles()
         }
         active = path
@@ -181,6 +318,23 @@ final class FilesModel: ObservableObject {
     @discardableResult
     func save(_ path: String? = nil) -> Bool {
         guard let path = path ?? active, let index = documents.firstIndex(where: { $0.path == path }), documents[index].isDirty else { return true }
+        if let remote {
+            guard isOnline else {
+                error = "The other Mac is not connected, so the file could not be saved. Its changes are kept: save again once it is back."
+                return false
+            }
+            // One write at a time: two on their way could be done in either order.
+            if saving[path] != nil {
+                saveAgain.insert(path)
+                return true
+            }
+            // Not saved until the other Mac says so. If it cannot write
+            // the file it says that instead, and the changes stay changes.
+            saving[path] = documents[index].text
+            if readsDue[path] != nil { staleReads.insert(path) }
+            remote(.writeFile(path: path, text: documents[index].text))
+            return true
+        }
         do {
             try FileBrowser.write(documents[index].text, to: path)
             documents[index].savedText = documents[index].text
@@ -188,6 +342,19 @@ final class FilesModel: ObservableObject {
         } catch {
             self.error = "\(error)"
             return false
+        }
+    }
+
+    /// Saves a file and closes its tab. A file on another Mac closes once
+    /// that Mac has it: if it cannot be saved, it stays open with its changes.
+    func saveAndClose(_ path: String, closing: Bool = true) {
+        guard save(path) else { return }
+        guard closing else { return }
+        if isRemote, documents.first(where: { $0.path == path })?.isDirty == true {
+            pendingClose = nil
+            closeWhenSaved.insert(path)
+        } else {
+            close(path)
         }
     }
 
@@ -202,12 +369,18 @@ final class FilesModel: ObservableObject {
     }
 
     private func rememberOpenFiles() {
+        // Only this Mac's: another Mac's files are not here to come back to.
+        guard !isRemote else { return }
         UserDefaults.standard.set(documents.map(\.path), forKey: Self.openFilesKey)
     }
 
     // MARK: Changing files
 
     func createFile(named name: String, in directory: String) {
+        if let remote {
+            remote(.createFile(directory: directory, name: name, isDirectory: false))
+            return
+        }
         perform {
             let path = try FileBrowser.createFile(named: name, in: directory)
             self.reveal(directory)
@@ -216,6 +389,10 @@ final class FilesModel: ObservableObject {
     }
 
     func createFolder(named name: String, in directory: String) {
+        if let remote {
+            remote(.createFile(directory: directory, name: name, isDirectory: true))
+            return
+        }
         perform {
             let path = try FileBrowser.createFolder(named: name, in: directory)
             self.reveal(directory)
@@ -225,7 +402,16 @@ final class FilesModel: ObservableObject {
 
     func rename(_ entry: FileEntry, to name: String) {
         perform {
-            let target = try FileBrowser.rename(entry.path, to: name)
+            let target: String
+            if let remote {
+                // Where it will be, if the other Mac takes the name: it
+                // answers with the folder as it is then.
+                target = ((entry.path as NSString).deletingLastPathComponent as NSString).appendingPathComponent(name)
+                guard target != entry.path else { return }
+                remote(.renameFile(path: entry.path, name: name))
+            } else {
+                target = try FileBrowser.rename(entry.path, to: name)
+            }
             guard target != entry.path else { return }
             // What was open or expanded under the old path moves with it.
             for index in self.documents.indices {
@@ -244,7 +430,7 @@ final class FilesModel: ObservableObject {
 
     func trash(_ entry: FileEntry) {
         perform {
-            try FileBrowser.trash(entry.path)
+            if let remote { remote(.trashFile(path: entry.path)) } else { try FileBrowser.trash(entry.path) }
             for document in self.documents where document.path == entry.path || document.path.hasPrefix(entry.path + "/") {
                 self.close(document.path)
             }

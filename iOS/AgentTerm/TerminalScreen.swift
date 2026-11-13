@@ -8,9 +8,50 @@ struct TerminalScreen: View {
     let session: SessionID
     @State private var confirmingEnd = false
     @State private var showingUsage = false
+    @Environment(\.verticalSizeClass) private var verticalSize
+    @Environment(\.dismiss) private var dismiss
+
+    /// A phone on its side: far wider than it is high, and with the
+    /// keyboard up there is hardly any height left. The navigation bar, the
+    /// key bar and the message field would take all of it between them, so
+    /// there they share one row and the terminal has the rest.
+    private var isOnItsSide: Bool { verticalSize == .compact }
 
     private var controller: TerminalController? {
         model.controller?.session == session ? model.controller : nil
+    }
+
+    /// Text size, handing off and ending the session.
+    private var sessionMenu: some View {
+        Menu {
+            Button {
+                model.changeFontSize(by: 1)
+            } label: {
+                Label("Larger Text", systemImage: "textformat.size.larger")
+            }
+            Button {
+                model.changeFontSize(by: -1)
+            } label: {
+                Label("Smaller Text", systemImage: "textformat.size.smaller")
+            }
+            if let info = model.session(session), model.canHandOff(info) {
+                Divider()
+                Button {
+                    model.requestHandoff(session: info)
+                } label: {
+                    Label("Hand Off…", systemImage: "arrowshape.turn.up.right")
+                }
+            }
+            Divider()
+            Button(role: .destructive) {
+                confirmingEnd = true
+            } label: {
+                Label("End Session", systemImage: "xmark.circle")
+            }
+        } label: {
+            Image(systemName: "ellipsis.circle")
+        }
+        .accessibilityIdentifier("session-menu")
     }
 
     var body: some View {
@@ -38,33 +79,62 @@ struct TerminalScreen: View {
             if let controller {
                 TerminalPane(controller: controller, foreignSize: model.foreignSize)
                     .id(ObjectIdentifier(controller))
+                    .accessibilityIdentifier("terminal")
+                    .overlay {
+                        // The session's earlier output is on its way, up to
+                        // megabytes of it: a terminal racing through all of
+                        // that says less than a word that it is loading.
+                        if model.replaying == session {
+                            LoadingView("Loading the session…", cover: Palette.canvas.opacity(0.92))
+                        }
+                    }
                     .padding(.leading, model.foreignSize == nil ? 6 : 0)
                     .padding(.top, model.foreignSize == nil ? 4 : 0)
                     // Room under the last row, which can otherwise sit
                     // right on the edge of what is below.
                     .padding(.bottom, model.foreignSize == nil ? 4 : 0)
-                if let info = model.session(session), let agent = info.agent {
-                    UsageBar(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent], compact: true) {
-                        showingUsage = true
+                if isOnItsSide {
+                    HStack(spacing: 0) {
+                        Button {
+                            dismiss()
+                        } label: {
+                            Image(systemName: "chevron.left")
+                                .font(.system(size: 17, weight: .semibold))
+                                .frame(width: 40, height: 40)
+                                .contentShape(Rectangle())
+                        }
+                        .accessibilityLabel("Back")
+                        .accessibilityIdentifier("terminal-back")
+                        KeyBar(controller: controller)
+                            .containerRelativeFrame(.horizontal) { width, _ in width * 0.36 }
+                        ComposeBar(controller: controller, isOnItsSide: true)
+                        sessionMenu
+                            .frame(width: 40, height: 40)
                     }
                     .background(Palette.panel)
-                    .sheet(isPresented: $showingUsage) {
-                        ScrollView {
-                            UsageDetails(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent]) {
-                                model.refreshAccountUsage()
-                            }
+                    .overlay(alignment: .top) { Palette.hairline.frame(height: 1) }
+                } else {
+                    if let info = model.session(session), let agent = info.agent {
+                        UsageBar(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent], compact: true) {
+                            showingUsage = true
                         }
-                        .background(Palette.canvas.ignoresSafeArea())
-                        .presentationDetents([.medium, .large])
-                        .preferredColorScheme(.dark)
+                        .background(Palette.panel)
+                        .sheet(isPresented: $showingUsage) {
+                            ScrollView {
+                                UsageDetails(agent: agent, name: info.title, usage: info.usage, account: model.accountUsage[agent]) {
+                                    model.refreshAccountUsage()
+                                }
+                            }
+                            .background(Palette.canvas.ignoresSafeArea())
+                            .presentationDetents([.medium, .large])
+                            .preferredColorScheme(.dark)
+                        }
                     }
+                    KeyBar(controller: controller)
+                    ComposeBar(controller: controller)
                 }
-                KeyBar(controller: controller)
-                ComposeBar(controller: controller)
             } else {
-                Spacer()
-                ProgressView()
-                Spacer()
+                LoadingView("Opening the session…")
             }
         }
         .background(Palette.canvas.ignoresSafeArea())
@@ -72,37 +142,10 @@ struct TerminalScreen: View {
         // The terminal needs the room, and its own bars are under it.
         .toolbar(.hidden, for: .tabBar)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(isOnItsSide ? .hidden : .visible, for: .navigationBar)
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button {
-                        model.changeFontSize(by: 1)
-                    } label: {
-                        Label("Larger Text", systemImage: "textformat.size.larger")
-                    }
-                    Button {
-                        model.changeFontSize(by: -1)
-                    } label: {
-                        Label("Smaller Text", systemImage: "textformat.size.smaller")
-                    }
-                    if let info = model.session(session), model.canHandOff(info) {
-                        Divider()
-                        Button {
-                            model.requestHandoff(session: info)
-                        } label: {
-                            Label("Hand Off…", systemImage: "arrowshape.turn.up.right")
-                        }
-                    }
-                    Divider()
-                    Button(role: .destructive) {
-                        confirmingEnd = true
-                    } label: {
-                        Label("End Session", systemImage: "xmark.circle")
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                }
-                .accessibilityIdentifier("session-menu")
+                sessionMenu
             }
         }
         .confirmationDialog("End this session?", isPresented: $confirmingEnd, titleVisibility: .visible) {
@@ -216,6 +259,7 @@ private struct ForeignSizeBanner: View {
 /// Keys a phone keyboard does not have.
 private struct KeyBar: View {
     let controller: TerminalController
+    @StateObject private var keyboard = KeyboardWatcher()
 
     private struct Key: Identifiable {
         let label: String
@@ -241,6 +285,25 @@ private struct KeyBar: View {
     ]
 
     var body: some View {
+        HStack(spacing: 0) {
+            keys
+            if keyboard.isUp {
+                // Stays in place at the end of the bar while the keys
+                // scroll: the keyboard covers half of the terminal, and
+                // this is the way to have it back.
+                HideKeyboardButton()
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(minWidth: 44, minHeight: 36)
+                    .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Palette.raised))
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+            }
+        }
+        .background(Palette.panel)
+        .overlay(alignment: .top) { Palette.hairline.frame(height: 1) }
+    }
+
+    private var keys: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(Self.keys) { key in
@@ -262,8 +325,6 @@ private struct KeyBar: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
         }
-        .background(Palette.panel)
-        .overlay(alignment: .top) { Palette.hairline.frame(height: 1) }
     }
 }
 
@@ -276,28 +337,30 @@ private struct KeyBar: View {
 private struct ComposeBar: View {
     @EnvironmentObject private var model: PhoneModel
     let controller: TerminalController
+    /// In the one row a phone on its side has for everything.
+    var isOnItsSide = false
     @State private var text = ""
     @FocusState private var focused: Bool
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
             TextField("Message", text: $text, axis: .vertical)
-                .lineLimit(1...5)
+                .lineLimit(isOnItsSide ? 1...2 : 1...5)
                 .focused($focused)
                 .accessibilityIdentifier("compose")
                 .padding(.horizontal, 14)
-                .padding(.vertical, 9)
+                .padding(.vertical, isOnItsSide ? 7 : 9)
                 .background(RoundedRectangle(cornerRadius: 19, style: .continuous).fill(Palette.raised))
             Button(action: send) {
                 Image(systemName: "arrow.up.circle.fill")
-                    .font(.system(size: 34))
+                    .font(.system(size: isOnItsSide ? 30 : 34))
                     .symbolRenderingMode(.hierarchical)
             }
             .accessibilityLabel("Send")
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, isOnItsSide ? 6 : 10)
         .padding(.top, 4)
-        .padding(.bottom, 8)
+        .padding(.bottom, isOnItsSide ? 4 : 8)
         .background(Palette.panel)
         .onAppear { text = model.composeDraft(for: controller.session) }
         .onChange(of: text) { _, written in model.setComposeDraft(written, for: controller.session) }

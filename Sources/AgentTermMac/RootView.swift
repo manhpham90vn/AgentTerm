@@ -14,6 +14,25 @@ struct RootView: View {
         return "End \(count) \(count == 1 ? "session" : "sessions") and close \(kept ? "every other tab" : "every tab")?"
     }
 
+    // The questions are worked out here rather than where they are asked:
+    // inside the long chain of the window's sheets and dialogs each of them
+    // is one more thing the compiler has to work out at once, and on a slow
+    // machine it gives up.
+    private var saveQuestion: String {
+        let name = files.pendingClose.map { ($0 as NSString).lastPathComponent } ?? ""
+        return "Save changes to \"\(name)\"?"
+    }
+
+    private var endQuestion: String {
+        let name = model.pendingEnd?.displayName ?? "this session"
+        return "End \(name)?"
+    }
+
+    private var pushQuestion: String {
+        guard let push = model.pendingFirstPush else { return "" }
+        return "Push “\(push.branch)” to \(push.remote)?"
+    }
+
     var body: some View {
         HSplitView {
             if model.showSidebar {
@@ -48,14 +67,20 @@ struct RootView: View {
                 }
                 .help(model.showSidebar ? "Hide the folder list" : "Show the folder list")
             }
-            // Middle: starting an agent is the main thing to do here, and
-            // pairing an iPhone is what sets the app apart, so it sits with
-            // them and stands out.
+            // Middle: which Mac all of the window is about, then starting an
+            // agent on it, the main thing to do here. Pairing an iPhone or
+            // another Mac is what sets the app apart, so it sits with them
+            // and stands out.
             ToolbarItem(placement: .principal) {
                 HStack(spacing: 10) {
-                    LaunchBar()
+                    MacSwitcher()
                     Theme.hairline.frame(width: 1, height: 16)
-                    PairButton()
+                    LaunchBar()
+                    // Pairing a device is done on the Mac it is paired with.
+                    if !model.isRemote {
+                        Theme.hairline.frame(width: 1, height: 16)
+                        PairButton()
+                    }
                 }
             }
             // Without this flexible space the items below sit right after
@@ -77,14 +102,30 @@ struct RootView: View {
         .sheet(isPresented: $model.showPairing) {
             PairingView(port: model.hostPort)
         }
+        .sheet(isPresented: $model.showPairMac) {
+            PairMacSheet()
+        }
+        .sheet(isPresented: $model.showBrowseFolders) {
+            BrowseFoldersSheet()
+        }
         .confirmationDialog(
-            "Save changes to \"\((files.pendingClose as NSString?)?.lastPathComponent ?? "")\"?",
+            saveQuestion,
             isPresented: Binding(get: { files.pendingClose != nil }, set: { if !$0 { files.pendingClose = nil } }),
             titleVisibility: .visible, presenting: files.pendingClose
         ) { path in
-            Button("Save") { if files.save(path) { files.close(path) } }
+            Button("Save") { files.saveAndClose(path) }
             Button("Don't Save", role: .destructive) { files.close(path) }
             Button("Cancel", role: .cancel) {}
+        }
+        .confirmationDialog(
+            endQuestion,
+            isPresented: Binding(get: { model.pendingEnd != nil }, set: { if !$0 { model.pendingEnd = nil } }),
+            titleVisibility: .visible, presenting: model.pendingEnd
+        ) { session in
+            Button("End Session", role: .destructive) { model.close(session.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("The program running in it is stopped.")
         }
         .confirmationDialog(
             closeQuestion,
@@ -97,7 +138,7 @@ struct RootView: View {
             Text("What is running in the terminals stops. Files with unsaved changes stay open.")
         }
         .confirmationDialog(
-            model.pendingFirstPush.map { "Push “\($0.branch)” to \($0.remote)?" } ?? "",
+            pushQuestion,
             isPresented: Binding(get: { model.pendingFirstPush != nil }, set: { if !$0 { model.pendingFirstPush = nil } }),
             titleVisibility: .visible, presenting: model.pendingFirstPush
         ) { push in
@@ -192,7 +233,7 @@ struct PairButton: View {
         } label: {
             HStack(spacing: 6) {
                 Image(systemName: "qrcode").font(.system(size: 11, weight: .bold))
-                Text("Pair iPhone").font(.system(size: 12, weight: .semibold))
+                Text("Pair Device").font(.system(size: 12, weight: .semibold))
             }
             .foregroundStyle(.white)
             .padding(.horizontal, 11)
@@ -205,8 +246,8 @@ struct PairButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
-        .help("Pair an iPhone with a QR code to use this Mac's sessions from it")
-        .accessibilityLabel("Pair iPhone")
+        .help("Pair an iPhone or another Mac to use this Mac's sessions from it")
+        .accessibilityLabel("Pair Device")
     }
 }
 
@@ -268,8 +309,11 @@ private struct HostVersionBanner: View {
                 .lineLimit(2)
             }
             Spacer(minLength: 8)
-            Button("Restart Host…") { confirming = true }
-                .controlSize(.small)
+            // Another Mac's host is restarted on that Mac, by its own app.
+            if !model.isRemote {
+                Button("Restart Host…") { confirming = true }
+                    .controlSize(.small)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -334,14 +378,15 @@ struct CenterView: View {
             case .connecting:
                 VStack(spacing: 12) {
                     ProgressView().controlSize(.small)
-                    Text("Starting the AgentTerm host…").foregroundStyle(.secondary)
+                    Text(model.remote.map { "Connecting to \($0.name)…" } ?? "Starting the AgentTerm host…").foregroundStyle(.secondary)
                 }
             case .failed(let reason):
                 VStack(spacing: 12) {
                     Image(systemName: "bolt.horizontal.circle").font(.system(size: 34)).foregroundStyle(.secondary)
-                    Text("Can't reach the AgentTerm host").font(.headline)
+                    Text(model.remote.map { "Can't reach \($0.name)" } ?? "Can't reach the AgentTerm host").font(.headline)
                     Text(reason).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
                     Button("Try Again") { model.reconnect() }
+                    if model.isRemote { Button("Use This Mac") { model.switchTo(nil) } }
                 }
                 .padding(40)
             case .connected:
@@ -367,6 +412,15 @@ struct CenterView: View {
                         let foreign = model.foreignSizes[controller.session]
                         TerminalPane(controller: controller, foreignSize: foreign)
                             .id(controller.session)
+                            .overlay {
+                                // The session's earlier output is on its
+                                // way, megabytes of it: a terminal racing
+                                // through that says less than a word that
+                                // it is loading.
+                                if model.replaying.contains(controller.session) {
+                                    LoadingView("Loading the session…", cover: Theme.canvas.opacity(0.92))
+                                }
+                            }
                             // The framed preview of another device's screen
                             // is centered, so it gets no one-sided padding.
                             .padding(.leading, foreign == nil ? 10 : 0)
@@ -485,7 +539,7 @@ struct WelcomeView: View {
             }
             if model.agentsLoaded && model.installedAgents.isEmpty {
                 VStack(spacing: 6) {
-                    Text("No agent CLI was found on this Mac.")
+                    Text("No agent CLI was found on \(model.macName).")
                         .font(.callout).foregroundStyle(.secondary)
                     Button("Check Again") { model.refreshAgents() }.controlSize(.small)
                 }

@@ -128,6 +128,15 @@ final class AppModel: ObservableObject {
     /// has said, which an older host never does.
     @Published private(set) var keepAwake: Bool?
 
+    /// Whether the host starts when the user logs in. Nil from a host that
+    /// cannot be started that way, or that has not said yet.
+    @Published private(set) var startAtLogin: Bool?
+
+    func setStartAtLogin(_ on: Bool) {
+        startAtLogin = on
+        connection?.send(.setStartAtLogin(on))
+    }
+
     func setKeepAwake(_ on: Bool) {
         keepAwake = on
         connection?.send(.setKeepAwake(on))
@@ -254,6 +263,11 @@ final class AppModel: ObservableObject {
     private func sync(_ what: String, in directory: String, _ action: @escaping (String) -> String?) {
         guard syncing[directory] == nil else { return }
         syncing[directory] = what
+        if isRemote {
+            // The other Mac's git does it, and says when it is over.
+            sendForDiff(what == "push" ? .gitPush(path: directory) : .gitPull(path: directory), in: directory)
+            return
+        }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let problem = action(directory)
             DispatchQueue.main.async {
@@ -268,6 +282,8 @@ final class AppModel: ObservableObject {
 
     /// True once the host has listed its sessions.
     var sessionsKnown = false
+    /// The sessions whose earlier output is being sent, until all of it is here.
+    @Published private(set) var replaying: Set<SessionID> = []
 
     /// True between the host's welcome and the connection closing.
     private var wasConnected = false
@@ -359,6 +375,14 @@ final class AppModel: ObservableObject {
 
     init() {
         if let value = ProcessInfo.processInfo.environment["AGENTTERM_PORT"].flatMap(UInt16.init) { port = value }
+        // The Mac that was on screen last time is the one to come back to.
+        if let last = UserDefaults.standard.string(forKey: Self.currentMacKey), let mac = remoteMacs.first(where: { $0.id == last }) {
+            remote = mac
+            files.reset(remote: { [weak self] message in self?.connection?.send(message) })
+            // The tabs saved here are this Mac's.
+            tabLayout = TabLayout()
+            startOwnHost()
+        }
         connect()
         folderChanged()
         // A file that comes to the front takes the diff's place there.
@@ -406,30 +430,224 @@ final class AppModel: ObservableObject {
         return sessions.filter { !known.contains($0.cwd) }
     }
 
-    var workingDirectory: String { selectedFolder ?? HostEnvironment.homeDirectory }
+    /// Where a new session starts. Nil on another Mac with no folder picked:
+    /// that Mac's host then starts it in its own home folder.
+    var startingDirectory: String? { selectedFolder ?? (isRemote ? nil : HostEnvironment.homeDirectory) }
+    var workingDirectory: String { startingDirectory ?? "the home folder" }
 
     // MARK: Connection
 
-    private func connect() {
-        guard let token = try? HostEnvironment.loadOrCreateToken() else {
-            status = .failed("Could not read the pairing token.")
-            return
+    /// Starts this Mac's host when the app opens on another Mac. Nothing
+    /// else would: connecting to it is what starts it otherwise, and its
+    /// phones and the other Macs reach this Mac through it all the same.
+    private func startOwnHost() {
+        guard let executable = DaemonLauncher.bundledExecutable else { return }
+        let port = port
+        DispatchQueue.global(qos: .utility).async {
+            guard DaemonLauncher.listener(onPort: port) == nil else { return }
+            DaemonLauncher.launch(executable: executable, arguments: ["--port", String(port)])
         }
-        let connection = AgentTermConnection(host: "127.0.0.1", port: port, token: token, clientName: "Mac")
+    }
+
+    private func connect() {
+        let connection: AgentTermConnection
+        if let remote {
+            connection = AgentTermConnection(host: remote.host, port: remote.port, token: remote.token, clientName: Self.ownName)
+        } else {
+            guard let token = try? HostEnvironment.loadOrCreateToken() else {
+                status = .failed("Could not read the pairing token.")
+                return
+            }
+            connection = AgentTermConnection(host: "127.0.0.1", port: port, token: token, clientName: "Mac")
+        }
         self.connection = connection
+        files.isOnline = true
         connection.onState = { [weak self, weak connection] state in
             MainActor.assumeIsolated {
                 guard let self, let connection, self.connection === connection else { return }
                 self.connectionChanged(state)
             }
         }
-        connection.onMessage = { [weak self] message in
-            MainActor.assumeIsolated { self?.handle(message) }
+        // Only from the connection in use: one that was left for another
+        // Mac may still have something on its way.
+        connection.onMessage = { [weak self, weak connection] message in
+            MainActor.assumeIsolated {
+                guard let self, let connection, self.connection === connection else { return }
+                self.handle(message)
+            }
         }
-        connection.onOutput = { [weak self] session, data in
-            MainActor.assumeIsolated { self?.controllers[session]?.feed(data) }
+        connection.onOutput = { [weak self, weak connection] session, data in
+            MainActor.assumeIsolated {
+                guard let self, let connection, self.connection === connection else { return }
+                self.controllers[session]?.feed(data)
+            }
         }
         connection.connect()
+    }
+
+    // MARK: Other Macs
+
+    /// The Macs this one is paired with, to be used from here.
+    @Published private(set) var remoteMacs: [RemoteMac] = RemoteMacStore.load()
+    /// The Mac whose sessions, folders and files are on screen. Nil: this one.
+    @Published private(set) var remote: RemoteMac?
+    var isRemote: Bool { remote != nil }
+    /// The name of the Mac on screen, for where "this Mac" would be wrong.
+    var macName: String { remote?.name ?? "this Mac" }
+    /// The sheet that pairs with another Mac, while it is open.
+    @Published var showPairMac = false
+    @Published private(set) var isPairingMac = false
+    @Published var pairMacError: String?
+    private var pairingConnection: AgentTermConnection?
+    private static let currentMacKey = "currentMac"
+    private static var ownName: String { Host.current().localizedName ?? "Mac" }
+
+    /// Shows another Mac, or this one again (nil). What was on screen
+    /// belongs to the Mac that is left and goes with it.
+    /// - Parameter discardingChanges: Also with unsaved changes in the open
+    ///   files, when the Mac they are on can no longer be used from here.
+    func switchTo(_ mac: RemoteMac?, discardingChanges: Bool = false) {
+        guard mac != remote else { return }
+        guard discardingChanges || !files.hasUnsavedChanges else {
+            // Their files are on the Mac that would be left.
+            notice = "Save or discard the changes in the open files before switching to another Mac."
+            return
+        }
+        let old = connection
+        connection = nil
+        old?.close()
+        remote = mac
+        UserDefaults.standard.set(mac?.id, forKey: Self.currentMacKey)
+        forgetHostState()
+        // Each Mac's tabs are its own: this Mac's are the ones saved here,
+        // another Mac's come from its host. Not sent on, and not saved
+        // over this Mac's.
+        applyingHostLayout = true
+        tabLayout = mac == nil ? Self.savedTabLayout() : TabLayout()
+        applyingHostLayout = false
+        folders = []
+        selectedFolder = nil
+        diff = nil
+        closeDiffTab()
+        history = nil
+        commitMessages = [:]
+        isCommitting = false
+        agents = []
+        agentsLoaded = false
+        accountUsage = [:]
+        devices = []
+        otherHost = nil
+        otherHostPID = nil
+        lastError = nil
+        pendingCommit = nil
+        loadingDiffFile = false
+        pendingSessionHandoff = nil
+        remoteHandoffPlan = nil
+        browseListing = nil
+        files.reset(remote: mac == nil ? nil : { [weak self] message in self?.connection?.send(message) })
+        connectAttempts = 0
+        launchedDaemon = false
+        status = .connecting
+        connect()
+    }
+
+    /// Pairs with another Mac from the link its pairing window shows, and
+    /// goes to it. The link holds a code that is traded for a token of
+    /// this Mac's own.
+    func pairMac(link: String) {
+        guard !isPairingMac else { return }
+        guard let url = URL(string: link.trimmingCharacters(in: .whitespacesAndNewlines)), let info = PairingInfo(url: url) else {
+            pairMacError = "That is not a pairing link. On the other Mac, open Pair Device and copy the link under the code."
+            return
+        }
+        pairMacError = nil
+        isPairingMac = true
+        let connection = AgentTermConnection(host: info.host, port: info.port, credential: .pairingCode(info.code), clientName: Self.ownName)
+        pairingConnection = connection
+        connection.onMessage = { [weak self, weak connection] message in
+            MainActor.assumeIsolated {
+                guard let self, let connection, self.pairingConnection === connection else { return }
+                switch message {
+                case .paired(_, let token):
+                    self.pairingConnection = nil
+                    connection.close()
+                    self.isPairingMac = false
+                    let mac = RemoteMac(id: UUID().uuidString, name: info.name, host: info.host, port: info.port, token: token)
+                    // Pairing again with a Mac replaces what was kept for it.
+                    self.remoteMacs.removeAll { $0.host == mac.host && $0.port == mac.port }
+                    self.remoteMacs.append(mac)
+                    RemoteMacStore.save(self.remoteMacs)
+                    self.showPairMac = false
+                    self.switchTo(mac)
+                case .error(let text):
+                    self.pairMacError =
+                        text == "invalid pairing code" ? "That link has expired or was already used. Show a new one on the other Mac and try again." : text
+                default:
+                    break
+                }
+            }
+        }
+        connection.onState = { [weak self, weak connection] state in
+            MainActor.assumeIsolated {
+                guard let self, let connection, self.pairingConnection === connection, case .closed = state else { return }
+                self.pairingConnection = nil
+                self.isPairingMac = false
+                if self.pairMacError == nil {
+                    self.pairMacError = "Could not reach \(info.name). Check that Tailscale is connected on both Macs, then try again."
+                }
+            }
+        }
+        connection.connect()
+    }
+
+    func cancelPairingMac() {
+        let connection = pairingConnection
+        pairingConnection = nil
+        connection?.close()
+        isPairingMac = false
+        pairMacError = nil
+    }
+
+    /// Forgets a paired Mac: its token is thrown away, and pairing again
+    /// is the only way back to it.
+    ///
+    /// - Parameter discardingChanges: Also when it is on screen with unsaved
+    ///   changes in its files: for a Mac that has already shut this one out.
+    func forget(_ mac: RemoteMac, discardingChanges: Bool = false) {
+        if remote?.id == mac.id, files.hasUnsavedChanges, !discardingChanges {
+            // It would stay on screen, and no longer be one of the Macs to pick.
+            notice = "Save or discard the changes in the open files before forgetting \(mac.name)."
+            return
+        }
+        remoteMacs.removeAll { $0.id == mac.id }
+        RemoteMacStore.save(remoteMacs)
+        if remote?.id == mac.id { switchTo(nil, discardingChanges: true) }
+    }
+
+    /// What is known about the host that was connected, which the next
+    /// one says again for itself.
+    private func forgetHostState() {
+        controllers.removeAll()
+        replaying = []
+        sessionsKnown = false
+        keepAwake = nil
+        startAtLogin = nil
+        hostVersion = 0
+        system.stats = nil
+        sshHosts = []
+        writingCommitMessage = []
+        syncing = [:]
+        hostMatch = .same
+        diffAnswersDue = [:]
+        if pendingCommit != nil {
+            // Whether git took it went with the connection. The message stays.
+            pendingCommit = nil
+            isCommitting = false
+        }
+        tabLayoutKnown = false
+        sessions = []
+        foreignSizes = [:]
+        selectedSession = nil
     }
 
     private func connectionChanged(_ state: AgentTermConnection.State) {
@@ -440,27 +658,18 @@ final class AppModel: ObservableObject {
             connectAttempts = 0
             status = .connected
             connection?.send(.agents(refresh: false))
-            checkWhoseHost()
+            // Which program the host is can only be looked at on this Mac.
+            if !isRemote { checkWhoseHost() }
         case .closed(let reason):
             // The host went away under a working connection, and not because
-            // the user asked for it to be restarted: worth a report.
-            if wasConnected, !stoppingHost { Telemetry.shared.recordProblem(.hostExitedUnexpectedly) }
+            // the user asked for it to be restarted: worth a report. Another
+            // Mac going out of reach is not that.
+            if wasConnected, !stoppingHost, !isRemote { Telemetry.shared.recordProblem(.hostExitedUnexpectedly) }
             wasConnected = false
             stoppingHost = false
             connection = nil
-            controllers.removeAll()
-            sessionsKnown = false
-            keepAwake = nil
-            hostVersion = 0
-            system.stats = nil
-            sshHosts = []
-            writingCommitMessage = []
-            syncing = [:]
-            hostMatch = .same
-            tabLayoutKnown = false
-            sessions = []
-            foreignSizes = [:]
-            selectedSession = nil
+            files.connectionLost()
+            forgetHostState()
             retryConnection(reason: reason)
         }
     }
@@ -468,6 +677,22 @@ final class AppModel: ObservableObject {
     /// The daemon may simply not be running yet: start it, then keep trying
     /// for a few seconds before giving up.
     private func retryConnection(reason: String?) {
+        if let remote {
+            // Another Mac's host is not this app's to start. A few tries,
+            // since most drops are over at once, then it is said.
+            connectAttempts += 1
+            guard connectAttempts <= 5 else {
+                status = .failed(
+                    "\(remote.name) cannot be reached\(reason.map { ": \($0)" } ?? ".") Check that Tailscale is connected on both Macs and that AgentTerm is open there.")
+                return
+            }
+            status = .connecting
+            DispatchQueue.main.asyncAfter(deadline: .now() + (connectAttempts == 1 ? 0.5 : 2)) { [weak self] in
+                guard let self, self.connection == nil, self.remote == remote else { return }
+                self.connect()
+            }
+            return
+        }
         if !launchedDaemon, let executable = DaemonLauncher.bundledExecutable {
             launchedDaemon = true
             DaemonLauncher.launch(executable: executable, arguments: ["--port", String(port)])
@@ -509,6 +734,8 @@ final class AppModel: ObservableObject {
         case .agents(let list):
             agents = list
             agentsLoaded = true
+        case .startAtLogin(let on):
+            startAtLogin = on
         case .keepAwake(let on):
             keepAwake = on
         case .keepAwakeOptions(let options):
@@ -549,6 +776,7 @@ final class AppModel: ObservableObject {
             if controllers[info.id] == nil { controllers[info.id] = makeController(for: info.id) }
             // What follows is the session's earlier output, until `replayed`.
             controllers[info.id]?.beginReplay(size: info.size)
+            replaying.insert(info.id)
             if !sessions.contains(where: { $0.id == info.id }) { sessions.append(info) }
             if selectNextAttached || selectedSession == nil {
                 // A session that was just started comes to the front, also
@@ -561,6 +789,7 @@ final class AppModel: ObservableObject {
                 selectedSession = info.id
             }
         case .replayed(let id):
+            replaying.remove(id)
             controllers[id]?.endReplay()
         case .resized(let id, let size, let driver):
             if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].size = size }
@@ -575,7 +804,23 @@ final class AppModel: ObservableObject {
                 selectedSession = sessions.last(where: { $0.cwd == workingDirectory })?.id ?? sessions.last?.id
             }
         case .error(let text):
+            if isRemote, text == "invalid token", let mac = remote {
+                // The other Mac took this one off its paired devices. What
+                // was not saved there cannot be saved any more.
+                forget(mac, discardingChanges: true)
+                notice = "\(mac.name) removed this Mac from its paired devices. Pair with it again to use it from here."
+                return
+            }
             lastError = text
+            if isRemote {
+                // On another Mac git and the files answer through the host:
+                // what went wrong is said here, and whatever waited for the
+                // answer is over.
+                if isCommitting || pendingCommit != nil || !syncing.isEmpty || files.isRemote { notice = text }
+                isCommitting = false
+                pendingCommit = nil
+                files.requestFailed()
+            }
             // What stopped an agent from writing a commit message is said
             // where the user is looking, not on the launch screen.
             if !writingCommitMessage.isEmpty {
@@ -596,9 +841,56 @@ final class AppModel: ObservableObject {
             devices = list
         case .accountUsage(let list):
             accountUsage = Dictionary(list.map { ($0.agent, $0) }, uniquingKeysWith: { $1 })
-        case .paired, .diff, .gitSynced, .replaying, .diffFile, .history, .directory, .handoffPlan, .files, .file, .fileSaved, .fileCreated:
-            // The Mac app reads changes, history and folders directly: it
-            // runs on the machine they are on.
+        case .diff(let path, let snapshot):
+            // Only asked for on another Mac: this Mac's changes are read
+            // from its own disk.
+            guard isRemote else { break }
+            let due = max((diffAnswersDue[path] ?? 0) - 1, 0)
+            diffAnswersDue[path] = due == 0 ? nil : due
+            if pendingCommit == path, due == 0 {
+                // The answer to a commit git took: an error would have come
+                // first. Only once every answer that was due is in: the
+                // host does its work side by side, and the changes asked
+                // for before the commit may come back while git is still at it.
+                pendingCommit = nil
+                isCommitting = false
+                commitMessages[path] = nil
+                files.refresh()
+            }
+            guard path == selectedFolder else { break }
+            diffGeneration += 1
+            apply(snapshot, to: path)
+        case .diffFile(let path, let file):
+            loadingDiffFile = false
+            guard isRemote, let tab = diffTab, tab.folder == path else { break }
+            if let file {
+                if file.path == tab.file.path, file.isStaged == tab.file.isStaged, file != tab.file { diffTab = OpenDiff(folder: path, file: file) }
+            } else {
+                closeDiffTab()
+            }
+        case .gitSynced(let path):
+            syncing[path] = nil
+        case .history(let path, let conversations):
+            guard isRemote else { break }
+            if let session = pendingSessionHandoff, path == session.cwd {
+                pendingSessionHandoff = nil
+                let own = conversations.filter { $0.agent == agentID(of: session) }
+                if let found = own.first(where: { $0.sessionID == session.conversationID })
+                    ?? own.first(where: { $0.updatedAt >= session.createdAt.addingTimeInterval(-5) })
+                {
+                    requestHandoff(found)
+                } else {
+                    notice = "\(session.title) has no conversation to hand off in this session yet. It saves one after your first message."
+                }
+            }
+            if historyShowsAll ? path == nil : (path != nil && path == selectedFolder), history != conversations { history = conversations }
+        case .directory(let listing):
+            browseListing = listing
+        case .handoffPlan(let id, let prompt):
+            remoteHandoffPlan = RemoteHandoffPlan(id: id, prompt: prompt)
+        case .files, .file, .fileCreated, .fileSaved:
+            files.handle(message)
+        case .paired, .replaying:
             break
         }
     }
@@ -620,7 +912,7 @@ final class AppModel: ObservableObject {
         selectNextAttached = true
         let size = startingSize
         Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
-        connection?.send(.create(CreateRequest(command: agent?.id, cwd: workingDirectory, title: agent?.name, size: size)))
+        connection?.send(.create(CreateRequest(command: agent?.id, cwd: startingDirectory, title: agent?.name, size: size)))
     }
 
     /// Makes the terminal text larger or smaller, or default when `delta` is nil.
@@ -635,6 +927,16 @@ final class AppModel: ObservableObject {
 
     func close(_ session: SessionID) {
         connection?.send(.kill(session: session))
+    }
+
+    /// A session the user asked to end, until that is confirmed. Ending
+    /// one stops what runs in it, an agent in the middle of its work for
+    /// one, and ⌘W is pressed out of habit: it asks first, as closing many
+    /// tabs does and as the iPhone does.
+    @Published var pendingEnd: SessionInfo?
+
+    func requestEnd(_ session: SessionID) {
+        pendingEnd = sessions.first { $0.id == session }
     }
 
     func takeControl() {
@@ -654,6 +956,12 @@ final class AppModel: ObservableObject {
     }
 
     func addFolder() {
+        if isRemote {
+            browseListing = nil
+            showBrowseFolders = true
+            browse(nil)
+            return
+        }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -672,6 +980,8 @@ final class AppModel: ObservableObject {
 
     /// Adds folders dropped on the list, from the Finder for one.
     func addFolders(_ urls: [URL]) {
+        // What is dropped is on this Mac's disk, not on the one on screen.
+        guard !isRemote else { return }
         let folders = urls.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true }
         for url in folders { connection?.send(.addFolder(path: url.path)) }
         if let first = folders.first { pendingFolderSelection = first.standardizedFileURL.path }
@@ -788,7 +1098,7 @@ final class AppModel: ObservableObject {
         } else if let path = files.active {
             files.requestClose(path)
         } else if let id = selectedSession {
-            close(id)
+            requestEnd(id)
         }
     }
 
@@ -805,6 +1115,12 @@ final class AppModel: ObservableObject {
     /// session's conversation is the newest one its agent has in that folder.
     func requestHandoff(session: SessionInfo) {
         guard let agent = agentID(of: session) else { return }
+        if isRemote {
+            // The conversations are on the other Mac: its host lists them.
+            pendingSessionHandoff = session
+            connection?.send(.history(path: session.cwd))
+            return
+        }
         let name = session.title
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let conversations = AgentHistory.conversations(in: session.cwd).filter { $0.agent == agent }
@@ -860,6 +1176,50 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// On another Mac the handoff file is written there, by its host:
+    /// this asks what the receiving agent would be told, and `handoff`
+    /// then names that plan.
+    struct RemoteHandoffPlan: Equatable {
+        let id: String
+        let prompt: String
+    }
+    @Published private(set) var remoteHandoffPlan: RemoteHandoffPlan?
+    private var pendingSessionHandoff: SessionInfo?
+
+    func requestRemoteHandoffPlan(for conversation: Conversation) {
+        remoteHandoffPlan = nil
+        connection?.send(.handoffPlan(agent: conversation.agent))
+    }
+
+    func handoffOnRemote(_ conversation: Conversation, to target: AgentInfo, plan: String, prompt: String?, note: String, in folder: String?) {
+        guard status == .connected else { return }
+        Telemetry.shared.record(
+            .handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: folder != nil && folder != conversation.cwd))
+        selectNextAttached = true
+        connection?.send(
+            .handoff(
+                agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd, target: target.id, plan: plan, prompt: prompt,
+                note: note, size: startingSize, folder: folder))
+        if let folder, folders.contains(where: { $0.path == folder }) { selectedFolder = folder }
+    }
+
+    // MARK: Folders of another Mac
+
+    /// A folder of the other Mac, while one is being picked to add: an
+    /// open panel shows this Mac's disk, which is the wrong one.
+    @Published private(set) var browseListing: DirectoryListing?
+    @Published var showBrowseFolders = false
+
+    func browse(_ path: String?) {
+        connection?.send(.listDirectory(path: path))
+    }
+
+    func addRemoteFolder(_ path: String) {
+        connection?.send(.addFolder(path: path))
+        pendingFolderSelection = path
+        showBrowseFolders = false
+    }
+
     // MARK: History
 
     func refreshHistory() {
@@ -867,6 +1227,10 @@ final class AppModel: ObservableObject {
         let directory = selectedFolder
         guard everywhere || directory != nil else {
             history = []
+            return
+        }
+        if isRemote {
+            connection?.send(.history(path: everywhere ? nil : directory))
             return
         }
         historyGeneration += 1
@@ -897,26 +1261,41 @@ final class AppModel: ObservableObject {
             diff = nil
             return
         }
+        if isRemote {
+            // Answered with `diff`, which is applied where it arrives. Not
+            // while a commit is waiting for its own answer, which is the same.
+            if pendingCommit != directory { sendForDiff(.diff(path: directory), in: directory) }
+            return
+        }
         diffGeneration += 1
         let generation = diffGeneration
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let snapshot = GitDiff.snapshot(directory: directory)
             DispatchQueue.main.async { [weak self] in
                 guard let self, generation == self.diffGeneration, self.selectedFolder == directory else { return }
-                if self.diff != snapshot { self.diff = snapshot }
-                if let tab = self.diffTab, tab.folder == directory {
-                    // The tab shows the change as it is now. A file that was
-                    // just staged or unstaged is followed into its new list.
-                    let now = snapshot.files.first { $0.id == tab.file.id } ?? snapshot.files.first { $0.path == tab.file.path }
-                    if let now {
-                        if now != tab.file { self.diffTab = OpenDiff(folder: directory, file: now) }
-                    } else {
-                        // A change that is gone, committed for one, takes its tab with it.
-                        self.closeDiffTab()
-                    }
-                }
+                self.apply(snapshot, to: directory)
             }
         }
+    }
+
+    /// Shows a folder's changes as they are now, and has the diff's tab follow.
+    private func apply(_ snapshot: DiffSnapshot, to directory: String) {
+        if diff != snapshot { diff = snapshot }
+        guard let tab = diffTab, tab.folder == directory else { return }
+        // The tab shows the change as it is now. A file that was
+        // just staged or unstaged is followed into its new list.
+        guard var now = snapshot.files.first(where: { $0.id == tab.file.id }) ?? snapshot.files.first(where: { $0.path == tab.file.path }) else {
+            // A change that is gone, committed for one, takes its tab with it.
+            closeDiffTab()
+            return
+        }
+        if isRemote {
+            // The list comes without the diffs. The one on show is kept
+            // until the file's own, asked for here, replaces it.
+            if now.isStaged == tab.file.isStaged { now.patch = tab.file.patch }
+            connection?.send(.diffFile(path: directory, file: now.path, staged: now.isStaged))
+        }
+        if now != tab.file { diffTab = OpenDiff(folder: directory, file: now) }
     }
 
     /// The change that has a tab in the middle pane, if any.
@@ -931,6 +1310,11 @@ final class AppModel: ObservableObject {
     func openDiff(_ file: FileDiff) {
         guard let folder = selectedFolder else { return }
         diffTab = OpenDiff(folder: folder, file: file)
+        // From another Mac the list has no diffs in it: this file's is asked for.
+        if isRemote {
+            loadingDiffFile = true
+            connection?.send(.diffFile(path: folder, file: file.path, staged: file.isStaged))
+        }
         showDiffTab()
     }
 
@@ -951,12 +1335,20 @@ final class AppModel: ObservableObject {
     /// Stages files for the next commit. No files means every change.
     func stage(_ files: [FileDiff]) {
         let paths = files.map(\.path)
+        if isRemote, let directory = selectedFolder {
+            sendForDiff(.gitStage(path: directory, files: paths), in: directory)
+            return
+        }
         git { GitActions.stage(paths, in: $0) }
     }
 
     /// Takes files out of the next commit. No files means all of them.
     func unstage(_ files: [FileDiff]) {
         let paths = files.map(\.path)
+        if isRemote, let directory = selectedFolder {
+            sendForDiff(.gitUnstage(path: directory, files: paths), in: directory)
+            return
+        }
         git { GitActions.unstage(paths, in: $0) }
     }
 
@@ -965,10 +1357,37 @@ final class AppModel: ObservableObject {
         guard let directory = selectedFolder, !isCommitting else { return }
         let message = commitMessages[directory] ?? ""
         isCommitting = true
+        if isRemote {
+            // Answered with the changes as they are then, after an error if git refused.
+            if sendForDiff(.gitCommit(path: directory, message: message), in: directory) {
+                pendingCommit = directory
+            } else {
+                isCommitting = false
+                notice = "\(macName) is not connected, so nothing was committed."
+            }
+            return
+        }
         git({ GitActions.commit(message: message, in: $0) }) { [weak self] succeeded in
             self?.isCommitting = false
             if succeeded { self?.commitMessages[directory] = nil }
         }
+    }
+
+    /// True from picking a change on another Mac until its diff is here.
+    @Published private(set) var loadingDiffFile = false
+    /// The folder a commit on another Mac is waiting to hear about.
+    private var pendingCommit: String?
+    /// How many answers with a folder's changes another Mac still owes.
+    private var diffAnswersDue: [String: Int] = [:]
+
+    /// Sends another Mac's host something it answers with the folder's
+    /// changes. False when there is no connection to send it on.
+    @discardableResult
+    private func sendForDiff(_ message: ClientMessage, in directory: String) -> Bool {
+        guard let connection else { return false }
+        diffAnswersDue[directory, default: 0] += 1
+        connection.send(message)
+        return true
     }
 
     /// Runs a git change in the selected folder off the main thread, then

@@ -179,6 +179,7 @@ Client to host:
 | `writeCommitMessage(path)` / `cancelCommitMessage(path)` | Have an agent write the message for what is staged, or stop it. Answered with `commitMessage(path, message)`, whose message is nil when it was stopped or failed. |
 | `setCommitWriter(settings)` | Which agent writes commit messages, on which model, with which prompt. |
 | `setKeepAwake(on)` / `setKeepAwakeOptions(options)` | Keep the Mac awake while sessions run, and how: the display too, only on power, for how long. |
+| `setStartAtLogin(on)` | Have the host start when the user logs in to the Mac, or not. The host writes or removes its launch agent (`LoginItem`) and tells every client with `startAtLogin(on)`. A host that cannot be started that way, one with a state folder of its own, never sends `startAtLogin`, and the clients show no switch. |
 | `setDisplaySettings(settings)` | How things are shown on every device: the temperature's unit, diffs in one panel or two, changes as a list or a tree. The host keeps it in `settings.json` and passes it on as `displaySettings`. A host that keeps none yet sends nil, and the client hands it its own. Each app also writes the values to its own preferences, which is what its views read. |
 | `sshHosts` / `connectSSH(host, size)` | The hosts of the Mac's SSH configuration, and `ssh <host>` in a new session. |
 | `history(path)` | Conversations agents had in a folder, or everywhere when `path` is nil. |
@@ -208,29 +209,55 @@ is not attached to the session is dropped.
 
 ## Attaching to a running session
 
-The host keeps the last 4 MB of each session's output and replays it to a
-client that attaches, so a phone that opens a session can scroll back
-through what happened before it looked. The replay goes out in pieces of
-256 KB, since one message may not be larger than 4 MB, and once the oldest
-output has been dropped it starts at the beginning of a line rather than
-in the middle of one. The buffer is cut back to its limit only when it is
-a quarter over, because cutting copies it. Each emulator keeps 20,000
-lines to scroll back through (SwiftTerm's own default is 500, which threw
-most of a replay away as it arrived). For full screen programs the replay
-relies on the program redrawing, which happens when the attach changes the
-size.
+The host keeps each session's screen: a terminal emulator of its own that
+nobody looks at (`ScreenMirror`, SwiftTerm without a view) is fed all the
+session writes and follows its size. A client that attaches is sent that
+screen written out again as terminal output: the lines above the screen
+(10,000 of them at most), the screen, the other screen when a full screen
+program is on it, then the margins, the cursor and the modes the program
+set (how keys, the mouse and pastes are reported, whether the cursor
+shows). To the client it is output like any other, so nothing in the
+protocol changed for it. It goes out in pieces of 256 KB, since one message
+may not be larger than 4 MB.
+
+Until 0.5.0 the client was sent the last 4 MB of the session's raw output
+instead. A full screen program then only looked right once it drew again,
+and what had been drawn for another width, before a phone took the session
+over, read badly further up. The screen written out again is right for the
+size the session has now, and is usually much smaller.
+
+Three things about it are deliberate:
+
+- It holds no question to the terminal (which terminal are you, where is
+  the cursor), so a client has nothing to answer a second time. Clients
+  still treat it as a replay and send nothing on until `replayed`.
+- The emulator's own colors are left out. A client has its own.
+- A program's output arrives in pieces cut anywhere, also inside an escape
+  sequence or a character. A client given the screen at such a moment would
+  get the end of something whose beginning it never saw. So the host also
+  follows the output byte by byte (`OutputTracker`) and ends what it sends
+  with the beginning of whatever is unfinished. The same tracker remembers
+  the few settings SwiftTerm keeps to itself: how the mouse is reported,
+  whether lines wrap, the cursor's shape and the colors text was being
+  written in.
+
+Not carried over: images, links, tab stops, character sets, origin mode
+and the palette a program changed.
 
 A phone that lost its connection attaches again within seconds, with its
-terminal still holding all it was sent. Replaying megabytes it would only
-draw again costs time and cellular data at each change of network. So the
-host says where in the session's output a replay starts
-(`replaying(session, from)`), the terminal counts on from there
-(`TerminalController.position`), and attaching again names that place
-(`have`): the host then sends only what came since. When it no longer
-keeps that far back, or the place is not one of this session's, it sends
-all it keeps and says so with another `from`, and the client starts a new
-terminal for it. The Mac app does not use this: it loses its connection
-only when the host itself stops, and its sessions with it.
+terminal still holding all it was sent. Sending the screen again costs
+time and cellular data at each change of network, and would throw away
+what the terminal had scrolled back to. So the host also keeps the last
+1 MB of each session's raw output and says where in the session's output
+what it sends ends up (`replaying(session, from)`, the place of the first
+byte, counted so that the end of a screen is where the session is now).
+The terminal counts on from there (`TerminalController.position`), and
+attaching again names that place (`have`): the host then sends only the
+raw output that came since. When it no longer keeps that far back, or the
+place is not one of this session's, it sends the screen and says so with
+another `from`, and the client starts a new terminal for it. The Mac app
+does not use this: it loses its connection only when the host itself
+stops, and its sessions with it.
 
 The replay was drawn for the session's grid, so the emulator takes that
 grid before the first replayed byte (`TerminalController.beginReplay(size:)`),
@@ -611,6 +638,35 @@ the same folder can therefore be mixed up; the History tab is exact.
 - If the app cannot connect, it starts the `agenttermd` that sits next to its
   own executable, in a new session so it outlives the app, and retries.
 
+## Another Mac
+
+The Mac app can show another Mac instead of the one it runs on
+(`AppModel.remote`), the way the iPhone shows a Mac. The menu in the
+toolbar, before the agents, switches between this Mac and the paired ones.
+
+- Pairing is by link: a Mac has no camera pointed at the other's screen, so
+  the link under the pairing code is pasted (`pairMac(link:)`). The code is
+  traded for a token of this Mac's own, as a phone's is. The paired Macs
+  are in the Keychain (`RemoteMacStore`); a host with a state folder of
+  its own keeps them in that folder, which leaves the Keychain to the
+  real app.
+- The terminals already went through the protocol. Changes, history,
+  handoff and files did not: on its own Mac the app reads them from disk,
+  which is faster and needs no host. For another Mac the same functions of
+  `AppModel` and `FilesModel` send the messages the iPhone sends (`diff`,
+  `diffFile`, `gitStage` …, `history`, `handoffPlan`, `handoff`, `files`,
+  `readFile` …) and take the answers in `handle`. A list of changes from
+  another Mac comes without the diffs, so the diff on show is asked for
+  by itself after each list.
+- What only this Mac's disk can do is not offered: Show in Finder, an
+  open panel (a sheet lists the other Mac's folders instead), dropping
+  folders from the Finder, pairing a phone, restarting the host. The app
+  never starts a host for another Mac; one that cannot be reached is
+  said so, with a way back to this Mac.
+- Switching Macs drops what was on screen and connects again. It is
+  refused while a file has unsaved changes: they are on the Mac that
+  would be left.
+
 ## iPhone app structure
 
 - `PhoneModel` holds the paired Macs, the connection and the single
@@ -629,6 +685,19 @@ the same folder can therefore be mixed up; the History tab is exact.
   the terminal or closing the app. The Mac needs nothing for this: what is
   typed there is already in the program's own input, in the session.
   The keyboard shrinks the terminal's frame, which resizes the PTY.
+  While the keyboard is up, a button at the end of the key bar puts it
+  away (`KeyboardWatcher`); the other screens with something to write in
+  have that button in a bar above the keyboard.
+- With the phone on its side (`verticalSizeClass == .compact`) the
+  terminal screen has no navigation bar: back, the keys, the compose field
+  and the session's menu share one row under the terminal. Stacked as they
+  are upright they would leave the terminal a single line once the
+  keyboard is up.
+- Wherever a screen waits for the Mac it shows `LoadingView`, on the Mac
+  app too: nothing for the first 300 ms, then a spinner and what is being
+  waited for, and after ten seconds that it is taking long, with Try Again
+  where asking again is possible. A terminal is covered by it while the
+  session's earlier output is on its way (`replaying`).
 - While the app is in front it reconnects after a drop, at once the first
   time and then every few seconds, and re-attaches to the session that was
   open. The terminal screen says so meanwhile.
@@ -648,7 +717,8 @@ the same folder can therefore be mixed up; the History tab is exact.
 - `scripts/test-ios.sh` runs an XCUITest in the simulator against two
   throwaway hosts: pair by link, start a shell, send Vietnamese text from the
   compose field, use the key bar, go back, pair the second host, and switch
-  between the two.
+  between the two. `LANDSCAPE=only` runs the part that turns the phone on
+  its side, which the whole run leaves out.
 - `AGENTTERM_STATE_DIR` moves the host's token, folder list and log to another
   folder, which keeps test hosts away from the real pairing.
 
@@ -658,9 +728,8 @@ the same folder can therefore be mixed up; the History tab is exact.
 - Session rows on the iPhone are named after the session's working directory
   when it is not a listed folder; the home directory shows as the user name.
 
-- Attach replays raw bytes instead of a screen snapshot. What a program
-  drew for another width, before the session was resized, reads badly
-  further up.
+- The lines above the screen that a client is sent are the 10,000 newest.
+  Images a program drew are not among them.
 - SwiftTerm resets some terminal modes when its grid is resized from code,
   which happens when another device takes over the size.
 - A terminal wider than the Mac window (a phone in landscape next to a narrow

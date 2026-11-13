@@ -18,6 +18,70 @@ final class FlowTests: XCTestCase {
         }
     }
 
+    /// The main screens with the phone on its side, from a session's terminal.
+    private func landscape(_ app: XCUIApplication, compose: XCUIElement) {
+        XCUIDevice.shared.orientation = .landscapeLeft
+        defer { XCUIDevice.shared.orientation = .portrait }
+        sleep(2)
+        // On its side the phone has no height to spare: the navigation bar
+        // is gone, and back, the keys, the message field and the menu
+        // share one row under the terminal.
+        XCTAssertTrue(app.buttons["terminal-back"].waitForExistence(timeout: 5), "no way back from a terminal on its side")
+        XCTAssertFalse(app.navigationBars.firstMatch.exists, "the navigation bar takes height from a terminal on its side")
+        XCTAssertTrue(app.buttons["key-Escape"].exists)
+        XCTAssertTrue(app.buttons["session-menu"].exists)
+        capture("L1-terminal")
+        compose.tap()
+        compose.typeText("echo sideways")
+        sleep(4)
+        capture("L2-terminal-keyboard")
+        // With the keyboard up there is still a terminal to look at, and a
+        // button that puts the keyboard away again.
+        if app.keyboards.firstMatch.exists {
+            let terminal = app.descendants(matching: .any)["terminal"].firstMatch
+            if terminal.exists { XCTAssertGreaterThan(terminal.frame.height, 60, "the keyboard leaves no terminal on a phone on its side") }
+            let hide = app.buttons["hide-keyboard"].firstMatch
+            XCTAssertTrue(hide.waitForExistence(timeout: 3), "no button to hide the keyboard")
+            hide.tap()
+            sleep(1)
+            XCTAssertFalse(app.keyboards.firstMatch.exists, "the keyboard stayed up")
+            XCTAssertEqual(compose.value as? String, "echo sideways", "hiding the keyboard lost what was written")
+        }
+        capture("L3-terminal-keyboard-hidden")
+        app.buttons["terminal-back"].firstMatch.tap()
+        sleep(1)
+        capture("L4-sessions")
+        if environment["AGENTTERM_TEST_PROJECT"] != nil {
+            app.buttons["folder-details"].firstMatch.tap()
+            XCTAssertTrue(app.buttons["Git"].waitForExistence(timeout: 10))
+            app.buttons["Git"].tap()
+            sleep(1)
+            capture("L5-git")
+            if app.staticTexts["notes.txt"].waitForExistence(timeout: 5) {
+                app.staticTexts["notes.txt"].tap()
+                sleep(2)
+                capture("L6-diff")
+                app.buttons["diff-layout"].tap()
+                sleep(2)
+                capture("L7-diff-two-panels")
+                app.buttons["diff-layout"].tap()
+                app.navigationBars.buttons.firstMatch.tap()
+            }
+            for tab in ["History", "Files"] where app.buttons[tab].firstMatch.exists {
+                app.buttons[tab].firstMatch.tap()
+                sleep(1)
+                capture("L8-folder-\(tab)")
+            }
+            app.navigationBars.buttons.firstMatch.tap()
+        }
+        app.tabBars.buttons["Settings"].firstMatch.tap()
+        sleep(1)
+        capture("L9-settings")
+        app.tabBars.buttons["History"].firstMatch.tap()
+        sleep(1)
+        capture("L10-history")
+    }
+
     func testPairStartSessionAndType() throws {
         let link = try XCTUnwrap(environment["AGENTTERM_PAIR_URL"], "run this test through scripts/test-ios.sh")
         let launchButton = environment["AGENTTERM_LAUNCH"] ?? "Start Shell"
@@ -47,6 +111,12 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(app.buttons["key-Shift Tab"].exists)
         sleep(2)
         capture("3-terminal")
+
+        // A run that only looks at the app on its side.
+        if environment["AGENTTERM_ONLY_LANDSCAPE"] != nil {
+            landscape(app, compose: compose)
+            return
+        }
 
         // Text written in the compose field, Vietnamese included, is sent as typed.
         // When the Mac takes the session, the phone shows the Mac's larger
@@ -118,6 +188,15 @@ final class FlowTests: XCTestCase {
         // again when the terminal is opened the next time.
         compose.tap()
         compose.typeText("not sent yet")
+        // The keyboard covers half of the terminal; a button at the end of
+        // the key bar puts it away, and what was written stays.
+        if app.keyboards.firstMatch.exists {
+            XCTAssertTrue(app.buttons["hide-keyboard"].firstMatch.waitForExistence(timeout: 3), "no button to hide the keyboard")
+            app.buttons["hide-keyboard"].firstMatch.tap()
+            sleep(1)
+            XCTAssertFalse(app.keyboards.firstMatch.exists, "the keyboard stayed up")
+            XCTAssertEqual(compose.value as? String, "not sent yet")
+        }
         app.navigationBars.buttons.firstMatch.tap()
         XCTAssertTrue(app.staticTexts["zsh"].firstMatch.waitForExistence(timeout: 5))
         app.staticTexts["zsh"].firstMatch.tap()

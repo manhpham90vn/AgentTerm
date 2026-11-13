@@ -5,6 +5,8 @@
 #   CONFIG=debug ./scripts/bundle-mac.sh    # default: release
 #   VERSION=0.2.0 ./scripts/bundle-mac.sh
 #   CHANNEL=release ./scripts/bundle-mac.sh # default: dev
+#   OUT=/some/folder ./scripts/bundle-mac.sh # default: dist, where a running copy may be
+#   IDENTIFIER=com.example.app ./scripts/bundle-mac.sh # a bundle identifier of its own
 #
 # CHANNEL decides which app this is. "dev", the default, builds
 # "AgentTerm Dev.app" (com.manhpham.agentterm.dev): it has its own data
@@ -22,7 +24,11 @@ case "$CHANNEL" in
     dev) NAME="AgentTerm Dev"; BUNDLE_ID="com.manhpham.agentterm.dev" ;;
     *) echo "bundle-mac.sh: CHANNEL must be dev or release" >&2; exit 2 ;;
 esac
-APP="dist/$NAME.app"
+# macOS keeps an app's preferences under its bundle identifier, wherever
+# the app is and whatever home folder it is given: a copy that must not
+# share the development app's preferences needs an identifier of its own.
+BUNDLE_ID="${IDENTIFIER:-$BUNDLE_ID}"
+APP="${OUT:-dist}/$NAME.app"
 
 swift build -c "$CONFIG" --product AgentTermMac
 swift build -c "$CONFIG" --product agenttermd

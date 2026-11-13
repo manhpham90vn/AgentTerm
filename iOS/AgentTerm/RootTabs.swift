@@ -84,6 +84,10 @@ private struct SettingsTab: View {
                         Toggle("Keep the display on too", isOn: option(\.display))
                         Toggle("Only while plugged in", isOn: option(\.onlyOnPower))
                     }
+                    if let startAtLogin = model.startAtLogin {
+                        Toggle("Start at Login", isOn: Binding(get: { startAtLogin }, set: { model.setStartAtLogin($0) }))
+                            .accessibilityIdentifier("start-at-login")
+                    }
                     Picker("Temperature", selection: Binding(get: { temperatureUnit }, set: { unit in model.setDisplay { $0.temperatureUnit = unit } })) {
                         Text("Celsius (°C)").tag(SystemStats.celsius)
                         Text("Fahrenheit (°F)").tag(SystemStats.fahrenheit)
@@ -95,6 +99,7 @@ private struct SettingsTab: View {
                     Text(
                         (model.keepAwake == true ? model.keepAwakeOptions.until.map { "Awake until \($0.formatted(date: .omitted, time: .shortened)). " } ?? "" : "")
                             + "While a session is open \(macName) does not go to sleep by itself, so agents keep working and this iPhone can still reach them. Closing its lid still puts it to sleep."
+                            + (model.startAtLogin == nil ? "" : " With Start at Login, \(macName) can be reached after it restarts without AgentTerm being opened there first.")
                     )
                 }
 

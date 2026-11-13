@@ -130,6 +130,12 @@ silicon Mac). There is no universal build yet.
   For TestFlight the iPhone lane waits until Apple has processed the build;
   `NOTES=0` skips the waiting and the notes.
 
+- The pictures show the apps as they are released: `scripts/screenshots.sh`
+  takes them again (see `TESTING.md`), `make store-screenshots` sends the
+  iPhone's to App Store Connect.
+- The tests have been run, all of them, as `TESTING.md` says under
+  "Running them".
+
 `make release V=0.3.0-beta.1` runs both checks and then starts the workflow.
 
 ## Usage statistics and crash reports

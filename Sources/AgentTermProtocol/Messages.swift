@@ -203,6 +203,9 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Replaces how the tabs are arranged: order, pins and groups. The host
     /// keeps it and passes it on, so the Mac and the phones show the same.
     case setTabLayout(TabLayout)
+    /// Has the host start when the user logs in to the Mac, or not. Answered
+    /// with `startAtLogin` to every client.
+    case setStartAtLogin(Bool)
     /// Keep the Mac awake while sessions are running, or stop doing so.
     case setKeepAwake(Bool)
     /// Replaces how the Mac is kept awake: the display too, only on power,
@@ -305,6 +308,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case displaySettings(DisplaySettings?)
     /// The hosts the Mac's SSH configuration names, as they are written there.
     case sshHosts([String])
+    /// Whether the host starts when the user logs in to the Mac. Sent on
+    /// connecting and when a client changes it, by a host that can do it.
+    case startAtLogin(Bool)
     /// A push or a pull in a folder is over, whether git took it or not.
     /// Sent after the `error` and the `diff` that answer it: a `diff` alone
     /// may be the answer to something else asked in the meantime.

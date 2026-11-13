@@ -81,7 +81,7 @@ outside your desk. At least one agent CLI installed on the Mac.
 
 1. Open AgentTerm on the Mac and add a project folder.
 2. Start an agent with its button in the toolbar.
-3. Click **Pair iPhone**, and scan the code with the iPhone app.
+3. Click **Pair Device**, and scan the code with the iPhone app.
 
 macOS asks for permissions on behalf of what the agents do (files, automation,
 screen recording and so on). **Settings → Permissions** lists them and where to
@@ -94,7 +94,7 @@ the same row.
 
 | Mac app | iPhone app | Protocol |
 |---|---|---|
-| 0.4.x | 0.4.x | 6 |
+| 0.4.x, 0.5.x | 0.4.x, 0.5.x | 6 |
 | 0.2.x, 0.3.x | 0.2.x, 0.3.x | 5 |
 | 0.1.x | 0.1.x | 4 |
 

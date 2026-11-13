@@ -55,7 +55,7 @@ struct BrowseSheet: View {
                     }
                     .scrollContentBackground(.hidden)
                 } else {
-                    ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                    LoadingView("Loading the folders…")
                 }
             }
             .background(Palette.canvas.ignoresSafeArea())

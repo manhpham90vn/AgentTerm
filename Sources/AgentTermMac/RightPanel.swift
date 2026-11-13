@@ -1,5 +1,6 @@
 import AgentTermHost
 import AgentTermProtocol
+import AgentTermTerminal
 import Combine
 import SwiftUI
 
@@ -86,7 +87,7 @@ struct HistoryView: View {
                 .labelsHidden()
                 .controlSize(.small)
                 .fixedSize()
-                .help("Show this folder's conversations, or every conversation on this Mac")
+                .help("Show this folder's conversations, or every conversation on \(model.macName)")
                 Text(model.history.map { $0.count == 1 ? "1 conversation" : "\($0.count) conversations" } ?? "Loading…")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
@@ -121,7 +122,7 @@ struct HistoryView: View {
             if history.isEmpty {
                 placeholder(
                     model.historyShowsAll
-                        ? "No agent has a conversation on this Mac yet."
+                        ? "No agent has a conversation on \(model.macName) yet."
                         : "No agent has a conversation in this folder yet.\nSwitch to All to see the ones from other folders.")
             } else {
                 ScrollView {
@@ -143,7 +144,7 @@ struct HistoryView: View {
                 }
             }
         } else {
-            ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+            LoadingView("Loading the history…")
         }
     }
 
@@ -290,5 +291,13 @@ private struct ConversationRow: View {
             }
         }
         .help(showsFolder ? "\(conversation.title)\n\((conversation.cwd as NSString).abbreviatingWithTildeInPath)" : conversation.title)
+        // The row's buttons only show under the pointer. Without one, the
+        // row says what it is and offers what they do as its actions.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(conversation.title)
+        .accessibilityIdentifier("conversation-" + conversation.sessionID)
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction(named: "Resume") { model.resume(conversation) }
+        .accessibilityAction(named: "Hand Off") { model.requestHandoff(conversation) }
     }
 }

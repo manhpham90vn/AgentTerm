@@ -8,6 +8,7 @@ final class SettingsTests: XCTestCase {
         let client: [ClientMessage] = [
             .gitPush(path: "/Users/me/app"),
             .gitPull(path: "/Users/me/app"),
+            .setStartAtLogin(true),
             .attach(session: 3, size: TermSize(cols: 48, rows: 30), have: 123_456_789_012),
             .writeCommitMessage(path: "/Users/me/app"),
             .cancelCommitMessage(path: "/Users/me/app"),
@@ -27,6 +28,7 @@ final class SettingsTests: XCTestCase {
             .commitMessage(path: "/Users/me/app", message: nil),
             .sshHosts(["build-server", "web-1"]),
             .gitSynced(path: "/Users/me/app"),
+            .startAtLogin(true),
             .replaying(session: 3, from: 123_456_789_012),
             .diff(
                 path: "/Users/me/app",
