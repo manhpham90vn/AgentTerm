@@ -62,7 +62,7 @@ final class MoreFilesTests: MacUITestCase {
         app.press(.button("blob.bin"))
         app.wait(for: .containing("This file is not text"))
         app.press(.button("big.txt"))
-        app.wait(for: .containing("too large to open here"))
+        app.wait(for: .containing("too large to open by itself"))
         // FILE-4: Markdown opens as a preview, with its source one switch away.
         app.press(.button("docs, folder, collapsed"))
         app.press(.button("guide.md"))

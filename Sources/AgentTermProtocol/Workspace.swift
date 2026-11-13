@@ -184,4 +184,8 @@ public enum FileContent: Codable, Equatable, Sendable {
     /// Not text in UTF-8, so not something to edit here.
     case binary
     case tooLarge(bytes: Int)
+
+    /// A text file over the size the editor opens by itself is opened when
+    /// asked, up to this size (#21).
+    public static let largestOpenedAnyway = 20 * 1024 * 1024
 }

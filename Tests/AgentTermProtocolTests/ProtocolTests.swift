@@ -37,6 +37,7 @@ final class ProtocolTests: XCTestCase {
             .moveFolder(path: "/Users/me/app", before: nil),
             .files(path: "/Users/me/app"),
             .readFile(path: "/Users/me/app/ghi chú.md"),
+            .readFile(path: "/Users/me/app/five.log", anyway: true),
             .writeFile(path: "/Users/me/app/ghi chú.md", text: "# Tiêu đề\n"),
             .createFile(directory: "/Users/me/app", name: "mới.txt", isDirectory: false),
             .renameFile(path: "/Users/me/app/a.txt", name: "b.txt"),

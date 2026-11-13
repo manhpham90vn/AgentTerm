@@ -349,6 +349,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | FILE-6 | A file open without edits | Something else rewrites it on disk; press Refresh | The editor shows the new text | M |
 | FILE-7 | A file open as a tab | Quit the app and open it again | The file is a tab again | M |
 | FILE-8 | The Files tab open on the Mac | A second device creates a file and writes into it | The file appears in the Mac's tree and opens with that text | M |
+| FILE-9 | A text file of 3 MB, and one over 20 MB | Open it | It says it is too large to open by itself and offers Open Anyway, which opens it; over 20 MB it is not offered | H, M |
 
 ### Pairing and devices
 
@@ -488,6 +489,8 @@ A second host stands in for the other Mac, with a project of its own.
 | MCP-9 | The Mac app and the iPhone | Settings | A switch, "Agents can open shells you see", that turns the server off and on for every device | hand, until the UI tests cover it |
 | MCP-10 | A stand-in Claude Code | Started with the setting on, as by default; then off | On: its session's variable says `use` and it is asked in its system prompt; the server's instructions say to run commands in its shells. Off: neither | H |
 | MCP-11 | Codex, which gives an MCP server only the variables its configuration names | The server is installed; installed by a host from before; the user named variables of their own | Its table in Codex's configuration names the session's variable, once, next to the user's | H |
+| MCP-12 | A shell an agent opened | The Mac shows it | The Mac is the one using it, at its size: the agent's server only asks and is not attached, so nothing says another device uses it | H |
+| MCP-13 | Copilot CLI and Antigravity, "Agents run their commands in shells you see" on, then off | Each is started | Antigravity gets a rule always on in its folder, Copilot CLI a folder of instructions after the user's own; off, neither | H |
 
 ### Vietnamese input
 

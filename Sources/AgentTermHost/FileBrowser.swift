@@ -53,11 +53,13 @@ public enum FileBrowser {
         }
     }
 
-    public static func read(_ path: String) -> FileContent {
+    /// - Parameter anyway: The user asked for a text file over the size it
+    ///   is opened at by itself, up to `FileContent.largestOpenedAnyway`.
+    public static func read(_ path: String, anyway: Bool = false) -> FileContent {
         let url = URL(fileURLWithPath: path)
         let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
         if imageExtensions.contains(url.pathExtension.lowercased()) { return .image }
-        guard size <= maxTextBytes else { return .tooLarge(bytes: size) }
+        guard size <= (anyway ? FileContent.largestOpenedAnyway : maxTextBytes) else { return .tooLarge(bytes: size) }
         guard let data = try? Data(contentsOf: url) else { return .binary }
         // A zero byte does not occur in text, and decides quickly for most binaries.
         guard !data.prefix(8192).contains(0), let text = String(data: data, encoding: .utf8) else { return .binary }

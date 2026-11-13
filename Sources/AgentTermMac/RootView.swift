@@ -45,54 +45,14 @@ struct RootView: View {
     private var panes: some View {
         HSplitView {
             if model.showSidebar {
-                Group {
-                    switch model.place {
-                    case .sessions: SidebarView()
-                    case .history: HistorySidebar()
-                    case .schedules: SchedulesSidebar()
-                    case .settings: SettingsSections()
-                    }
-                }
-                .frame(minWidth: 210, idealWidth: 250, maxWidth: 380)
+                PlaceList()
+                    .frame(minWidth: 210, idealWidth: 250, maxWidth: 380)
             }
-            VStack(spacing: 0) {
-                // Right under the launch buttons: how this Mac is doing,
-                // with its sessions only.
-                if model.place == .sessions { SystemStatsLine(store: model.system) }
-                if let path = model.otherHost {
-                    OtherHostBanner(path: path)
-                } else if model.hostMatch != .same {
-                    HostVersionBanner(match: model.hostMatch)
-                }
-                // What stopped without being asked to, until it is dismissed.
-                ForEach(model.failures) { failure in
-                    FailureBanner(failure: failure)
-                }
-                // An agent of another session finished, or waits for you.
-                if let notice = model.agentNotice {
-                    AgentNoticeBanner(notice: notice)
-                }
-                // History and Settings over the terminals rather than in
-                // their place, which would start them again when left.
-                ZStack {
-                    CenterView()
-                        .overlay {
-                            // A conversation resumed, a handoff: until its session is here.
-                            if let starting = model.starting { LoadingView(starting, cover: Theme.canvas.opacity(0.92)) }
-                        }
-                        .opacity(model.place == .sessions ? 1 : 0)
-                        .allowsHitTesting(model.place == .sessions)
-                        .accessibilityHidden(model.place != .sessions)
-                    switch model.place {
-                    case .sessions: EmptyView()
-                    case .history: ConversationDetail()
-                    case .schedules: SchedulesView().background(Theme.canvas)
-                    case .settings: SettingsPane()
-                    }
-                }
-            }
-            .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
-            .layoutPriority(1)
+            // In parts of their own: in one expression, the compiler of a
+            // slower machine (CodeQL's) gave up on it.
+            MiddleColumn()
+                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
             // In Sessions only: in History, Schedules and Settings what is in
             // the middle is what is looked at, and the folder's changes and
             // files have nothing to do with it.
@@ -607,6 +567,90 @@ struct CenterView: View {
 
 /// Tells the model how much room a terminal has, so a new session can be
 /// started at the size it will be shown at.
+/// The list at the window's left: the place's own.
+private struct PlaceList: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        switch model.place {
+        case .sessions: SidebarView()
+        case .history: HistorySidebar()
+        case .schedules: SchedulesSidebar()
+        case .settings: SettingsSections()
+        }
+    }
+}
+
+/// The middle of the window: how the Mac is doing, what stopped, a notice,
+/// and the terminals with the place over them.
+private struct MiddleColumn: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Right under the launch buttons: how this Mac is doing,
+            // with its sessions only.
+            if model.place == .sessions { SystemStatsLine(store: model.system) }
+            Banners()
+            // History and Settings over the terminals rather than in
+            // their place, which would start them again when left.
+            ZStack {
+                Terminals()
+                PlaceInTheMiddle()
+            }
+        }
+    }
+}
+
+private struct Banners: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        if let path = model.otherHost {
+            OtherHostBanner(path: path)
+        } else if model.hostMatch != .same {
+            HostVersionBanner(match: model.hostMatch)
+        }
+        // What stopped without being asked to, until it is dismissed.
+        ForEach(model.failures) { failure in
+            FailureBanner(failure: failure)
+        }
+        // An agent of another session finished, or waits for you.
+        if let notice = model.agentNotice {
+            AgentNoticeBanner(notice: notice)
+        }
+    }
+}
+
+private struct Terminals: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        let shown = model.place == .sessions
+        CenterView()
+            .overlay {
+                // A conversation resumed, a handoff: until its session is here.
+                if let starting = model.starting { LoadingView(starting, cover: Theme.canvas.opacity(0.92)) }
+            }
+            .opacity(shown ? 1 : 0)
+            .allowsHitTesting(shown)
+            .accessibilityHidden(!shown)
+    }
+}
+
+private struct PlaceInTheMiddle: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        switch model.place {
+        case .sessions: EmptyView()
+        case .history: ConversationDetail()
+        case .schedules: SchedulesView().background(Theme.canvas)
+        case .settings: SettingsPane()
+        }
+    }
+}
+
 /// Room around the terminal, so its text does not sit on the pane's edges.
 enum TerminalInsets {
     static let horizontal: CGFloat = 14

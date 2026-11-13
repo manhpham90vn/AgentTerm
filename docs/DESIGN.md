@@ -787,8 +787,14 @@ that connection only. A key names a running agent's session or nothing.
 Without the variable, the server offers no tools. With "agents run their
 commands in shells you see" on (the host's `agentsUseShells`, on by
 default) the variable ends with `use`: the server's instructions are then
-`AgentShellsInstructions.useShells`, and Claude Code is also started with
-`--append-system-prompt` saying the same.
+`AgentShellsInstructions.useShells`, and the agents are told the same
+where each reads it (MCP-13): Claude Code is started with
+`--append-system-prompt`; Antigravity gets a rule always on,
+`.agents/rules/agentterm.md` in the folder it is given with `--add-dir`;
+Copilot CLI gets `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` naming a folder of the
+host's with `instructions/agentterm.instructions.md` (after any the user's
+environment names). Copilot CLI takes MCP servers' instructions only from
+servers it allows, and Antigravity not at all. Codex follows the server's.
 
 **What it may reach.** A shell it opens is a session like any other, in the
 agent's folder and at its size, with `SessionInfo.openedBy` naming the

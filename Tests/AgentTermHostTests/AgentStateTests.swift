@@ -153,6 +153,36 @@ final class AgentStateTests: XCTestCase {
         for arguments in [claude, codex, copilot] { XCTAssertFalse(arguments.joined().contains("session-"), arguments.joined()) }
     }
 
+    /// MCP-13: Copilot CLI and Antigravity are told to run their commands in
+    /// shells the user sees as Claude Code is, through instructions files of
+    /// the host's, which they read; not when it is off.
+    func testCopilotAndAntigravityAreToldToUseTheShells() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-told-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let hooks = root.appendingPathComponent("hooks")
+        let tool = "/Apps/AgentTerm.app/agenttermd"
+
+        // Antigravity: a rule always on, in the folder it is given.
+        _ = try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: root.path, useShells: true)
+        let rule = hooks.appendingPathComponent("antigravity/.agents/rules/agentterm.md")
+        let text = try String(contentsOf: rule, encoding: .utf8)
+        XCTAssertTrue(text.hasPrefix("---\ntrigger: always_on\n---\n"), text)
+        XCTAssertTrue(text.contains(AgentShellsInstructions.useShells))
+        _ = try AgentHooks.launchArguments(agent: "agy", tool: tool, usageFile: nil, directory: hooks, home: root.path, useShells: false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: rule.path), "turned off, the rule is still there")
+
+        // Copilot CLI: a folder of instructions it is told of, next to any
+        // the user's own environment names.
+        let environment = try AgentHooks.instructionsEnvironment(agent: "copilot", directory: hooks, useShells: true, current: ["COPILOT_CUSTOM_INSTRUCTIONS_DIRS": "/mine"])
+        let folder = hooks.appendingPathComponent("copilot-instructions").path
+        XCTAssertEqual(environment, ["COPILOT_CUSTOM_INSTRUCTIONS_DIRS": "/mine," + folder])
+        let instructions = try String(contentsOfFile: folder + "/instructions/agentterm.instructions.md", encoding: .utf8)
+        XCTAssertTrue(instructions.hasPrefix("---\napplyTo: \"**\"\n---\n"), instructions)
+        XCTAssertTrue(instructions.contains(AgentShellsInstructions.useShells))
+        XCTAssertEqual(try AgentHooks.instructionsEnvironment(agent: "copilot", directory: hooks, useShells: false, current: [:]), [:])
+        XCTAssertEqual(try AgentHooks.instructionsEnvironment(agent: "claude", directory: hooks, useShells: true, current: [:]), [:])
+    }
+
     func testWhatMayStopATurn() {
         XCTAssertTrue(AgentHooks.mayStopATurn(Data([0x1b])))
         XCTAssertTrue(AgentHooks.mayStopATurn(Data([0x03])))

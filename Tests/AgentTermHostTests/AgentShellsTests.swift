@@ -338,6 +338,17 @@ final class AgentShellsHostTests: XCTestCase {
         XCTAssertEqual(shell.openedBy, firstID)
         XCTAssertEqual(shell.cwd, root.appendingPathComponent("first").path)
         XCTAssertEqual(first.tool("list_shells", in: self).text, "\(shell.id): echo, in \(shell.cwd)")
+        // MCP-12: the agent's server only asks; it is not a device looking
+        // at the shell. The Mac that shows it is the one whose size it takes.
+        mac.connection.send(.attach(session: shell.id, size: TermSize(cols: 120, rows: 40)))
+        waitUntil("the Mac told the size") {
+            mac.messages.contains { if case .resized(shell.id, _, _) = $0 { return true } else { return false } }
+        }
+        let told = mac.messages.compactMap { message -> (TermSize, Bool)? in
+            if case .resized(shell.id, let size, let driver) = message { return (size, driver) } else { return nil }
+        }.last
+        XCTAssertEqual(told?.1, true, "the Mac was told another device uses the shell")
+        XCTAssertEqual(told?.0, TermSize(cols: 120, rows: 40))
 
         // What it types reaches the program; the screen it reads shows it.
         XCTAssertFalse(first.tool("send_input", ["session": shell.id, "text": "hello", "keys": ["Return"]], in: self).failed)

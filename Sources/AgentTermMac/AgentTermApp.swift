@@ -215,7 +215,7 @@ struct SettingsView: View {
                                     "Agents run their commands in shells you see", id: "agents-use-shells",
                                     detail: "They are asked to use those shells rather than their own.",
                                     help:
-                                        "Claude Code is told in its system prompt; the other agents through the MCP server's instructions, which each takes in as it does. An agent still decides for itself.",
+                                        "Claude Code is told in its system prompt, Copilot CLI and Antigravity in instructions files of AgentTerm's, Codex through the MCP server's instructions. An agent still decides for itself.",
                                     isOn: Binding(get: { useShells }, set: { model.setAgentsUseShells($0) })
                                 )
                                 .disabled(!agentShells)

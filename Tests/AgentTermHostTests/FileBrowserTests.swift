@@ -1,3 +1,4 @@
+import AgentTermProtocol
 import XCTest
 
 @testable import AgentTermHost
@@ -95,5 +96,17 @@ final class FileBrowserTests: XCTestCase {
         FileManager.default.createFile(atPath: path("big.log"), contents: Data(count: FileBrowser.maxTextBytes + 1))
         XCTAssertEqual(FileBrowser.read(path("big.log")), .tooLarge(bytes: FileBrowser.maxTextBytes + 1))
         XCTAssertEqual(FileBrowser.read(path("missing.txt")), .binary)
+    }
+
+    /// FILE-9: a text file over the size it opens at by itself opens when
+    /// asked, up to the size it is opened at anyway.
+    func testALargeTextFileOpensWhenAskedAnyway() throws {
+        let line = "a line of a log of five megabytes\n"
+        let text = String(repeating: line, count: 5 * 1024 * 1024 / line.utf8.count)
+        try text.write(toFile: path("five.log"), atomically: true, encoding: .utf8)
+        XCTAssertEqual(FileBrowser.read(path("five.log")), .tooLarge(bytes: text.utf8.count))
+        XCTAssertEqual(FileBrowser.read(path("five.log"), anyway: true), .text(text))
+        FileManager.default.createFile(atPath: path("huge.log"), contents: Data(repeating: 0x61, count: FileContent.largestOpenedAnyway + 1))
+        XCTAssertEqual(FileBrowser.read(path("huge.log"), anyway: true), .tooLarge(bytes: FileContent.largestOpenedAnyway + 1))
     }
 }

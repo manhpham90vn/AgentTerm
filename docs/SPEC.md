@@ -223,9 +223,10 @@ itself.
   the switch above: each agent is asked to run its commands in a shell of
   the server, one already open if there is one free in its folder, rather
   than in its own out of sight, and to leave it open for the next task. Claude
-  Code is told so in its system prompt; the others through the server's
-  instructions, which each agent takes in as it does (Copilot CLI only for
-  servers it allows). An agent still decides for itself.
+  Code is told so in its system prompt; Copilot CLI and Antigravity in
+  instructions files of AgentTerm's, which they read as they read a
+  project's; Codex through the server's instructions, which it follows. An
+  agent still decides for itself.
 
 ### Usage
 
@@ -616,8 +617,9 @@ and touch up what an agent wrote without leaving the app.
 - Markdown opens as a rendered preview, with a switch to the source. Code
   blocks in it are colored, and blocks marked `mermaid` are drawn as
   diagrams. A `.mmd` or `.mermaid` file is previewed as a diagram too.
-- Images are shown. Files that are not text, or larger than 2 MB, are not
-  opened.
+- Images are shown. Files that are not text are not opened. A text file
+  larger than 2 MB says so and offers **Open Anyway**, which opens it, up to
+  20 MB.
 - The tree, and open files without unsaved changes, follow changes made
   elsewhere, by an agent for one, within a few seconds.
 - The files that were open come back as tabs the next time the app starts.
@@ -690,7 +692,7 @@ button at the top right of Sessions goes back to the list of Macs.
   be staged, unstaged and committed as on the
   Mac, the branch pushed and pulled, and the commit message written by an
   agent. **History**: the conversations each agent had in the
-  folder, with a switch to every conversation on the Mac. **Files**: see
+  folder only, as on the Mac; every conversation is in the History tab. **Files**: see
   Files above.
 - A conversation can be resumed in its agent, or handed off to another
   installed agent. The handoff sheet shows the prompt the agent will start

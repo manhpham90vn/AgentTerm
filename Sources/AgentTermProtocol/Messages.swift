@@ -244,7 +244,9 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Asks for the files and folders in a folder. Answered with `files`.
     case files(path: String)
     /// Asks for what a file holds. Answered with `file`.
-    case readFile(path: String)
+    /// `anyway`: a text file over the size the editor opens by itself, up
+    /// to `FileContent.largestOpenedAnyway`, which the user asked for.
+    case readFile(path: String, anyway: Bool? = nil)
     /// Replaces a file's text. Answered with `fileSaved`.
     case writeFile(path: String, text: String)
     /// Creates an empty file or a folder. Answered with `fileCreated`, then

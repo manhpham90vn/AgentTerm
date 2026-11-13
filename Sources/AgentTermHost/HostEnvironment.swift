@@ -74,8 +74,22 @@ public enum HostEnvironment {
             env["LANG"] = "en_US.UTF-8"
             env["LC_CTYPE"] = "en_US.UTF-8"
         }
+        // Under XCTest, a session's zsh reads none of the user's startup
+        // files, as `LoginShellPath` does not start their shell: a test
+        // touches nothing of theirs, and their .zshrc took long enough on a
+        // busy machine for tests waiting on a session's program to give up.
+        // A test that gives its host a home of its own does so with ZDOTDIR.
+        if LoginShellPath.underTests, env["ZDOTDIR"] == nil { env["ZDOTDIR"] = testShellHome.path }
         return env
     }
+
+    /// An empty folder for a session's zsh to read its startup files from,
+    /// under XCTest.
+    private static let testShellHome: URL = {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-test-zdotdir", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }()
 
     /// Arguments that start `command` through the login shell, or a plain
     /// login shell when `command` is nil. Going through the shell gives the

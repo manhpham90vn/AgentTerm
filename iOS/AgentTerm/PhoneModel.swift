@@ -1161,8 +1161,8 @@ final class PhoneModel: ObservableObject {
         connection?.send(.files(path: directory))
     }
 
-    func loadFile(_ path: String) {
-        connection?.send(.readFile(path: path))
+    func loadFile(_ path: String, anyway: Bool = false) {
+        connection?.send(.readFile(path: path, anyway: anyway ? true : nil))
     }
 
     func saveFile(_ path: String, text: String) {

@@ -98,7 +98,9 @@ struct HistoryView: View {
                 .help("Refresh")
             }
             .padding(.horizontal, 14)
-            .padding(.top, 2)
+            // Under the list's title at the window's left, under the tabs in
+            // the side panel, which have no title between.
+            .padding(.top, ofFolder ? 9 : 2)
             .padding(.bottom, 9)
             Theme.hairline.frame(height: 1)
             content

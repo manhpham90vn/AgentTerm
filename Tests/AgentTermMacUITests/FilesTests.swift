@@ -36,6 +36,23 @@ final class FilesTests: MacUITestCase {
         XCTAssertFalse(app.all(.button("notes.txt")).isEmpty, "the file that was open did not come back as a tab")
     }
 
+    /// FILE-9: a text file over the size it is opened at by itself says so,
+    /// and opens when asked.
+    func testALargeTextFileOpensWhenAsked() throws {
+        let line = "a line of a long log\n"
+        try write(String(repeating: line, count: 3 * 1024 * 1024 / line.utf8.count), to: "big.log")
+        app.press(.button("Files"))
+        app.wait(for: .button("notes.txt"))
+        // Written after the list was read: looked at again.
+        app.press(.button("Refresh"))
+        app.press(.button("big.log"), timeout: 15)
+        app.wait(for: .containing("too large to open by itself"))
+        app.press(.id("open-anyway"))
+        let editor = MacDriver.Query.role(kAXTextAreaRole as String)
+        wait("the file's text in the editor", timeout: 20) { self.app.value(of: editor)?.hasPrefix("a line of a long log\n") == true }
+        XCTAssertFalse(app.exists(.containing("too large to open by itself")))
+    }
+
     func testFilesChangedFromAnotherDeviceShowHere() throws {
         let phone = try device()
         app.press(.button("Files"))

@@ -285,6 +285,15 @@ struct DocumentScreen: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
             }
+            // Where Preview and Edit are for a file that has them.
+            if case .tooLarge(let bytes) = model.remoteFiles[path]?.content, bytes <= FileContent.largestOpenedAnyway {
+                Button("Open Anyway") { model.loadFile(path, anyway: true) }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .accessibilityIdentifier("open-anyway")
+            }
             content
         }
         .background(Palette.canvas.ignoresSafeArea())
@@ -363,7 +372,16 @@ struct DocumentScreen: View {
             case .binary:
                 Placeholder(text: "This file is not text, so it is not shown here.")
             case .tooLarge(let bytes):
-                Placeholder(text: "This file is \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)), too large to open here.")
+                // In the middle; Open Anyway is in the bar above.
+                VStack(spacing: 16) {
+                    Image(systemName: "doc.text").font(.system(size: 32)).foregroundStyle(.tertiary)
+                    Text("This file is \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)), too large to open by itself.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .padding(32)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         } else {
             LoadingView("Opening the file…")

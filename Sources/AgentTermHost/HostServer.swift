@@ -1385,11 +1385,11 @@ public final class HostServer {
             work(for: client, { FileBrowser.list(path) }) { server, client, entries in
                 server.send(.files(path: path, entries: entries), to: client)
             }
-        case .readFile(let path):
+        case .readFile(let path, let anyway):
             work(
                 for: client,
                 { () -> (FileContent, Data?) in
-                    let content = FileBrowser.read(path)
+                    let content = FileBrowser.read(path, anyway: anyway == true)
                     guard content == .image else { return (content, nil) }
                     // The client cannot read the Mac's disk, so the picture travels.
                     if let data = FileBrowser.imageData(path) { return (.image, data) }
@@ -1914,6 +1914,11 @@ public final class HostServer {
             {
                 command = (command ?? "") + more
                 environment[AgentHooks.eventsVariable] = events.path
+                if let told = try? AgentHooks.instructionsEnvironment(
+                    agent: agent, directory: configuration.hooksDirectory, useShells: asksToUseShells, current: environment)
+                {
+                    environment.merge(told) { _, new in new }
+                }
                 hooked = true
             }
         }
@@ -2022,7 +2027,10 @@ public final class HostServer {
             }
             let first = command?.split(whereSeparator: \.isWhitespace).first.map(String.init)
             let request = CreateRequest(command: command, cwd: owner.info.cwd, title: title ?? first ?? "shell", size: owner.info.size)
-            guard let created = create(request, for: client, openedBy: owner.info.id), let session = sessions[created] else {
+            // Not attached to the agent's server, which only asks: attached,
+            // it would be the device using the shell, and the Mac that shows
+            // it would say another device is (MCP-12).
+            guard let created = create(request, for: nil, openedBy: owner.info.id), let session = sessions[created] else {
                 return answer(.refused("The shell could not be started."))
             }
             answer(.opened(session.info))

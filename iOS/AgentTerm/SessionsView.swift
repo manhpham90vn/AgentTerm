@@ -493,6 +493,15 @@ private struct FolderSection: View {
                     .padding(.horizontal, 6)
                     .padding(.top, 12)
                     .padding(.bottom, 10)
+                    // Not on the section, whose alert to rename a group it would hide.
+                    .confirmationDialog(
+                        "End \(ending?.title ?? "this session")?", isPresented: Binding(get: { ending != nil }, set: { if !$0 { ending = nil } }),
+                        titleVisibility: .visible, presenting: ending
+                    ) { session in
+                        Button("End Session", role: .destructive) { model.end(session.id) }
+                    } message: { _ in
+                        Text("The program running in it is stopped.")
+                    }
             }
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -500,14 +509,6 @@ private struct FolderSection: View {
                 TextField("Name", text: $newName)
                 Button("Rename") { if let renaming { model.sessionLayout.rename(renaming.id, to: newName) } }
                 Button("Cancel", role: .cancel) {}
-            }
-            .confirmationDialog(
-                "End \(ending?.title ?? "this session")?", isPresented: Binding(get: { ending != nil }, set: { if !$0 { ending = nil } }),
-                titleVisibility: .visible, presenting: ending
-            ) { session in
-                Button("End Session", role: .destructive) { model.end(session.id) }
-            } message: { _ in
-                Text("The program running in it is stopped.")
             }
         }
     }

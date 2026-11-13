@@ -39,9 +39,11 @@ public enum AgentHooks {
     /// Code its status line too (`usageFile`). Copilot CLI and Antigravity
     /// need a `directory` to keep what they are given in; without one,
     /// they get nothing.
-    /// `useShells`: Claude Code is told in its system prompt to run its
-    /// commands in shells the user sees (`AgentShellsInstructions`); the
-    /// others are told by the MCP server's instructions.
+    /// `useShells`: each agent is told to run its commands in shells the
+    /// user sees (`AgentShellsInstructions`): Claude Code in its system
+    /// prompt, Antigravity in a rule of the folder it is given, Copilot CLI
+    /// in instructions it is told of (`instructionsEnvironment`), Codex by
+    /// the MCP server's instructions, which it reads.
     public static func launchArguments(
         agent: String, tool: String, usageFile: String?, directory: URL?, home: String, trust: [String] = [], useShells: Bool = false
     ) throws -> String {
@@ -59,7 +61,7 @@ public enum AgentHooks {
             return try copilotArguments(tool: tool, directory: directory)
         case "agy":
             guard let directory else { throw CocoaError(.fileNoSuchFile) }
-            return try antigravityArguments(tool: tool, directory: directory, home: home, trust: trust)
+            return try antigravityArguments(tool: tool, directory: directory, home: home, trust: trust, useShells: useShells)
         default:
             throw CocoaError(.featureUnsupported)
         }
@@ -108,10 +110,19 @@ public enum AgentHooks {
     /// folders the user trusts already, which are read from their settings
     /// and not changed: `--settings` is for this session only.
     /// `trust`: folders trusted for the session too, a schedule's (#11).
-    static func antigravityArguments(tool: String, directory: URL, home: String, trust: [String] = []) throws -> String {
+    static func antigravityArguments(tool: String, directory: URL, home: String, trust: [String] = [], useShells: Bool = false) throws -> String {
         let folder = directory.appendingPathComponent("antigravity", isDirectory: true)
         let agents = folder.appendingPathComponent(".agents", isDirectory: true)
         try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        // Antigravity reads the rules of a folder it is given, as it does
+        // a project's: the only way to tell it something more (MCP-13).
+        let rule = agents.appendingPathComponent("rules/agentterm.md")
+        if useShells {
+            try FileManager.default.createDirectory(at: rule.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try writeText("---\ntrigger: always_on\n---\n" + AgentShellsInstructions.useShells + "\n", to: rule)
+        } else {
+            try? FileManager.default.removeItem(at: rule)
+        }
         var events: [String: Any] = [:]
         for event in antigravityEvents {
             let hook: [String: Any] = ["type": "command", "command": command(tool: tool, agent: "agy", event: event), "timeout": 10]
@@ -124,6 +135,25 @@ public enum AgentHooks {
         for path in [folder.path] + trust where !trusted.contains(path) { trusted.append(path) }
         let settings = try JSONSerialization.data(withJSONObject: ["trustedWorkspaces": trusted], options: [.sortedKeys])
         return " --add-dir " + Handoff.shellQuote(folder.path) + " --settings " + Handoff.shellQuote(String(decoding: settings, as: UTF8.self))
+    }
+
+    /// What an agent's environment is given besides: for Copilot CLI, the
+    /// folder of instructions it is told to run its commands in shells the
+    /// user sees, next to any its own environment names (MCP-13).
+    public static func instructionsEnvironment(agent: String, directory: URL?, useShells: Bool, current: [String: String]) throws -> [String: String] {
+        guard agent == "copilot", useShells, let directory else { return [:] }
+        let folder = directory.appendingPathComponent("copilot-instructions", isDirectory: true)
+        let file = folder.appendingPathComponent("instructions/agentterm.instructions.md")
+        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        try writeText("---\napplyTo: \"**\"\n---\n" + AgentShellsInstructions.useShells + "\n", to: file)
+        let name = "COPILOT_CUSTOM_INSTRUCTIONS_DIRS"
+        let theirs = current[name].flatMap { $0.isEmpty ? nil : $0 }
+        return [name: [theirs, folder.path].compactMap { $0 }.joined(separator: ",")]
+    }
+
+    private static func writeText(_ text: String, to file: URL) throws {
+        if FileManager.default.contents(atPath: file.path) == Data(text.utf8) { return }
+        try Data(text.utf8).write(to: file, options: .atomic)
     }
 
     private static func write(_ object: [String: Any], to file: URL) throws {
