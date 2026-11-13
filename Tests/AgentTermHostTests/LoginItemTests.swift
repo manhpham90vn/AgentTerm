@@ -46,23 +46,13 @@ final class LoginItemTests: XCTestCase {
         XCTAssertNoThrow(try item.turnOff())
     }
 
-    /// A program that is there, standing in for a host's.
-    private func program(_ name: String) throws -> String {
-        let file = folder.appendingPathComponent(name)
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data().write(to: file)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
-        return file.path
-    }
-
     /// LOGIN-4.
     func testAnAppThatMovedIsStartedFromWhereItIsNow() throws {
-        // Where the app was when the switch was turned on: nothing is there now.
-        try item(executable: folder.appendingPathComponent("Old/agenttermd").path).turnOn()
-        let moved = item(executable: try program("New/agenttermd"))
+        try item().turnOn()
+        let moved = item(executable: "/Users/me/Applications/AgentTerm.app/Contents/MacOS/agenttermd")
         moved.refresh()
         let written = try XCTUnwrap(NSDictionary(contentsOf: moved.file) as? [String: Any])
-        XCTAssertEqual((written["ProgramArguments"] as? [String])?.first, moved.executable)
+        XCTAssertEqual((written["ProgramArguments"] as? [String])?.first, "/Users/me/Applications/AgentTerm.app/Contents/MacOS/agenttermd")
         // One that is off stays off.
         try moved.turnOff()
         moved.refresh()
@@ -70,12 +60,13 @@ final class LoginItemTests: XCTestCase {
     }
 
     /// LOGIN-5.
-    func testAnotherHostThatIsRunDoesNotTakeTheLoginItem() throws {
-        let installed = item(executable: try program("Installed/agenttermd"))
+    func testAHostRunByHandDoesNotTakeTheLoginItem() throws {
+        let installed = item()
         try installed.turnOn()
-        // Another copy, and the same one started by hand in another way.
-        item(executable: try program("Build/agenttermd")).refresh()
-        item(executable: installed.executable, arguments: ["--port", "7800", "--local-only"]).refresh()
+        // A build that is not part of an app, and the installed host itself
+        // started in another way.
+        item(executable: "/Users/me/AgentTerm/.build/debug/agenttermd").refresh()
+        item(arguments: ["--port", "7800", "--local-only"]).refresh()
         let written = try XCTUnwrap(NSDictionary(contentsOf: installed.file) as? [String: Any])
         XCTAssertEqual(written["ProgramArguments"] as? [String], [installed.executable, "--port", "7717"])
     }

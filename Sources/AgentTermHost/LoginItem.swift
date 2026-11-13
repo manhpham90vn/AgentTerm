@@ -65,14 +65,23 @@ public struct LoginItem: Equatable, Sendable {
         try FileManager.default.removeItem(at: file)
     }
 
+    /// True for a host that is part of an app, not a build run by hand.
+    var isInsideAnApp: Bool { executable.contains(".app/Contents/MacOS/") }
+
     /// The app may have been moved since the switch was turned on: launchd
-    /// would then start a host that is no longer there. Only then is this
-    /// host put in its place. One that is still there is left alone: this
-    /// may be another copy of the app, or a host started by hand in some
-    /// other way, and neither is what the user asked to have at login.
+    /// would then start a host that is no longer there, so the host of the
+    /// app that is running is put in its place.
+    ///
+    /// Not every host that starts may do that. One started by hand in
+    /// another way is the same program, and leaves the login item as the
+    /// user set it. A build that is not part of an app, run to try
+    /// something, is not what the user asked to have at login.
+    ///
+    /// Only names are compared: what the property list says is never used
+    /// as a path to look at.
     public func refresh() {
-        guard isOn, let current = NSDictionary(contentsOf: file) as? [String: Any] else { return }
-        if let program = (current["ProgramArguments"] as? [String])?.first, FileManager.default.isExecutableFile(atPath: program) { return }
+        guard isOn, isInsideAnApp, let current = NSDictionary(contentsOf: file) as? [String: Any] else { return }
+        if (current["ProgramArguments"] as? [String])?.first == executable { return }
         try? turnOn()
     }
 }

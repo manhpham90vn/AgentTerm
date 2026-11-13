@@ -280,8 +280,8 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | LOGIN-1 | A host that can be started at login | A client switches Start at Login on, then off | A launch agent naming this host's program is written, then removed; every client is told | H |
 | LOGIN-2 | A host with a state folder of its own | Connect | No client shows the switch | H |
 | LOGIN-3 | Start at Login on | Log out and in again | The host is running without the app having been opened | hand |
-| LOGIN-4 | Start at Login on, and the app moved since: the program the launch agent names is gone | The host starts from where the app is now | The launch agent names this host's program | H |
-| LOGIN-5 | Start at Login on for the installed app | Another copy's host starts, or the same program is started by hand with other arguments | The launch agent is left as it was | H |
+| LOGIN-4 | Start at Login on, and the app moved since: the launch agent names its host where it was | The app's host starts from where the app is now | The launch agent names this host's program | H |
+| LOGIN-5 | Start at Login on for the installed app | A build that is not part of an app starts its host, or the installed host is started by hand with other arguments | The launch agent is left as it was | H |
 
 ### Menu bar, permissions, another copy's host
 
@@ -402,8 +402,10 @@ a test that failed, and fixed:
 - A title that was never ended had everything after it sent twice to a
   client that attached (SES-19), and an image too long to keep was sent in
   part and drawn as text (SES-20).
-- A host started in another way, or another copy's, rewrote the launch
-  agent (LOGIN-5).
+- A host started in another way, or one of a build run by hand, rewrote
+  the launch agent (LOGIN-5). Another copy of the app itself still takes
+  it when opened: telling that from an app that moved would mean looking
+  at the path the launch agent names, which code scanning refuses.
 - What an app sent while connecting again arrived before its hello, and
   the host closed the connection (SES-22).
 - Each attach wrote out the whole screen again, most of a second for a
