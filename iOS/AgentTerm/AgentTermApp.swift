@@ -40,7 +40,7 @@ struct AgentTermApp: App {
             } message: {
                 Text(TelemetryPreferences.Wording.questionDetail + "\n\nYou can change this, and usage statistics, in the Settings tab.")
             }
-            .onOpenURL { model.pair(with: $0) }
+            .onOpenURL { url in if !model.openFromLink(url) { model.pair(with: url) } }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { model.resume() }
                 if phase == .background { model.enteredBackground() }

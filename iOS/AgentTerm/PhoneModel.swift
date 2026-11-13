@@ -2,6 +2,7 @@ import AgentTermClient
 import AgentTermProtocol
 import AgentTermTelemetry
 import AgentTermTerminal
+import ActivityKit
 import SwiftUI
 import UserNotifications
 
@@ -54,7 +55,10 @@ final class PhoneModel: ObservableObject {
     @Published var showPairSheet = false
     /// A pairing code is being traded for a token.
     @Published private(set) var isPairing = false
-    @Published private(set) var status: LinkStatus = .offline(nil)
+    @Published private(set) var status: LinkStatus = .offline(nil) {
+        // The Live Activity can only be kept true while connected (#24).
+        didSet { if status != oldValue { updateLiveActivity() } }
+    }
     @Published private(set) var sessions: [SessionInfo] = []
     /// How the sessions are arranged: order, pins and groups. The Mac keeps
     /// it, and its window and every phone show the same.
@@ -343,6 +347,54 @@ final class PhoneModel: ObservableObject {
             if active, notice.session == openSessionID { continue }
             if active { agentNotice = notice } else { notifications.post(notice, mac: mac, macName: pairing?.name ?? "the Mac") }
         }
+    }
+
+    // MARK: The Live Activity (#24)
+
+    /// Whether to show it at all: a switch in the Settings tab.
+    @Published var showsLiveActivity: Bool = UserDefaults.standard.object(forKey: "showsLiveActivity") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(showsLiveActivity, forKey: "showsLiveActivity")
+            updateLiveActivity()
+        }
+    }
+    private var liveActivity: Activity<AgentsActivityAttributes>?
+
+    /// Shown only while all three hold: the phone is connected to the Mac,
+    /// nobody is at the Mac, and an agent works or waits. Ended as soon as
+    /// the connection ends or the Mac is used again, since it could no longer
+    /// be kept true; left showing the last state when every agent is done.
+    func updateLiveActivity() {
+        let working = sessions.filter { $0.state?.isWorking == true }
+        let waiting = sessions.filter { $0.state?.isWaiting == true }
+        let decision = LiveActivityRule.decide(
+            enabled: showsLiveActivity && ActivityAuthorizationInfo().areActivitiesEnabled, connected: status == .connected, macInUse: macInUse,
+            sessions: sessions)
+        let wanted = decision == .show
+        let state = AgentsActivityAttributes.ContentState(
+            working: working.count, waiting: waiting.map(\.displayName), firstWaiting: waiting.first?.id,
+            done: sessions.filter { if case .done = $0.state { return true } else { return false } }.map(\.displayName))
+        let content = ActivityContent(state: state, staleDate: nil)
+        if wanted {
+            if let liveActivity {
+                Task { await liveActivity.update(content) }
+            } else {
+                liveActivity = try? Activity.request(attributes: AgentsActivityAttributes(mac: pairing?.name ?? "the Mac"), content: content)
+            }
+        } else if let activity = liveActivity {
+            liveActivity = nil
+            // Done is true and stays true; anything else could go stale.
+            Task { await activity.end(content, dismissalPolicy: decision == .endShowingDone ? .default : .immediate) }
+        }
+    }
+
+    /// The Live Activity was touched: the session that waits, or the list.
+    func openFromLink(_ url: URL) -> Bool {
+        guard url.host == "session" else { return false }
+        let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "id" }?.value.flatMap(UInt32.init)
+        tab = "sessions"
+        if let id, sessions.contains(where: { $0.id == id }) { path = [.session(id)] }
+        return true
     }
 
     /// Opens the session a notice is about, in the Sessions tab.
@@ -785,6 +837,7 @@ final class PhoneModel: ObservableObject {
             sessions = list
             sessionsKnown = true
             tellOfAgents(list)
+            updateLiveActivity()
             if let pairing { pruneComposeDrafts(of: pairing.id, keeping: list) }
             syncSessionLayout()
             if let open = openSessionID, !list.contains(where: { $0.id == open }) {
@@ -819,6 +872,7 @@ final class PhoneModel: ObservableObject {
             break
         case .macInUse(let inUse):
             macInUse = inUse
+            updateLiveActivity()
         case .schedules(let list):
             schedules = list
         case .worktrees(let folder, let list, let setup):

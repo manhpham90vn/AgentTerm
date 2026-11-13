@@ -81,3 +81,24 @@ public struct AgentNotice: Equatable, Sendable {
         return notices
     }
 }
+
+/// When the iPhone shows the Live Activity of the agents on a Mac (#24),
+/// and what ends it.
+public enum LiveActivityRule {
+    public enum Decision: Equatable, Sendable {
+        /// Shown, or kept up to date.
+        case show
+        /// Ended at once: it could no longer be kept true, or no one wants it.
+        case endNow
+        /// Every agent is done: the last state may stay, since it stays true.
+        case endShowingDone
+    }
+
+    /// All three have to hold: the phone is connected to the Mac, no one is
+    /// at the Mac, and an agent works or waits.
+    public static func decide(enabled: Bool, connected: Bool, macInUse: Bool, sessions: [SessionInfo]) -> Decision {
+        guard enabled, connected, !macInUse else { return .endNow }
+        if sessions.contains(where: { $0.state?.isWorking == true || $0.state?.isWaiting == true }) { return .show }
+        return .endShowingDone
+    }
+}

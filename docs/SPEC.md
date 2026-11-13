@@ -161,6 +161,21 @@ itself.
 - On the Mac, a banner says so for a session that is not the one in front,
   and opens it.
 
+### The Live Activity
+
+- While agents work, the iPhone's lock screen and Dynamic Island show it
+  without the app being opened: how many work, which wait for an
+  instruction, which are done, by the sessions' names only. Touching it
+  opens the app on the session that waits.
+- Only while all three hold: the iPhone is connected to the Mac, no one is
+  at the Mac (as for notifications), and an agent works or waits. It ends
+  at once when the connection ends or the Mac is used again, since it
+  could no longer be kept true; when every agent is done it stays showing
+  that, which stays true.
+- It is updated only while iOS lets the app run, a short while after it
+  left the front: there is no push through Apple. A switch in the iPhone's
+  Settings turns it off.
+
 ### Shells an agent opens
 
 - An agent can open a shell as a session the user sees: asked to "open an

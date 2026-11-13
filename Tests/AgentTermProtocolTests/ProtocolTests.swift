@@ -233,4 +233,19 @@ final class ProtocolTests: XCTestCase {
         _ = AgentNotice.notices(in: [], told: &told)
         XCTAssertTrue(told.isEmpty)
     }
+
+    /// LIVE-1: the Live Activity shows only while the phone is connected, no
+    /// one is at the Mac, and an agent works or waits; it ends at once when
+    /// the connection ends or the Mac is used, and shows "done" at the end.
+    func testWhenTheLiveActivityShows() {
+        func session(_ state: AgentState?) -> SessionInfo { SessionInfo(id: 1, title: "s", cwd: "/p", size: .default, createdAt: Date(), state: state) }
+        let working = [session(.working(since: Date()))]
+        let waiting = [session(.waitingForAnswer(AgentQuestion(text: "?")))]
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: true, macInUse: false, sessions: working), .show)
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: true, macInUse: false, sessions: waiting), .show)
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: true, macInUse: true, sessions: working), .endNow, "someone is at the Mac")
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: false, macInUse: false, sessions: working), .endNow, "no connection to keep it true")
+        XCTAssertEqual(LiveActivityRule.decide(enabled: false, connected: true, macInUse: false, sessions: working), .endNow, "switched off")
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: true, macInUse: false, sessions: [session(.done(said: nil)), session(nil)]), .endShowingDone)
+    }
 }

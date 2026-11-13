@@ -451,6 +451,13 @@ A second host stands in for the other Mac, with a project of its own.
 | NOTE-5 | The iPhone in the sessions list, an agent in a session | The agent finishes | A banner over the list, which opens the session | hand, until the iPhone tests cover it |
 | NOTE-6 | The iPhone just left, an agent asks a question | The notification is answered with a reply | The reply is typed into the session after unlocking | hand: needs a real phone |
 
+### The Live Activity
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| LIVE-1 | Agents working, waiting, done; the Mac in use or not; connected or not; the switch | What the Live Activity does | Shown only while connected, no one at the Mac and an agent works or waits; ended at once otherwise; left showing "done" when all are done | P |
+| LIVE-2 | The iPhone connected, the Mac left alone, an agent working | The lock screen and the Dynamic Island | They show how many work and which wait; touching it opens the session that waits | hand: needs a real phone, as does how long iOS keeps it up to date |
+
 ### Shells an agent opens
 
 | ID | Input | Action or event | Expected response | Checked by |

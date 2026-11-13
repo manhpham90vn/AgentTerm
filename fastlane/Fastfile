@@ -18,6 +18,8 @@ require "fileutils"
 require "tmpdir"
 
 APP_ID = "com.manhpham.agentterm".freeze
+# The Live Activity's widget extension (#24), signed with a profile of its own.
+LIVE_ACTIVITY_ID = "#{APP_ID}.LiveActivity".freeze
 ROOT = File.expand_path("..", __dir__).freeze
 DIST = File.join(ROOT, "dist").freeze
 
@@ -81,16 +83,17 @@ platform :ios do
     # Otherwise it only reads what the match repository already holds.
     match(
       type: "appstore",
-      app_identifier: APP_ID,
+      app_identifier: [APP_ID, LIVE_ACTIVITY_ID],
       api_key: key,
       team_id: team,
       git_url: ENV.fetch("MATCH_GIT_URL"),
       readonly: !options[:create]
     )
     profile = ENV.fetch("sigh_#{APP_ID}_appstore_profile-name")
+    extension_profile = ENV.fetch("sigh_#{LIVE_ACTIVITY_ID}_appstore_profile-name")
 
-    # The project is generated, so signing is set on it here, on the app
-    # alone: the Swift packages it builds must not get a profile.
+    # The project is generated, so signing is set on it here, on the app and
+    # its extension alone: the Swift packages it builds must not get a profile.
     update_code_signing_settings(
       path: File.join(ROOT, "iOS/AgentTerm.xcodeproj"),
       targets: ["AgentTerm"],
@@ -98,6 +101,14 @@ platform :ios do
       team_id: team,
       code_sign_identity: "Apple Distribution",
       profile_name: profile
+    )
+    update_code_signing_settings(
+      path: File.join(ROOT, "iOS/AgentTerm.xcodeproj"),
+      targets: ["AgentTermLiveActivity"],
+      use_automatic_signing: false,
+      team_id: team,
+      code_sign_identity: "Apple Distribution",
+      profile_name: extension_profile
     )
 
     number = options[:build_number] ||
@@ -107,7 +118,7 @@ platform :ios do
       scheme: "AgentTerm",
       configuration: "Release",
       export_method: "app-store",
-      export_options: { provisioningProfiles: { APP_ID => profile } },
+      export_options: { provisioningProfiles: { APP_ID => profile, LIVE_ACTIVITY_ID => extension_profile } },
       xcargs: "MARKETING_VERSION=#{app_version} CURRENT_PROJECT_VERSION=#{number} -skipPackagePluginValidation",
       output_directory: DIST,
       output_name: "AgentTerm.ipa"

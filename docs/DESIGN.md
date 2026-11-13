@@ -703,6 +703,22 @@ gone waits for it. Notifications hide their text where iOS hides previews.
 **On the Mac.** A banner over the window for a session that is not the one
 selected while the app is in front.
 
+## The Live Activity
+
+A widget extension, `AgentTermLiveActivity` (`iOS/AgentTermLiveActivity`),
+with `AgentsActivityAttributes` (`iOS/Shared`, in both targets): the Mac's
+name, and as content how many work and the names of those that wait and
+are done. The app starts, updates and ends it (`PhoneModel.updateLiveActivity`)
+whenever the sessions, the connection or `macInUse` change, as
+`LiveActivityRule.decide` says: shown while connected, no one at the Mac
+and an agent working or waiting; ended at once otherwise, but with the
+last state left showing when every agent is done. Its link,
+`<scheme>://session?id=<n>`, opens the session that waits. No push token is
+asked for: updates come from the app while iOS lets it run.
+
+Its bundle identifier is the app's with `.LiveActivity`; the release lane
+signs it with a profile of its own from `match`.
+
 ## Shells an agent opens
 
 AgentTerm's MCP server is `agenttermd mcp` (`AgentShellsMCP`): JSON-RPC, one

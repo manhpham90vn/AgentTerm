@@ -125,6 +125,8 @@ private struct SettingsTab: View {
                     .accessibilityIdentifier("schedules")
                     Toggle("Tell me when an agent is done or needs me", isOn: $model.notifyAgents)
                         .accessibilityIdentifier("notify-agents")
+                    Toggle("Live Activity while no one is at the Mac", isOn: $model.showsLiveActivity)
+                        .accessibilityIdentifier("live-activity")
                 } header: {
                     Text("Agents")
                 } footer: {
