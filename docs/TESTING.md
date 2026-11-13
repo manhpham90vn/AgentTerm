@@ -177,7 +177,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | SES-18 | An emulator that already holds other text and is on the other screen | It is sent a session's screen | It is left as the session is, with nothing of before | H |
 | SES-19 | A title that never ends: its program was killed, or the output is binary; then colored text | A client attaches, also right after the escape that cut the title short | The client shows what the session's own terminal shows, once, in its colors | H |
 | SES-20 | An image of 1.5 MB being written, more than is kept of one sequence | A client attaches in the middle of it, and the rest is written | The client is sent a few kilobytes, misses the image and draws none of it as text; what follows the image shows | H |
-| SES-21 | A session with 10,000 lines that says nothing meanwhile | Ten clients attach one after the other | The screen is written out once: the ten take less time together than the first did. After more output it is written out anew | H |
+| SES-21 | A session with 10,000 lines that says nothing meanwhile | Ten clients attach one after the other | The screen is written out once: the ten take less time together than the first did. After more output it is written out anew. Writing out 10,040 lines takes less than eight times as long as writing out 2,640: in proportion to the lines, not more | H |
 | SES-22 | A client that is still connecting | It is asked to send something | That waits and follows the greeting; the host answers it instead of closing a client whose first word was not its hello | H |
 
 ### Session names and usage
@@ -436,6 +436,12 @@ Found while #20 was built (0.6.0), each shown by a test that failed first:
   the second, it waited, then said the host did not answer (HOST-6).
 - A host that could not start was tried twenty times and then reported
   with the connection's error, not the host's own reason (HOST-7).
+
+Found on CI in 0.6.0 (#32): SES-21 asked that a long session be written
+out in less than 2 seconds, which held here and failed on a slower runner
+(2.01 seconds). It now compares writing out a long session with writing
+out a short one, and was seen to fail when each line was made to cost more
+the more lines there are.
 
 ## What stays by hand
 
