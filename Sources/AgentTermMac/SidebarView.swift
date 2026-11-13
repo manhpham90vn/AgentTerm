@@ -242,6 +242,9 @@ struct FolderRow: View {
 
     private var isSelected: Bool { model.selectedFolder == folder.path && model.selectedSession == nil }
 
+    /// Sessions of this folder whose agent waits for the user.
+    private var waiting: Int { model.sessions.filter { $0.cwd == folder.path && $0.state?.isWaiting == true }.count }
+
     var body: some View {
         HStack(spacing: 7) {
             Image(systemName: "folder.fill")
@@ -252,6 +255,12 @@ struct FolderRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
+            if waiting > 0 {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+                    .help(waiting == 1 ? "A session waits for you" : "\(waiting) sessions wait for you")
+            }
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 6)
@@ -261,7 +270,7 @@ struct FolderRow: View {
         .onTapGesture { select() }
         // One thing to press, for VoiceOver and anything else without a pointer.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(folder.name), folder")
+        .accessibilityLabel("\(folder.name), folder" + (waiting == 0 ? "" : waiting == 1 ? ", a session waits" : ", \(waiting) sessions wait"))
         .accessibilityIdentifier("folder-" + folder.path)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { select() }
@@ -313,6 +322,7 @@ struct SessionRow: View {
                 }
             }
             Spacer(minLength: 0)
+            AgentStateMark(session: session)
             if model.foreignSizes[session.id] != nil {
                 Image(systemName: "iphone")
                     .font(.system(size: 10))
@@ -349,7 +359,7 @@ struct SessionRow: View {
         .onTapGesture { model.select(session: session) }
         .help(session.summary.map { "\(session.title): \($0)" } ?? session.title)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(session.displayName), session")
+        .accessibilityLabel(AgentStateMark.label("\(session.displayName), session", session))
         .accessibilityIdentifier("session-\(session.id)")
         .accessibilityAddTraits(model.selectedSession == session.id ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { model.select(session: session) }

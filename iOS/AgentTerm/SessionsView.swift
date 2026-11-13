@@ -503,6 +503,37 @@ private struct FolderSection: View {
     }
 }
 
+/// What the agent in a session is doing (#3): working, waiting for
+/// permission or an answer, done. Nothing when that is not known; when
+/// something keeps it from being known, a mark whose label says why.
+private struct StateMark: View {
+    let session: SessionInfo
+
+    var body: some View {
+        if let state = session.state {
+            let (symbol, color): (String, Color) = {
+                switch state {
+                case .working: return ("circle.dotted", .blue)
+                case .waitingForPermission: return ("hand.raised.fill", .orange)
+                case .waitingForAnswer: return ("questionmark.bubble.fill", .orange)
+                case .done: return ("checkmark.circle.fill", .green)
+                }
+            }()
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(color)
+                .accessibilityLabel(state.name)
+                .accessibilityIdentifier("state-\(session.id)")
+        } else if let note = session.stateNote {
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(note)
+                .accessibilityIdentifier("state-note-\(session.id)")
+        }
+    }
+}
+
 private struct SessionRow: View {
     @EnvironmentObject private var model: PhoneModel
     let session: SessionInfo
@@ -525,6 +556,7 @@ private struct SessionRow: View {
                 .font(.body)
                 .lineLimit(1)
             Spacer(minLength: 8)
+            StateMark(session: session)
             Text("\(session.size.cols)×\(session.size.rows)")
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(.tertiary)

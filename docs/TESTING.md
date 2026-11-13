@@ -386,6 +386,21 @@ A second host stands in for the other Mac, with a project of its own.
 | LOAD-1 | A slow link to the Mac | Open the History tab; open a session with megabytes behind it | A spinner with what is loading: "Loading the history…", "Loading the session…" | M (the session); the iPhone by hand |
 | LOAD-2 | The same, slower still | Ten seconds pass | It says that it is taking longer than usual, and offers Try Again where that can be done | M; the iPhone by hand |
 
+### What the agent is doing
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| AGENT-1 | What Claude Code tells its hooks, as recorded | A prompt; a question (`AskUserQuestion`); a command that runs; one that asks permission; the end of the turn | Working; waiting for an answer, with the question and its choices; working; waiting for permission, with the command; done, with the end of what it said | H |
+| AGENT-2 | What Copilot CLI tells its hooks, as recorded | The same | The same, done without what it said; a question's choices from its form | H |
+| AGENT-3 | What Antigravity tells its hooks, as recorded | A model call; a question; a command; the end with nothing running | Working; waiting for an answer; not known while the command runs; done. Its `PreToolUse` hook answers "allow" | H |
+| AGENT-4 | What Codex's documentation says its hooks are told | A prompt; a permission; the end; an interrupt | Working; waiting for permission, in its own words; done; not known | H |
+| AGENT-5 | Each agent | Its session starts | It is given hooks for that session only, whose command is the same for every session; Antigravity's trusted folders are the user's and the host's, and the user's settings are not changed | H |
+| AGENT-6 | A stand-in agent telling its hooks through `agenttermd hook`, two devices, and a shell | It works, asks permission, works, ends | Each state is told when it begins, once, to both devices; a device that connects later is told the state as it is; the shell has none | H |
+| AGENT-7 | A working agent | Escape alone, or Control C, is typed | Its state is not known until it says more. An arrow key changes nothing | H |
+| AGENT-8 | A session of Codex and one of Antigravity | They start | Codex's says how to trust the hooks; Antigravity's says it cannot tell when it waits for permission | H |
+| AGENT-9 | A stand-in agent that waits for permission | The Mac app shows it | A mark next to its name in the folder list and on its tab, read as "waiting for permission"; its folder's row says a session waits | M |
+| AGENT-10 | The same | The iPhone shows it | A mark in the sessions list, and the state in the terminal's title | hand, until the iPhone tests cover it |
+
 ### Vietnamese input
 
 | ID | Input | Action or event | Expected response | Checked by |

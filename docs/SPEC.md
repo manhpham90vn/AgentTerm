@@ -62,6 +62,24 @@ itself.
 - The name and the agent's icon are the same on the Mac (folder list and
   tabs) and on the iPhone.
 
+### What the agent is doing
+
+- Each agent's session shows whether its agent is working, waiting for
+  permission, waiting for an answer, or done: a mark next to its name in
+  the folder list and on its tab on the Mac, in the sessions list and the
+  terminal's title on the iPhone. A folder's row says when one of its
+  sessions waits.
+- The state comes from what the agent says about itself, through hooks
+  AgentTerm gives it for that session only, never from the screen. A state
+  that is shown is true; where it is not known, nothing is shown.
+- A shell has no state. An agent that has just started has none until it
+  says something. After Escape or Control C is typed to a working agent,
+  its state is not known until the agent says more.
+- Codex runs the hooks only once the user trusts them: when Codex asks,
+  choose "Trust all and continue". Until then, its session says so.
+- Antigravity does not say when it waits for permission: while it runs a
+  tool, its state is not shown, and its session says why.
+
 ### Usage
 
 Under an agent's terminal, on the Mac and on the iPhone, a band shows the

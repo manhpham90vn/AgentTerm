@@ -107,6 +107,7 @@ private struct SessionTab: View {
                 .truncationMode(.tail)
                 .frame(maxWidth: 190, alignment: .leading)
                 .fixedSize(horizontal: true, vertical: false)
+            AgentStateMark(session: session)
             if model.foreignSizes[session.id] != nil {
                 Image(systemName: "iphone").font(.system(size: 9.5)).foregroundStyle(.secondary)
             }
@@ -133,7 +134,7 @@ private struct SessionTab: View {
             TabStripMenu()
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(session.displayName)
+        .accessibilityLabel(AgentStateMark.label(session.displayName, session))
         .accessibilityIdentifier("tab-\(session.id)")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         // The tab's menu opens under the pointer only: what it holds is

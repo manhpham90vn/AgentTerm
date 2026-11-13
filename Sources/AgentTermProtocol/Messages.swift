@@ -58,10 +58,17 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
     public var conversationID: String?
     /// What the conversation has used, as far as the agent records it.
     public var usage: SessionUsage?
+    /// What the agent is doing, as it says it itself. Nil when that is not
+    /// known: a shell, an agent that has said nothing yet.
+    public var state: AgentState?
+    /// Why the state of this session's agent is not known, or not all of
+    /// it, and what to do about it, when there is something to say.
+    public var stateNote: String?
 
     public init(
         id: SessionID, title: String, cwd: String, size: TermSize, createdAt: Date,
-        agent: String? = nil, summary: String? = nil, conversationID: String? = nil, usage: SessionUsage? = nil
+        agent: String? = nil, summary: String? = nil, conversationID: String? = nil, usage: SessionUsage? = nil,
+        state: AgentState? = nil, stateNote: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -72,6 +79,8 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
         self.summary = summary
         self.conversationID = conversationID
         self.usage = usage
+        self.state = state
+        self.stateNote = stateNote
     }
 
     /// What to call the session in a list: its summary, or its title until

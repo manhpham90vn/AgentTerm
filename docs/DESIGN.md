@@ -556,6 +556,55 @@ them in, so every client shows the same name without reading any files:
 
 Handing off a running session uses `conversationID` when it is set.
 
+## What the agent is doing
+
+`SessionInfo.state` is an `AgentState`: `working(since:)`,
+`waitingForPermission(AgentQuestion)`, `waitingForAnswer(AgentQuestion)`,
+`done(said:)`, or nil when it is not known. `stateNote` says why it cannot
+all be known, when there is something to say. The host works both out, so
+every client shows the same.
+
+**From the agent itself.** When the host starts an agent's session it gives
+the agent hooks for that session only (`AgentHooks`), in the way each agent
+takes them, without a change to the user's configuration:
+
+| Agent | Given by | Events |
+|---|---|---|
+| Claude Code | `--settings`, with the status line | `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Notification`, `Stop` |
+| Codex | one `-c hooks.<Event>=...` for each | `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Stop`, `Interrupt` |
+| Copilot CLI | `--plugin-dir`, a plugin in the host's `hooks/copilot` | `userPromptSubmitted`, `preToolUse`, `permissionRequest`, `postToolUse`, `postToolUseFailure`, `agentStop` |
+| Antigravity | `--add-dir`, the host's `hooks/antigravity` holding `.agents/hooks.json`, trusted for the session by `--settings` with the folders the user trusts | `PreInvocation`, `PreToolUse`, `PostToolUse`, `Stop` |
+
+Every hook runs `agenttermd hook <agent> <event>`. It saves what it is told,
+with the agent, the event and the time, in the file `AGENTTERM_EVENTS`
+names: `session-<id>.events.json` in the usage folder, set in the session's
+environment, which the agents pass on to their hooks. The command is the
+same for every session because Codex trusts a hook by its command and asks
+again when it changes. For Antigravity's `PreToolUse` the hook answers
+`{"decision":"allow"}`, which leaves the decision to its own rules.
+
+The host watches the usage folder and reads a session's file when it
+changes, and on every refresh in case a change was missed; only the latest
+event is kept, since the state follows from it. `AgentHooks.change` makes
+the state from it, from what each agent was seen to tell its hooks on
+2026-11-13 (Claude Code 2.1.323, Copilot CLI 1.0.110, Antigravity 1.5.7;
+Codex 0.167.2 from its documentation, since it runs no hook it was not told
+to trust). Working stays working since it began.
+
+What cannot be known:
+
+- **Codex** runs no hook until the user trusts it, so its session's state
+  is not known until it says something, and `stateNote` says how to trust
+  the hooks.
+- **Antigravity** says nothing when it waits for permission: its question
+  comes after `PreToolUse`, with nothing in between. So while a tool runs,
+  its state is not known, and `stateNote` says so.
+- **The choices of a permission** are in no agent's hooks; those of a
+  question are, for all but Codex, which has no question event.
+- **A turn the user stops** is told by Codex (`Interrupt`) and not by the
+  others. Escape alone or Control C typed to a working session makes its
+  state not known until the agent says more.
+
 ## Handoff
 
 `Handoff.prepare` turns a `Conversation` into a handoff file and a command:

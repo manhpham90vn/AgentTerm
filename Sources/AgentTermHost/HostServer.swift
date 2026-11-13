@@ -40,8 +40,12 @@ public final class HostServer {
         /// Path of `agenttermd`, which Claude Code sessions run as their status
         /// line to report their usage. `nil` leaves Claude Code as it is.
         public var statusLineTool: String?
-        /// Where those reports are kept, one file per session.
+        /// Where those reports are kept, one file per session, and what the
+        /// agents' hooks tell of each session (`AgentHooks`).
         public var usageDirectory: URL?
+        /// Where the host keeps what it gives Copilot CLI and Antigravity
+        /// for their hooks: a plugin, a folder. Nil gives those two none.
+        public var hooksDirectory: URL?
         /// Asks the agents' services what their accounts have left. `nil`
         /// asks nobody, which is what tests want.
         public var fetchAccountUsage: ((String) -> AccountUsage?)?
@@ -147,6 +151,10 @@ public final class HostServer {
         var endAsked = false
         /// What the status line relay could not save was reported.
         var usageFailureReported = false
+        /// The last event its agent's hooks saved, as read.
+        var lastEvent: Data?
+        /// Its agent was given hooks: its state can be known.
+        var hooked = false
 
         init(info: SessionInfo, process: PTYProcess, screenLines: Int) {
             self.info = info
@@ -373,6 +381,8 @@ public final class HostServer {
             // Power may have been plugged in or pulled since the last look.
             self.updateSleepGuard()
             self.checkStatusLines()
+            // In case the folder's watch missed one.
+            self.readEvents()
             self.refreshSummaries()
         }
         // The Mac itself is measured more often than its sessions: a
@@ -382,6 +392,7 @@ public final class HostServer {
         system.setEventHandler { [weak self] in self?.refreshSystemStats() }
         queue.sync {
             summaryTimer = summaries
+            watchEvents()
             systemTimer = system
             scheduleKeepAwakeEnd()
         }
@@ -408,6 +419,8 @@ public final class HostServer {
             tailscaleTimer?.cancel()
             tailscaleTimer = nil
             summaryTimer?.cancel()
+            eventsWatch?.cancel()
+            eventsWatch = nil
             summaryTimer = nil
             systemTimer?.cancel()
             systemTimer = nil
@@ -1146,6 +1159,53 @@ public final class HostServer {
         configuration.usageDirectory?.appendingPathComponent("session-\(id).json")
     }
 
+    /// What a session's agent's hooks last said (`AgentHooks`).
+    private func eventsFile(for id: SessionID) -> URL? {
+        configuration.usageDirectory?.appendingPathComponent("session-\(id).events.json")
+    }
+
+    /// Watches the folder the hooks write in, so that a state is known when
+    /// it begins rather than at the next refresh.
+    private var eventsWatch: DispatchSourceFileSystemObject?
+
+    private func watchEvents() {
+        guard let directory = configuration.usageDirectory else { return }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let descriptor = open(directory.path, O_EVTONLY)
+        guard descriptor >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor, eventMask: .write, queue: queue)
+        source.setEventHandler { [weak self] in self?.readEvents() }
+        source.setCancelHandler { Darwin.close(descriptor) }
+        source.resume()
+        eventsWatch = source
+    }
+
+    /// Reads what each session's hooks said since the last look, and tells
+    /// every client of a state that changed.
+    private func readEvents() {
+        var changed = false
+        for session in sessions.values where session.hooked {
+            guard let file = eventsFile(for: session.info.id), let data = FileManager.default.contents(atPath: file.path),
+                data != session.lastEvent
+            else { continue }
+            session.lastEvent = data
+            guard let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                let agent = record["agent"] as? String, let event = record["event"] as? String
+            else { continue }
+            let at = (record["at"] as? Double).map(Date.init(timeIntervalSince1970:)) ?? Date()
+            guard case .set(var state) = AgentHooks.change(agent: agent, event: event, input: record["input"] as? [String: Any] ?? [:], now: at)
+            else { continue }
+            // Still working is working since it began.
+            if case .working = state, case .working(let since)? = session.info.state { state = .working(since: since) }
+            let note = AgentHooks.note(agent: session.info.agent, beforeAnyEvent: false)
+            guard state != session.info.state || note != session.info.stateNote else { continue }
+            session.info.state = state
+            session.info.stateNote = note
+            changed = true
+        }
+        if changed { broadcastSessions() }
+    }
+
     private func refreshSummaries() {
         refreshAccountUsage(olderThan: Self.accountInterval)
         guard !summarizing else { return }
@@ -1301,6 +1361,11 @@ public final class HostServer {
         // Typing takes control of the session's size.
         if session.arbiter.activity(client.id) { applySize(of: session) }
         session.process.write(frame.payload)
+        // It may have stopped the turn, and not every agent says so.
+        if session.info.state?.isWorking == true, AgentHooks.mayStopATurn(frame.payload) {
+            session.info.state = nil
+            broadcastSessions()
+        }
     }
 
     private func requestAgents(for client: Client, refresh: Bool) {
@@ -1337,10 +1402,21 @@ public final class HostServer {
         let size = request.size.clamped
         let id = nextSessionID
         var command = request.command
-        // Claude Code reports its usage through its status line.
-        if SessionSummaries.agent(forCommand: command) == "claude", let tool = configuration.statusLineTool, let file = usageFile(for: id) {
-            try? FileManager.default.removeItem(at: file)
-            command = (command ?? "") + StatusLineRelay.launchArguments(tool: tool, file: file.path)
+        var environment = HostEnvironment.sessionEnvironment()
+        let agent = SessionSummaries.agent(forCommand: command)
+        var hooked = false
+        if let agent, let tool = configuration.statusLineTool, let events = eventsFile(for: id) {
+            // Claude Code reports its usage through its status line, and
+            // every agent what it is doing through its hooks.
+            let usage = agent == "claude" ? usageFile(for: id) : nil
+            for file in [usage, events].compactMap({ $0 }) { try? FileManager.default.removeItem(at: file) }
+            if let more = try? AgentHooks.launchArguments(
+                agent: agent, tool: tool, usageFile: usage?.path, directory: configuration.hooksDirectory, home: configuration.home)
+            {
+                command = (command ?? "") + more
+                environment[AgentHooks.eventsVariable] = events.path
+                hooked = true
+            }
         }
         if let directory = configuration.agentsDirectory, let agent = SessionSummaries.agent(forCommand: command), let text = command,
             text == agent || text.hasPrefix(agent + " ")
@@ -1352,7 +1428,7 @@ public final class HostServer {
             process = try PTYProcess(
                 executable: HostEnvironment.shell,
                 arguments: HostEnvironment.shellArguments(command: command),
-                environment: HostEnvironment.sessionEnvironment(),
+                environment: environment,
                 cwd: cwd,
                 size: size,
                 queue: queue
@@ -1371,9 +1447,11 @@ public final class HostServer {
             agent: SessionSummaries.agent(forCommand: request.command),
             // A session started with an agent's own resume command is that
             // conversation's, whoever typed the command.
-            conversationID: conversationID ?? SessionSummaries.resumedConversation(inCommand: request.command)
+            conversationID: conversationID ?? SessionSummaries.resumedConversation(inCommand: request.command),
+            stateNote: hooked ? AgentHooks.note(agent: agent, beforeAnyEvent: true) : nil
         )
         let session = Session(info: info, process: process, screenLines: configuration.screenLines)
+        session.hooked = hooked
         sessions[id] = session
 
         process.onOutput = { [weak self, weak session] data in
@@ -1471,6 +1549,7 @@ public final class HostServer {
             try? FileManager.default.removeItem(at: file)
             try? FileManager.default.removeItem(atPath: StatusLineRelay.failureFile(for: file.path))
         }
+        if let file = eventsFile(for: id) { try? FileManager.default.removeItem(at: file) }
         if !session.endAsked, let reason = Self.unexpectedEnd(code: status) {
             report(
                 PartFailure(

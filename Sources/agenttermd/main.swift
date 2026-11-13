@@ -27,6 +27,21 @@ if arguments.first == "statusline" {
     exit(0)
 }
 
+// `agenttermd hook <agent> <event>` is what the hooks of an agent started by
+// AgentTerm run: it saves what the agent tells it for the host, in the file
+// AGENTTERM_EVENTS names. It never fails the agent's hook. See AgentHooks.
+if arguments.first == "hook" {
+    arguments.removeFirst()
+    let agent = arguments.popFirst() ?? ""
+    let event = arguments.popFirst() ?? ""
+    let input = FileHandle.standardInput.readDataToEndOfFile()
+    if let file = ProcessInfo.processInfo.environment[AgentHooks.eventsVariable], !file.isEmpty {
+        AgentHooks.save(input, agent: agent, event: event, to: file)
+    }
+    if let reply = AgentHooks.reply(agent: agent, event: event) { print(reply) }
+    exit(0)
+}
+
 // `agenttermd pairing-link` asks the running daemon for a pairing code and
 // prints the link an iPhone can pair with. Meant for the iOS Simulator, which
 // has no camera, and for tests.
@@ -147,6 +162,7 @@ do {
         port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home,
         statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil)
     configuration.protocolVersion = protocolVersion
+    configuration.hooksDirectory = HostEnvironment.supportDirectory.appendingPathComponent("hooks", isDirectory: true)
     // Notes that it runs, so the next host knows whether this one died.
     configuration.stateDirectory = HostEnvironment.supportDirectory
     if let agentsDirectory {

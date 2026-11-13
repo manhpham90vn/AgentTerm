@@ -138,7 +138,8 @@ struct TerminalScreen: View {
             }
         }
         .background(Palette.canvas.ignoresSafeArea())
-        .navigationTitle(model.session(session)?.displayName ?? "Session")
+        // With what its agent is doing, when that is known (#3).
+        .navigationTitle(model.session(session).map { info in info.state.map { "\(info.displayName) · \($0.name)" } ?? info.displayName } ?? "Session")
         // The terminal needs the room, and its own bars are under it.
         .toolbar(.hidden, for: .tabBar)
         .navigationBarTitleDisplayMode(.inline)

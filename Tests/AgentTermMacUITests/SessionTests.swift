@@ -31,6 +31,30 @@ final class SessionTests: MacUITestCase {
         XCTAssertEqual(try String(contentsOf: seen, encoding: .utf8), home.path)
     }
 
+    /// AGENT-9: what an agent says it is doing shows next to its session,
+    /// in the folder list and on its tab, and its folder says it waits.
+    func testTheStateOfAnAgentShowsWithItsSession() throws {
+        let phone = try device()
+        // A stand-in for Claude Code, under its name: it tells its hooks, as
+        // Claude Code does, that it waits for permission to run a command.
+        let folder = root.appendingPathComponent("stand-in")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let script = folder.appendingPathComponent("claude")
+        let event = #"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"make test"}}"#
+        try "#!/bin/sh\nprintf '%s' '\(event)' | '\(hostExecutable.path)' hook claude PermissionRequest\nexec sleep 600\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        phone.send(.create(CreateRequest(command: script.path, cwd: project.path, title: "review")))
+        wait("the host to know it waits") { phone.sessions.first?.state?.isWaiting == true }
+        let id = try XCTUnwrap(phone.sessions.first?.id)
+
+        app.wait(for: .containing("review, session, waiting for permission"), timeout: 15)
+        app.wait(for: .containing("project, folder, a session waits"))
+        app.press(.id("session-\(id)"))
+        app.wait(for: .containing("review, waiting for permission"))
+        shot("waiting")
+    }
+
     func testStartingSessionsAndFindingThemAgainAfterReopeningTheApp() throws {
         let phone = try device()
         // SES-2: a shell from the launch buttons.

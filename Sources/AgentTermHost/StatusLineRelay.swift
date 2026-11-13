@@ -13,10 +13,14 @@ import Foundation
 public enum StatusLineRelay {
     /// The command line to start Claude Code with so that it reports to `file`.
     public static func launchArguments(tool: String, file: String) -> String {
-        let command = Handoff.shellQuote(tool) + " statusline " + Handoff.shellQuote(file)
-        let settings: [String: Any] = ["statusLine": ["type": "command", "command": command]]
+        let settings: [String: Any] = ["statusLine": statusLine(tool: tool, file: file)]
         let json = (try? JSONSerialization.data(withJSONObject: settings, options: [.sortedKeys])).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
         return " --settings " + Handoff.shellQuote(json)
+    }
+
+    /// The status line setting that reports to `file`.
+    static func statusLine(tool: String, file: String) -> [String: Any] {
+        ["type": "command", "command": Handoff.shellQuote(tool) + " statusline " + Handoff.shellQuote(file)]
     }
 
     /// Saves the status line's input and returns what the user's own status
