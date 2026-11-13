@@ -34,40 +34,37 @@ struct RootView: View {
     }
 
     var body: some View {
+        HStack(spacing: 0) {
+            ActivityBar()
+            Theme.hairline.frame(width: 1)
+            panes
+        }
+        .background(Theme.canvas)
+    }
+
+    private var panes: some View {
         HSplitView {
             if model.showSidebar {
-                SidebarView()
+                PlaceList()
                     .frame(minWidth: 210, idealWidth: 250, maxWidth: 380)
             }
-            VStack(spacing: 0) {
-                // Right under the launch buttons: how this Mac is doing.
-                SystemStatsLine(store: model.system)
-                if let path = model.otherHost {
-                    OtherHostBanner(path: path)
-                } else if model.hostMatch != .same {
-                    HostVersionBanner(match: model.hostMatch)
-                }
-                CenterView()
-            }
-            .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
-            .layoutPriority(1)
-            if model.showDiff {
+            // In parts of their own: in one expression, the compiler of a
+            // slower machine (CodeQL's) gave up on it.
+            MiddleColumn()
+                .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
+                .layoutPriority(1)
+            // In Sessions only: in History, Schedules and Settings what is in
+            // the middle is what is looked at, and the folder's changes and
+            // files have nothing to do with it.
+            if model.showDiff && model.place == .sessions {
                 RightPanel()
                     .frame(minWidth: 310, idealWidth: 420, maxWidth: 760)
             }
         }
         .background(Theme.canvas)
         .toolbar {
-            // Far left: the folder list's toggle, next to the list it hides.
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    model.showSidebar.toggle()
-                } label: {
-                    Label("Folders", systemImage: "sidebar.leading")
-                }
-                .help(model.showSidebar ? "Hide the folder list" : "Show the folder list")
-            }
-            // Middle: which Mac all of the window is about, then starting an
+            // The list at the left is hidden from the bar of places, at the
+            // window's edge. Middle: which Mac all of the window is about, then starting an
             // agent on it, the main thing to do here. Pairing an iPhone or
             // another Mac is what sets the app apart, so it sits with them
             // and stands out.
@@ -89,14 +86,16 @@ struct RootView: View {
                 Spacer()
             }
             // Far right: the side panel's toggle, in the corner above the
-            // panel it hides.
+            // panel it hides; only where the panel is, in Sessions.
             ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    model.showDiff.toggle()
-                } label: {
-                    Label("Side Panel", systemImage: "sidebar.trailing")
+                if model.place == .sessions {
+                    Button {
+                        model.showDiff.toggle()
+                    } label: {
+                        Label("Side Panel", systemImage: "sidebar.trailing")
+                    }
+                    .help(model.showDiff ? "Hide the side panel" : "Show the side panel")
                 }
-                .help(model.showDiff ? "Hide the side panel" : "Show the side panel")
             }
         }
         .sheet(isPresented: $model.showPairing) {
@@ -150,11 +149,43 @@ struct RootView: View {
         .sheet(item: $model.pendingHandoff) { conversation in
             HandoffSheet(conversation: conversation)
         }
+        .sheet(item: $model.panelConversation) { conversation in
+            ConversationSheet(conversation: conversation)
+        }
         .alert("AgentTerm", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
             Text(model.notice ?? "")
         }
+        // The new worktree starts from the last commit (#23).
+        .alert("The folder has changes that are not committed", isPresented: Binding(get: { model.worktreeQuestion != nil }, set: { if !$0 { model.worktreeQuestion = nil } })) {
+            Button("Start in a New Worktree") {
+                let question = model.worktreeQuestion
+                model.worktreeQuestion = nil
+                if case .agent(let agent)? = question { model.launchInWorktree(agent, confirmed: true) } else { model.launchInWorktree(nil, confirmed: true) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(
+                "A new worktree starts from the last commit, without them: the agent there will not see them. Nothing git ignores is brought along either, such as .env or node_modules; a setup command for the folder can bring what is needed."
+            )
+        }
+        .alert("Worktree", isPresented: Binding(get: { model.worktreeSaid != nil }, set: { if !$0 { model.worktreeSaid = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(model.worktreeSaid ?? "")
+        }
+    }
+}
+
+/// "Start in a New Worktree", in an agent's launch menu (#23).
+private struct WorktreeLaunchItem: View {
+    @EnvironmentObject private var model: AppModel
+    let agent: AgentInfo?
+
+    var body: some View {
+        Button("Start \(agent?.name ?? "a Shell") in a New Worktree") { model.launchInWorktree(agent) }
+            .disabled(model.selectedFolder == nil || model.diff?.branch == nil)
     }
 }
 
@@ -166,10 +197,12 @@ struct LaunchBar: View {
         HStack(spacing: 6) {
             ForEach(model.installedAgents) { agent in
                 LaunchButton(title: agent.name, id: agent.id) { model.launch(agent) }
-                    .help("Start \(agent.name) in \(model.workingDirectory)")
+                    .help("Start \(agent.name) in \(model.workingDirectory). Its menu starts it in a new worktree.")
+                    .contextMenu { WorktreeLaunchItem(agent: agent) }
             }
             LaunchButton(title: "Shell", id: "shell") { model.launch(nil) }
                 .help("Start a shell in \(model.workingDirectory)")
+                .contextMenu { WorktreeLaunchItem(agent: nil) }
             SSHMenu()
         }
         .disabled(model.status != .connected)
@@ -330,6 +363,69 @@ private struct HostVersionBanner: View {
     }
 }
 
+/// A part of AgentTerm that stopped without being asked to: which part,
+/// what ended with it, and whether it was started again.
+private struct FailureBanner: View {
+    @EnvironmentObject private var model: AppModel
+    let failure: PartFailure
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(failure.headline(on: model.remote?.name))
+                    .font(.system(size: 12, weight: .medium))
+                Text(failure.details)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Button("Dismiss") { model.dismiss(failure) }
+                .controlSize(.small)
+                .help("Seen: no longer shown here or on the other devices")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.12))
+    }
+}
+
+/// An agent of a session that is not in front finished its task or waits
+/// for the user (#22): which session, and why. Touching it opens it.
+private struct AgentNoticeBanner: View {
+    @EnvironmentObject private var model: AppModel
+    let notice: AgentNotice
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: AgentStateMark.symbol(for: notice.state)).foregroundStyle(AgentStateMark.color(for: notice.state))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(notice.name) \(notice.why)")
+                    .font(.system(size: 12, weight: .medium))
+                if let detail = notice.detail {
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 8)
+            Button("Open") { model.open(notice) }
+                .controlSize(.small)
+            Button("Dismiss") { model.dismissAgentNotice() }
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(AgentStateMark.color(for: notice.state).opacity(0.12))
+        .contentShape(Rectangle())
+        .onTapGesture { model.open(notice) }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("agent-notice")
+    }
+}
+
 private struct OtherHostBanner: View {
     @EnvironmentObject private var model: AppModel
     let path: String
@@ -383,8 +479,12 @@ struct CenterView: View {
             case .failed(let reason):
                 VStack(spacing: 12) {
                     Image(systemName: "bolt.horizontal.circle").font(.system(size: 34)).foregroundStyle(.secondary)
-                    Text(model.remote.map { "Can't reach \($0.name)" } ?? "Can't reach the AgentTerm host").font(.headline)
-                    Text(reason).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Text(model.remote.map { "Can't reach \($0.name)" } ?? (model.hostBroken ? "The AgentTerm host keeps stopping" : "Can't reach the AgentTerm host"))
+                        .font(.headline)
+                    // How the last one ended may be known only after it was said that it keeps stopping.
+                    Text(model.hostBroken && !model.isRemote ? model.brokenReason : reason)
+                        .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        .frame(maxWidth: 520)
                     Button("Try Again") { model.reconnect() }
                     if model.isRemote { Button("Use This Mac") { model.switchTo(nil) } }
                 }
@@ -423,15 +523,15 @@ struct CenterView: View {
                             }
                             // The framed preview of another device's screen
                             // is centered, so it gets no one-sided padding.
-                            .padding(.leading, foreign == nil ? 10 : 0)
-                            .padding(.top, foreign == nil ? 6 : 0)
+                            .padding(.horizontal, foreign == nil ? TerminalInsets.horizontal : 0)
+                            .padding(.top, foreign == nil ? TerminalInsets.top : 0)
                             // Room under the last row. The rows fill the
                             // pane from the top, so what is left over under
                             // them is anything from nothing to almost a
                             // row: without this, the last line (an agent's
                             // status line) can sit right on the edge.
-                            .padding(.bottom, foreign == nil ? 6 : 0)
-                            .background(TerminalAreaReader(insets: foreign == nil ? .zero : CGSize(width: 10, height: 12)))
+                            .padding(.bottom, foreign == nil ? TerminalInsets.bottom : 0)
+                            .background(TerminalAreaReader(insets: foreign == nil ? TerminalInsets.total : CGSize(width: 10, height: 12)))
                         if let info, let agent = info.agent {
                             // What the agent's session has used, under its terminal.
                             Theme.hairline.frame(height: 1)
@@ -455,8 +555,9 @@ struct CenterView: View {
                     VStack(spacing: 0) {
                         SessionTabs()
                         WelcomeView().frame(maxWidth: .infinity, maxHeight: .infinity)
-                            // Where a terminal would go, less its padding.
-                            .background(TerminalAreaReader(insets: CGSize(width: 10, height: 6)))
+                            // Where a terminal would go, less its padding,
+                            // and less the strip of tabs it will have then.
+                            .background(TerminalAreaReader(insets: TerminalInsets.total, stripShown: !model.sessions.isEmpty || !files.documents.isEmpty || model.diffTabFile != nil))
                     }
                 }
             }
@@ -466,10 +567,106 @@ struct CenterView: View {
 
 /// Tells the model how much room a terminal has, so a new session can be
 /// started at the size it will be shown at.
+/// The list at the window's left: the place's own.
+private struct PlaceList: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        switch model.place {
+        case .sessions: SidebarView()
+        case .history: HistorySidebar()
+        case .schedules: SchedulesSidebar()
+        case .settings: SettingsSections()
+        }
+    }
+}
+
+/// The middle of the window: how the Mac is doing, what stopped, a notice,
+/// and the terminals with the place over them.
+private struct MiddleColumn: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Right under the launch buttons: how this Mac is doing,
+            // with its sessions only.
+            if model.place == .sessions { SystemStatsLine(store: model.system) }
+            Banners()
+            // History and Settings over the terminals rather than in
+            // their place, which would start them again when left.
+            ZStack {
+                Terminals()
+                PlaceInTheMiddle()
+            }
+        }
+    }
+}
+
+private struct Banners: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        if let path = model.otherHost {
+            OtherHostBanner(path: path)
+        } else if model.hostMatch != .same {
+            HostVersionBanner(match: model.hostMatch)
+        }
+        // What stopped without being asked to, until it is dismissed.
+        ForEach(model.failures) { failure in
+            FailureBanner(failure: failure)
+        }
+        // An agent of another session finished, or waits for you.
+        if let notice = model.agentNotice {
+            AgentNoticeBanner(notice: notice)
+        }
+    }
+}
+
+private struct Terminals: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        let shown = model.place == .sessions
+        CenterView()
+            .overlay {
+                // A conversation resumed, a handoff: until its session is here.
+                if let starting = model.starting { LoadingView(starting, cover: Theme.canvas.opacity(0.92)) }
+            }
+            .opacity(shown ? 1 : 0)
+            .allowsHitTesting(shown)
+            .accessibilityHidden(!shown)
+    }
+}
+
+private struct PlaceInTheMiddle: View {
+    @EnvironmentObject private var model: AppModel
+
+    var body: some View {
+        switch model.place {
+        case .sessions: EmptyView()
+        case .history: ConversationDetail()
+        case .schedules: SchedulesView().background(Theme.canvas)
+        case .settings: SettingsPane()
+        }
+    }
+}
+
+/// Room around the terminal, so its text does not sit on the pane's edges.
+enum TerminalInsets {
+    static let horizontal: CGFloat = 14
+    static let top: CGFloat = 10
+    static let bottom: CGFloat = 8
+    /// What the padding takes off the terminal's area.
+    static let total = CGSize(width: 2 * horizontal, height: top + bottom)
+}
+
 private struct TerminalAreaReader: View {
     @EnvironmentObject private var model: AppModel
     /// What to take off for the padding a terminal gets.
     let insets: CGSize
+    /// False on the launch screen with no session: the strip of tabs a
+    /// session brings is taken off too.
+    var stripShown = true
 
     var body: some View {
         GeometryReader { proxy in
@@ -480,7 +677,8 @@ private struct TerminalAreaReader: View {
     }
 
     private func report(_ size: CGSize) {
-        model.terminalArea = CGSize(width: size.width - insets.width, height: size.height - insets.height)
+        let strip = stripShown ? 0 : model.tabStripHeight
+        model.terminalArea = CGSize(width: size.width - insets.width, height: size.height - insets.height - strip)
     }
 }
 
@@ -533,8 +731,10 @@ struct WelcomeView: View {
             HStack(spacing: 10) {
                 ForEach(model.installedAgents) { agent in
                     LaunchButton(title: agent.name, id: agent.id, large: true) { model.launch(agent) }
+                        .contextMenu { WorktreeLaunchItem(agent: agent) }
                 }
                 LaunchButton(title: "Shell", id: "shell", large: true) { model.launch(nil) }
+                    .contextMenu { WorktreeLaunchItem(agent: nil) }
                 SSHMenu(large: true)
             }
             if model.agentsLoaded && model.installedAgents.isEmpty {

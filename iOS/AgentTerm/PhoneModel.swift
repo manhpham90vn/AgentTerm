@@ -1,8 +1,10 @@
+import ActivityKit
 import AgentTermClient
 import AgentTermProtocol
 import AgentTermTelemetry
 import AgentTermTerminal
 import SwiftUI
+import UserNotifications
 
 enum LinkStatus: Equatable {
     case connecting
@@ -53,7 +55,10 @@ final class PhoneModel: ObservableObject {
     @Published var showPairSheet = false
     /// A pairing code is being traded for a token.
     @Published private(set) var isPairing = false
-    @Published private(set) var status: LinkStatus = .offline(nil)
+    @Published private(set) var status: LinkStatus = .offline(nil) {
+        // The Live Activity can only be kept true while connected (#24).
+        didSet { if status != oldValue { updateLiveActivity() } }
+    }
     @Published private(set) var sessions: [SessionInfo] = []
     /// How the sessions are arranged: order, pins and groups. The Mac keeps
     /// it, and its window and every phone show the same.
@@ -70,6 +75,22 @@ final class PhoneModel: ObservableObject {
     /// Whether the Mac's host starts when its user logs in. Nil from a Mac
     /// that cannot do that, or that has not said yet.
     @Published private(set) var startAtLogin: Bool?
+    /// Whether agents may open shells the user sees, through AgentTerm's
+    /// MCP server installed in their configuration (#10). Nil when the
+    /// host does not install it.
+    @Published private(set) var agentShells: Bool?
+    /// Whether the agents are asked to run their commands in shells the user sees.
+    @Published private(set) var agentsUseShells: Bool?
+
+    func setAgentsUseShells(_ on: Bool) {
+        agentsUseShells = on
+        connection?.send(.setAgentsUseShells(on))
+    }
+
+    func setAgentShells(_ on: Bool) {
+        agentShells = on
+        connection?.send(.setAgentShells(on))
+    }
 
     func setStartAtLogin(_ on: Bool) {
         startAtLogin = on
@@ -184,6 +205,16 @@ final class PhoneModel: ObservableObject {
 
     /// How the version of AgentTerm on the Mac compares with this app's.
     @Published private(set) var hostMatch = ProtocolMatch.same
+    /// Parts of AgentTerm on the Mac that stopped without being asked to:
+    /// the host above all, whose sessions ended with it. Kept by the Mac
+    /// until the user has seen them here or on another device.
+    @Published private(set) var failures: [PartFailure] = []
+
+    /// The user has seen it: it goes here and on every other device.
+    func dismiss(_ failure: PartFailure) {
+        failures.removeAll { $0.id == failure.id }
+        connection?.send(.dismissFailure(id: failure.id))
+    }
     /// The session being dragged in the list, from when it is picked up.
     var draggedSession: String?
     /// The folder being dragged in the list.
@@ -269,6 +300,144 @@ final class PhoneModel: ObservableObject {
     /// Attempts to connect since the last time it worked.
     private var failedAttempts = 0
     private var active = true
+
+    // MARK: Agents that finished or need an instruction (#22)
+
+    /// The Mac's schedules (#11), as its host keeps them.
+    @Published private(set) var schedules: [Schedule] = []
+
+    /// Each folder's git worktrees (#23, #33), as its host lists them.
+    @Published private(set) var worktrees: [String: [WorktreeInfo]] = [:]
+    @Published private(set) var worktreeSetups: [String: String] = [:]
+    /// What became of the last worktree that was finished.
+    @Published var worktreeSaid: String?
+
+    func listWorktrees(_ folder: String) { connection?.send(.listWorktrees(folder: folder)) }
+    func finishWorktree(_ worktree: WorktreeInfo, of folder: String, _ finish: WorktreeFinish, deleteBranch: Bool) {
+        connection?.send(.finishWorktree(folder: folder, path: worktree.path, finish: finish, deleteBranch: deleteBranch))
+    }
+    func setWorktreeSetup(_ command: String?, for folder: String) { connection?.send(.setWorktreeSetup(folder: folder, command: command)) }
+    func save(_ schedule: Schedule) { connection?.send(.saveSchedule(schedule)) }
+    func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
+
+    /// Shown as a banner while the app is in front, until it is opened or
+    /// dismissed.
+    @Published private(set) var agentNotice: AgentNotice?
+    /// Someone is at the Mac: then nothing is told here.
+    @Published private(set) var macInUse = false
+    /// Whether to be told at all: a switch in the Settings tab.
+    @Published var notifyAgents: Bool = UserDefaults.standard.object(forKey: "notifyAgents") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(notifyAgents, forKey: "notifyAgents")
+            if notifyAgents { notifications.askOnce() }
+        }
+    }
+    /// What was told of each Mac's sessions, so that each is told once,
+    /// also across connections.
+    private var told: [String: [SessionID: AgentState]] = [:]
+    /// Replies given while the connection was gone, sent once it is back.
+    private var pendingAnswers: [(session: SessionID, state: AgentState, text: String)] = []
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    let notifications = AgentNotifications()
+
+    /// Tells of what the host's sessions say now, where the user is: a
+    /// banner in the app, a notification just outside it.
+    private func tellOfAgents(_ list: [SessionInfo]) {
+        guard let mac = pairing?.id else { return }
+        var known = told[mac] ?? [:]
+        let notices = AgentNotice.notices(in: list, told: &known)
+        told[mac] = known
+        if let current = agentNotice, !list.contains(where: { $0.id == current.session && $0.state == current.state }) { agentNotice = nil }
+        guard notifyAgents, !macInUse else { return }
+        for notice in notices {
+            // The session on screen is being looked at.
+            if active, notice.session == openSessionID { continue }
+            if active { agentNotice = notice } else { notifications.post(notice, mac: mac, macName: pairing?.name ?? "the Mac") }
+        }
+    }
+
+    // MARK: The Live Activity (#24)
+
+    /// Whether to show it at all: a switch in the Settings tab.
+    @Published var showsLiveActivity: Bool = UserDefaults.standard.object(forKey: "showsLiveActivity") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(showsLiveActivity, forKey: "showsLiveActivity")
+            updateLiveActivity()
+        }
+    }
+    private var liveActivity: Activity<AgentsActivityAttributes>?
+
+    /// Shown only while all three hold: the phone is connected to the Mac,
+    /// nobody is at the Mac, and an agent works or waits. Ended as soon as
+    /// the connection ends or the Mac is used again, since it could no longer
+    /// be kept true; left showing the last state when every agent is done.
+    func updateLiveActivity() {
+        let working = sessions.filter { $0.state?.isWorking == true }
+        let waiting = sessions.filter { $0.state?.isWaiting == true }
+        let decision = LiveActivityRule.decide(
+            enabled: showsLiveActivity && ActivityAuthorizationInfo().areActivitiesEnabled, connected: status == .connected, macInUse: macInUse,
+            sessions: sessions)
+        let wanted = decision == .show
+        let state = AgentsActivityAttributes.ContentState(
+            working: working.count, waiting: waiting.map(\.displayName), firstWaiting: waiting.first?.id,
+            done: sessions.filter { if case .done = $0.state { return true } else { return false } }.map(\.displayName))
+        let content = ActivityContent(state: state, staleDate: nil)
+        if wanted {
+            if let liveActivity {
+                Task { await liveActivity.update(content) }
+            } else {
+                liveActivity = try? Activity.request(attributes: AgentsActivityAttributes(mac: pairing?.name ?? "the Mac"), content: content)
+            }
+        } else if let activity = liveActivity {
+            liveActivity = nil
+            // Done is true and stays true; anything else could go stale.
+            Task { await activity.end(content, dismissalPolicy: decision == .endShowingDone ? .default : .immediate) }
+        }
+    }
+
+    /// The Live Activity was touched: the session that waits, or the list.
+    func openFromLink(_ url: URL) -> Bool {
+        guard url.host == "session" else { return false }
+        let id = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "id" }?.value.flatMap(UInt32.init)
+        tab = "sessions"
+        if let id, sessions.contains(where: { $0.id == id }) { path = [.session(id)] }
+        return true
+    }
+
+    /// Opens the session a notice is about, in the Sessions tab.
+    func open(_ notice: AgentNotice) {
+        agentNotice = nil
+        guard sessions.contains(where: { $0.id == notice.session }) else { return }
+        tab = "sessions"
+        path = [.session(notice.session)]
+    }
+
+    func dismissAgentNotice() { agentNotice = nil }
+
+    /// A reply to an agent where it was told of: typed into its session by
+    /// the host only while the agent still asks what it answers.
+    func answer(session: SessionID, to state: AgentState, text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        if status == .connected, let connection {
+            connection.send(.answer(session: session, to: state, text: text))
+        } else {
+            pendingAnswers.append((session, state, text))
+            resume()
+        }
+    }
+
+    /// The app left the front: iOS lets it run a little longer, during
+    /// which the connection lives and a notification can still be made.
+    func enteredBackground() {
+        active = false
+        guard backgroundTask == .invalid else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Agents") { [weak self] in
+            guard let self else { return }
+            UIApplication.shared.endBackgroundTask(self.backgroundTask)
+            self.backgroundTask = .invalid
+        }
+    }
     private static let fontSizeKey = "terminalFontSize"
     private static let currentHostKey = "currentHost"
     static let fontSizes: ClosedRange<Double> = 9...18
@@ -279,6 +448,7 @@ final class PhoneModel: ObservableObject {
         hosts = PairingStore.load()
         let last = UserDefaults.standard.string(forKey: Self.currentHostKey)
         pairing = hosts.first { $0.id == last } ?? hosts.first
+        notifications.model = self
         if pairing != nil { connect() }
     }
 
@@ -363,11 +533,12 @@ final class PhoneModel: ObservableObject {
 
     var groups: [FolderGroup] {
         var result = folders.map { folder in
-            FolderGroup(path: folder, sessions: sessions.filter { $0.cwd == folder })
+            // A session in a worktree of the folder is the folder's (#23).
+            FolderGroup(path: folder, sessions: sessions.filter { WorktreePath.belongs($0.cwd, to: folder) })
         }
         // Sessions started outside the listed folders still need a home.
         let known = Set(folders)
-        let loose = Dictionary(grouping: sessions.filter { !known.contains($0.cwd) }, by: \.cwd)
+        let loose = Dictionary(grouping: sessions.filter { !known.contains($0.cwd) && !known.contains(WorktreePath.project(of: $0.cwd) ?? "") }, by: \.cwd)
         result += loose.keys.sorted().map { FolderGroup(path: $0, sessions: loose[$0] ?? []) }
         if result.isEmpty { result = [FolderGroup(path: nil, sessions: [])] }
         return result
@@ -516,14 +687,20 @@ final class PhoneModel: ObservableObject {
     private func clearHostState() {
         keepAwake = nil
         startAtLogin = nil
+        agentShells = nil
+        agentsUseShells = nil
         keepAwakeOptions = KeepAwakeOptions()
         commitWriter = CommitWriterSettings()
+        schedules = []
+        worktrees = [:]
+        worktreeSetups = [:]
         writingCommitMessage = []
         syncing = [:]
         sshHosts = []
         system.stats = nil
         hostVersion = 0
         hostMatch = .same
+        failures = []
         sessions = []
         folders = []
         agents = []
@@ -547,6 +724,10 @@ final class PhoneModel: ObservableObject {
     /// Called when the app comes to the front.
     func resume() {
         active = true
+        if backgroundTask != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundTask)
+            backgroundTask = .invalid
+        }
         if pairing != nil, connection == nil {
             connect()
         } else {
@@ -651,6 +832,8 @@ final class PhoneModel: ObservableObject {
             hostMatch = ProtocolMatch(host: version)
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             status = .connected
+            for answer in pendingAnswers { connection?.send(.answer(session: answer.session, to: answer.state, text: answer.text)) }
+            pendingAnswers.removeAll()
             failedAttempts = 0
             reattachAfterConnect = true
             // Whatever was under way when the connection dropped got no answer.
@@ -664,6 +847,8 @@ final class PhoneModel: ObservableObject {
         case .sessions(let list):
             sessions = list
             sessionsKnown = true
+            tellOfAgents(list)
+            updateLiveActivity()
             if let pairing { pruneComposeDrafts(of: pairing.id, keeping: list) }
             syncSessionLayout()
             if let open = openSessionID, !list.contains(where: { $0.id == open }) {
@@ -679,7 +864,7 @@ final class PhoneModel: ObservableObject {
                     if let controller, controller.session == open, let have = controller.position, hostVersion >= 6 {
                         // The terminal is still here with all it was sent:
                         // only what the session wrote since is asked for.
-                        connection?.send(.attach(session: open, size: session(open)?.size ?? .default, have: have))
+                        connection?.send(.attach(session: open, size: session(open)?.size ?? .default, have: have, history: controller.historyAsked))
                     } else {
                         controller = nil
                         self.open(open)
@@ -691,6 +876,23 @@ final class PhoneModel: ObservableObject {
             agentsLoaded = true
         case .startAtLogin(let on):
             startAtLogin = on
+        case .agentShells(let on):
+            agentShells = on
+        case .agentsUseShells(let on):
+            agentsUseShells = on
+        case .agentShellResult:
+            // For `agenttermd mcp`, not for an app.
+            break
+        case .macInUse(let inUse):
+            macInUse = inUse
+            updateLiveActivity()
+        case .schedules(let list):
+            schedules = list
+        case .worktrees(let folder, let list, let setup):
+            worktrees[folder] = list
+            worktreeSetups[folder] = setup
+        case .worktreeFinished(_, _, let said):
+            worktreeSaid = said
         case .keepAwake(let on):
             keepAwake = on
         case .keepAwakeOptions(let options):
@@ -720,6 +922,8 @@ final class PhoneModel: ObservableObject {
             if openCreatedSession {
                 openCreatedSession = false
                 controller = makeController(for: info.id)
+                // Started here: the host sends all of it, as for any create.
+                controller?.historyAsked = nil
                 foreignSize = nil
                 showBrowser = false
                 // On top of wherever it was started from, so Back returns there.
@@ -731,11 +935,13 @@ final class PhoneModel: ObservableObject {
             // What follows is the session's earlier output, until `replayed`.
             if controller?.session == info.id {
                 controller?.beginReplay(size: info.size)
-                replaying = info.id
+                // Earlier lines asked for show in a strip; the screen stays.
+                if controller?.loadingHistory != true { replaying = info.id }
             }
-        case .replaying(let id, let from):
+        case .replaying(let id, let from, let above):
+            if let above, controller?.session == id { controller?.historyKept = above }
             guard let current = controller, current.session == id, current.position != from else { return }
-            if current.position != nil {
+            if current.position != nil, !current.loadingHistory {
                 // The Mac could not go on from where this terminal stopped
                 // and sends all it keeps: that is for a terminal that starts empty.
                 controller = makeController(for: id)
@@ -744,7 +950,17 @@ final class PhoneModel: ObservableObject {
             controller?.position = from
         case .replayed(let id):
             if replaying == id { replaying = nil }
-            if controller?.session == id { controller?.endReplay() }
+            if controller?.session == id {
+                // Earlier lines brought in are not the phone coming back: the
+                // session is in use here already, and taking it again would
+                // draw it for the screen's size, leaving the lines just read.
+                let paging = controller?.loadingHistory == true
+                controller?.endReplay()
+                // Open here is in use here: the session takes this screen's
+                // size, also when the phone comes back after it was away
+                // and the Mac had it at its own, without a button.
+                if !paging { controller?.claimSize() }
+            }
         case .resized(let id, let size, let driver):
             if let index = sessions.firstIndex(where: { $0.id == id }) { sessions[index].size = size }
             guard let controller, controller.session == id else { return }
@@ -846,6 +1062,8 @@ final class PhoneModel: ObservableObject {
             savingText = nil
         case .fileCreated(let path, let isDirectory):
             if !isDirectory { createdFile = path }
+        case .failures(let list):
+            failures = list
         case .pairingCode, .devices:
             break
         }
@@ -856,8 +1074,27 @@ final class PhoneModel: ObservableObject {
         controller.onInput = { [weak self] data in self?.connection?.sendInput(data, to: id) }
         controller.onResize = { [weak self] size in self?.connection?.send(.resize(session: id, size: size)) }
         controller.onClaim = { [weak self] size in self?.connection?.send(.takeControl(session: id, size: size)) }
+        // A few hundred lines above the screen to start with; more as it is
+        // scrolled up (HIST-6).
+        controller.historyAsked = Self.historyToStartWith
+        controller.onNeedsHistory = { [weak self] lines in
+            guard let self else { return }
+            self.connection?.send(.attach(session: id, size: self.session(id)?.size ?? .default, history: lines))
+        }
+        controller.onLoadingHistory = { [weak self, weak controller] loading in
+            self?.loadingHistory = loading ? id : nil
+            if !loading { self?.historyLoaded = controller?.historyAsked }
+        }
         return controller
     }
+
+    /// How many lines above the screen a session is opened with.
+    static let historyToStartWith = 500
+    /// The session whose earlier lines are on their way.
+    @Published private(set) var loadingHistory: SessionID?
+    /// How many lines above the screen the open terminal has asked for, as
+    /// the tests read it.
+    @Published private(set) var historyLoaded: Int?
 
     // MARK: Actions
 
@@ -870,9 +1107,11 @@ final class PhoneModel: ObservableObject {
         let screen = UIScreen.main.bounds.size
         let window = UIApplication.shared.connectedScenes.compactMap { ($0 as? UIWindowScene)?.keyWindow }.first
         let safe = window?.safeAreaInsets ?? .zero
-        let width = (window?.bounds.width ?? screen.width) - safe.left - safe.right - 6
+        let bounds = window?.bounds.size ?? screen
+        let sides = 2 * TerminalInsets.horizontal(onItsSide: bounds.width > bounds.height)
+        let width = bounds.width - safe.left - safe.right - sides
         // Navigation bar, key bar and compose field take about this much.
-        let height = (window?.bounds.height ?? screen.height) - safe.top - safe.bottom - 44 - 52 - 56 - 4
+        let height = bounds.height - safe.top - safe.bottom - 44 - 52 - 56 - 2 * TerminalInsets.vertical
         return TerminalMetrics.grid(for: CGSize(width: width, height: height), fontSize: fontSize) ?? TermSize(cols: 48, rows: 30)
     }
 
@@ -890,7 +1129,7 @@ final class PhoneModel: ObservableObject {
         controller = makeController(for: id)
         foreignSize = nil
         // Attach with the size the session already has; ours follows after layout.
-        connection?.send(.attach(session: id, size: session(id)?.size ?? .default))
+        connection?.send(.attach(session: id, size: session(id)?.size ?? .default, history: controller?.historyAsked ?? Self.historyToStartWith))
     }
 
     /// Stops watching a session. The Mac gets its own size back.
@@ -922,8 +1161,8 @@ final class PhoneModel: ObservableObject {
         connection?.send(.files(path: directory))
     }
 
-    func loadFile(_ path: String) {
-        connection?.send(.readFile(path: path))
+    func loadFile(_ path: String, anyway: Bool = false) {
+        connection?.send(.readFile(path: path, anyway: anyway ? true : nil))
     }
 
     func saveFile(_ path: String, text: String) {
@@ -1051,5 +1290,79 @@ final class PhoneModel: ObservableObject {
         fontSize = size
         UserDefaults.standard.set(size, forKey: Self.fontSizeKey)
         controller?.setFontSize(size)
+    }
+}
+
+/// Local notifications of agents that finished or need an instruction (#22).
+/// There is no push through Apple: the app makes them itself, from what the
+/// host says over its connection, while iOS lets the app run.
+final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
+    weak var model: PhoneModel?
+    private static let replyCategory = "agent-reply"
+    private static let openCategory = "agent-open"
+    private var asked = false
+
+    override init() {
+        super.init()
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        // A reply runs something on the Mac: the phone is unlocked first.
+        let reply = UNTextInputNotificationAction(
+            identifier: "reply", title: "Reply", options: [.authenticationRequired], textInputButtonTitle: "Send", textInputPlaceholder: "Your answer")
+        center.setNotificationCategories([
+            UNNotificationCategory(identifier: Self.replyCategory, actions: [reply], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle]),
+            UNNotificationCategory(identifier: Self.openCategory, actions: [], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle]),
+        ])
+    }
+
+    /// Asks iOS, the first time, whether the app may notify.
+    func askOnce() {
+        guard !asked else { return }
+        asked = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    func post(_ notice: AgentNotice, mac: String, macName: String) {
+        askOnce()
+        let content = UNMutableNotificationContent()
+        content.title = "\(notice.name) \(notice.why)"
+        content.subtitle = "\((notice.folder as NSString).lastPathComponent) on \(macName)"
+        // What the agent said shows only where iOS shows previews: by
+        // default not on the lock screen.
+        content.body = notice.detail ?? ""
+        content.sound = .default
+        content.threadIdentifier = "\(mac)-\(notice.session)"
+        content.categoryIdentifier = notice.takesAReply ? Self.replyCategory : Self.openCategory
+        content.userInfo = [
+            "mac": mac, "session": Int(notice.session),
+            "state": String(decoding: MessageCoding.encode(notice.state), as: UTF8.self),
+        ]
+        let request = UNNotificationRequest(identifier: "\(mac)-\(notice.session)", content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let info = response.notification.request.content.userInfo
+        let session = (info["session"] as? Int).map { SessionID(truncatingIfNeeded: $0) }
+        let state = (info["state"] as? String).flatMap { MessageCoding.decode(AgentState.self, from: Data($0.utf8)) }
+        DispatchQueue.main.async { [weak self] in
+            defer { completionHandler() }
+            guard let model = self?.model, let session, let state, model.pairing?.id == info["mac"] as? String else { return }
+            if let reply = response as? UNTextInputNotificationResponse {
+                model.answer(session: session, to: state, text: reply.userText)
+            } else if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+                model.open(AgentNotice(session: session, name: "", folder: "", state: state))
+            }
+        }
+    }
+
+    /// In front, the app shows its own banner instead.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([])
     }
 }

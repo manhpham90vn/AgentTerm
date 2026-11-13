@@ -356,7 +356,7 @@ public enum Handoff {
     /// Lists `.agentterm/` in the repository's local exclude file, so handoff
     /// files never show up as changes or get committed by accident. This is
     /// per clone and does not touch the project's own `.gitignore`.
-    private static func keepOutOfGit(_ directory: String) {
+    static func keepOutOfGit(_ directory: String) {
         func git(_ arguments: [String]) -> (status: Int32, output: String)? {
             Subprocess.run("/usr/bin/git", ["-C", directory] + arguments, timeout: 10)
                 .map { ($0.status, String(decoding: $0.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) }

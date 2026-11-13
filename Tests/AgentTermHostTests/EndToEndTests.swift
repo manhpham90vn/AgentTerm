@@ -165,9 +165,67 @@ final class EndToEndTests: XCTestCase {
         phone.type("stty size\n", in: id)
         waitUntil("phone drives after typing") { mac.lastResize?.size == landscape && mac.lastResize?.driver == false }
 
-        // The phone disconnects: the Mac gets its size back.
+        // The phone disconnects: the session keeps its size (SIZE-8), and
+        // the Mac gets its own back when it types.
         phone.connection.close()
-        waitUntil("mac restored") { mac.lastResize?.driver == true && mac.lastResize?.size == widerMac }
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(mac.lastResize?.size, landscape, "the phone's size is kept")
+        XCTAssertEqual(mac.lastResize?.driver, false)
+        mac.type("stty size\n", in: id)
+        waitUntil("mac restored once it types") { mac.lastResize?.driver == true && mac.lastResize?.size == widerMac }
+        mac.connection.send(.kill(session: id))
+    }
+
+    /// HIST-6: a client that attaches with `history` is sent the screen and
+    /// that many lines above it, and told how many the host keeps; it
+    /// attaches again with more as it scrolls up.
+    func testAPhoneIsSentOnlySoMuchHistoryAndMoreWhenItAsks() {
+        let mac = connect("mac")
+        let size = TermSize(cols: 40, rows: 10)
+        mac.connection.send(.create(CreateRequest(command: "seq 1 2000; exec sleep 600", cwd: NSTemporaryDirectory(), title: "long", size: size)))
+        waitUntil("the session") { mac.attached != nil }
+        let id = mac.attached!.id
+        waitUntil("its output") { mac.text(id).contains("2000") }
+
+        let phone = connect("phone")
+        func above() -> Int? { phone.messages.compactMap { if case .replaying(id, _, let above) = $0 { return above } else { return nil } }.last ?? nil }
+        func replays() -> Int { phone.messages.filter { $0 == .replayed(session: id) }.count }
+        phone.connection.send(.attach(session: id, size: size, history: 100))
+        waitUntil("the first replay") { replays() == 1 }
+        XCTAssertGreaterThanOrEqual(above() ?? 0, 1990, "the host keeps all of it")
+        let first = phone.text(id)
+        XCTAssertTrue(first.contains("1950"))
+        XCTAssertFalse(first.contains("\r\n1800\r\n"), "more than a hundred lines above the screen were sent")
+
+        phone.connection.send(.attach(session: id, size: size, history: 600))
+        waitUntil("the second replay") { replays() == 2 }
+        XCTAssertTrue(phone.text(id).contains("\r\n1500\r\n"), "the lines asked for next")
+        mac.connection.send(.kill(session: id))
+    }
+
+    /// PERF-7: a long session's screen is written out on the session's own
+    /// queue, not on the one every session's output goes through; what the
+    /// session writes meanwhile reaches the client after the screen.
+    func testWhatASessionWritesWhileItsScreenIsWrittenOutFollowsIt() {
+        let mac = connect("mac")
+        let size = TermSize(cols: 120, rows: 40)
+        mac.connection.send(.create(CreateRequest(command: "seq 1 15000; exec cat", cwd: NSTemporaryDirectory(), title: "long", size: size)))
+        waitUntil("the session") { mac.attached != nil }
+        let id = mac.attached!.id
+        waitUntil("its output", timeout: 20) { mac.text(id).contains("15000") }
+
+        let phone = connect("phone")
+        phone.connection.send(.attach(session: id, size: size))
+        // Written right away, while the screen is being written out.
+        mac.type("written meanwhile\r", in: id)
+        waitUntil("the screen and what came after it", timeout: 20) { phone.text(id).contains("written meanwhile") }
+        let text = phone.text(id)
+        let screen = try? XCTUnwrap(text.range(of: "15000", options: .backwards))
+        let after = try? XCTUnwrap(text.range(of: "written meanwhile"))
+        if let screen, let after { XCTAssertLessThan(screen.lowerBound, after.lowerBound, "what the session wrote came before its screen") }
+        // Where the phone's terminal is counts all of it, as the host does.
+        let from = phone.messages.compactMap { if case .replaying(id, let from, _) = $0 { return from } else { return nil } }.last
+        XCTAssertNotNil(from)
         mac.connection.send(.kill(session: id))
     }
 
@@ -266,7 +324,7 @@ final class EndToEndTests: XCTestCase {
         waitUntil("echoed") { first.text(id).contains("before-the-drop\r\nbefore-the-drop") }
 
         func start(_ client: TestClient) -> Int? {
-            client.messages.compactMap { if case .replaying(id, let from) = $0 { return from } else { return nil } }.last
+            client.messages.compactMap { if case .replaying(id, let from, _) = $0 { return from } else { return nil } }.last
         }
         // A phone opens the session: its screen, and where that ends up in
         // the session's output, which is where the session is now.
@@ -842,6 +900,55 @@ final class EndToEndTests: XCTestCase {
         waitUntil("still ahead") { latest(mine)?.upstream == "origin/main" && latest(mine)?.ahead == 1 }
     }
 
+    /// SIZE-8 and NOTE-7: a phone that was used keeps the session at its
+    /// size when it goes, and no one is at the Mac, its app in front
+    /// notwithstanding, until the Mac app is used; typing in the session
+    /// on the Mac takes the size back.
+    func testAPhoneThatWasUsedKeepsTheSessionAndTheMacUntilTheMacIsUsed() throws {
+        var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, detectAgents: { [] })
+        configuration.refreshInterval = 0.3
+        // Someone is at the keyboard all along.
+        configuration.idleSeconds = { 1 }
+        let host = HostServer(configuration: configuration)
+        let hostPort = try host.start()
+        defer { host.stop() }
+        func inUse(_ client: TestClient) -> Bool? { client.messages.compactMap { if case .macInUse(let on) = $0 { return on } else { return nil } }.last }
+
+        let mac = TestClient(port: hostPort, token: token, name: "mac")
+        waitUntil("the Mac app") { mac.welcomed }
+        mac.connection.send(.appInFront(true))
+        mac.connection.send(.createPairingCode)
+        waitUntil("a code") { mac.pairingCode != nil }
+        let phone = TestClient(port: hostPort, credential: .pairingCode(mac.pairingCode!), name: "iPhone")
+        waitUntil("paired") { phone.pairedToken != nil && phone.welcomed }
+        waitUntil("someone at the Mac") { inUse(mac) == true }
+
+        let macSize = TermSize(cols: 120, rows: 40), phoneSize = TermSize(cols: 48, rows: 30)
+        mac.connection.send(.create(CreateRequest(command: "exec sleep 600", cwd: NSTemporaryDirectory(), title: "work", size: macSize)))
+        waitUntil("the session") { mac.attached != nil }
+        let id = try XCTUnwrap(mac.attached?.id)
+        phone.connection.send(.attach(session: id, size: phoneSize))
+        phone.connection.send(.takeControl(session: id, size: phoneSize))
+        waitUntil("the phone's size") { mac.lastResize?.size == phoneSize && mac.lastResize?.driver == false }
+        waitUntil("no one at the Mac, its app in front notwithstanding") { inUse(mac) == false }
+
+        // The phone goes: the session stays at its size, and no one is at the Mac.
+        phone.connection.close()
+        waitUntil("the phone gone") { phone.isClosed }
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        XCTAssertEqual(mac.lastResize?.size, phoneSize)
+        XCTAssertEqual(mac.lastResize?.driver, false)
+        XCTAssertEqual(inUse(mac), false)
+
+        // The Mac app used: someone is at the Mac; the session keeps the phone's size.
+        mac.connection.send(.used)
+        waitUntil("someone at the Mac again") { inUse(mac) == true }
+        XCTAssertEqual(mac.lastResize?.size, phoneSize)
+        // Typing in the session there takes it back.
+        mac.type("x", in: id)
+        waitUntil("the Mac's size") { mac.lastResize?.size == macSize && mac.lastResize?.driver == true }
+    }
+
     func testStartingAtLoginIsSwitchedFromAnyClient() throws {
         let root = state("e2e-login")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -854,6 +961,7 @@ final class EndToEndTests: XCTestCase {
 
         var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, detectAgents: { [] })
         configuration.loginItem = item
+        configuration.refreshInterval = 0.3
         let host = HostServer(configuration: configuration)
         let hostPort = try host.start()
         defer { host.stop() }
@@ -869,6 +977,13 @@ final class EndToEndTests: XCTestCase {
         mac.connection.send(.setStartAtLogin(false))
         waitUntil("off, for both") { latest(mac) == false && latest(phone) == false }
         XCTAssertFalse(item.isOn)
+
+        // SET-3: turned on or off outside AgentTerm, as by removing the
+        // launch agent, both are told without asking.
+        phone.connection.send(.setStartAtLogin(true))
+        waitUntil("on again") { latest(mac) == true && latest(phone) == true }
+        try FileManager.default.removeItem(at: item.file)
+        waitUntil("told it is off, from outside") { latest(mac) == false && latest(phone) == false }
     }
 
     func testTheEndOfAPushIsSaidApartFromTheChanges() throws {
@@ -975,6 +1090,15 @@ final class EndToEndTests: XCTestCase {
             }
             mac.connection.send(.setCommitWriter(wanted))
             waitUntil("set again") { settings(phone) == wanted }
+
+            // SET-2: asked for what the host keeps already once it is
+            // tidied, the asker is told what the host keeps, rather than
+            // left with its untidy copy.
+            func told(_ client: TestClient) -> Int { client.messages.filter { if case .commitWriter = $0 { return true } else { return false } }.count }
+            let before = told(mac)
+            mac.connection.send(.setCommitWriter(CommitWriterSettings(agent: "codex", model: "  ", prompt: "Viết bằng tiếng Việt.")))
+            waitUntil("the asker told") { told(mac) > before }
+            XCTAssertEqual(settings(mac), wanted)
         }
         let again = HostServer(configuration: configuration)
         let againPort = try again.start()

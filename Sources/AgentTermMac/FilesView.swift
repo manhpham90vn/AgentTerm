@@ -258,7 +258,7 @@ struct DocumentView: View {
     /// project ("my-app/src"); anywhere else, its folder on the Mac.
     private var location: String {
         let directory = (document.path as NSString).deletingLastPathComponent
-        if let folder = model.selectedFolder, directory == folder || directory.hasPrefix(folder + "/") {
+        if let folder = model.panelFolder, directory == folder || directory.hasPrefix(folder + "/") {
             return (folder as NSString).lastPathComponent + directory.dropFirst(folder.count)
         }
         return (directory as NSString).abbreviatingWithTildeInPath
@@ -286,6 +286,14 @@ struct DocumentView: View {
                 .lineLimit(1)
                 .truncationMode(.head)
             Spacer(minLength: 6)
+            // Where Preview and Edit are for a file that has them.
+            if case .tooLarge(let bytes) = document.content, bytes <= FileContent.largestOpenedAnyway {
+                let path = document.path
+                Button("Open Anyway") { files.openAnyway(path) }
+                    .controlSize(.small)
+                    .help("Open it in the editor, large as it is")
+                    .accessibilityIdentifier("open-anyway")
+            }
             if document.hasPreview {
                 Picker("Mode", selection: $previewing) {
                     Text("Preview").tag(true)
@@ -355,7 +363,16 @@ struct DocumentView: View {
         case .binary:
             message("This file is not text, so it is not shown here.")
         case .tooLarge(let bytes):
-            message("This file is \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)), too large to open here.")
+            // In the middle; Open Anyway is in the bar above.
+            VStack(spacing: 14) {
+                Image(systemName: "doc.text").font(.system(size: 28)).foregroundStyle(.tertiary)
+                Text("This file is \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)), too large to open by itself.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

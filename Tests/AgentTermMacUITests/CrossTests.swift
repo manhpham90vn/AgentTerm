@@ -47,7 +47,7 @@ final class CrossTests: XCTestCase {
 
     private func openSettings(_ pane: String) {
         app.menu(["AgentTermMacUITest", "Settings…"])
-        app.press(.button(pane))
+        app.press(.id("settings-\(pane.lowercased())"))
     }
 
     /// Before the iPhone app runs: what the Mac does, for the phone to find.
@@ -59,7 +59,9 @@ final class CrossTests: XCTestCase {
         openSettings("General")
         app.press(.id("keep-awake"))
         wait("the switch to be on") { self.app.first(.id("keep-awake"))?.value == "1" }
-        // The changes grouped by folder, a choice the phone has to follow.
+        // The changes grouped by folder, a choice the phone has to follow,
+        // in Sessions' side panel.
+        app.press(.id("place-sessions"))
         app.press(.button("Group by folder"))
         app.wait(for: .button("Show as a flat list"))
         // And the changes the phone is going to commit are listed here.
@@ -82,7 +84,8 @@ final class CrossTests: XCTestCase {
         wait("the display option the phone switched on") { self.app.first(.button("Keep the display on too"))?.value == "1" }
         XCTAssertEqual(app.first(.id("keep-awake"))?.value, "1")
 
-        // SES-6: the session the phone started is listed here too.
+        // SES-6: the session the phone started is listed here too, in Sessions.
+        app.press(.id("place-sessions"))
         wait("the phone's own session beside the Mac's") { self.app.exists(.id("session-1")) && self.app.exists(.id("session-2")) }
 
         // Who is using a session is checked with the Mac app alone

@@ -19,6 +19,76 @@ final class SessionTests: MacUITestCase {
         XCTAssertTrue(app.first(.id("system-cpu"))?.label.hasPrefix("CPU ") ?? false)
     }
 
+    /// TEST-1: the host and the app a test starts, and the login shells they
+    /// start in turn, use the test's home folder, so no startup file of
+    /// the person running the tests is read.
+    func testTheShellsOfATestUseTheTestsHome() throws {
+        let phone = try device()
+        let seen = root.appendingPathComponent("seen-home")
+        // Started by the app's host, through the login shell, as every session is.
+        phone.send(.create(CreateRequest(command: "printf '%s' \"$HOME\" > '\(seen.path)'; sleep 600", cwd: project.path, title: "home")))
+        wait("the session to write its home") { FileManager.default.fileExists(atPath: seen.path) }
+        XCTAssertEqual(try String(contentsOf: seen, encoding: .utf8), home.path)
+    }
+
+    /// AGENT-9: what an agent says it is doing shows next to its session,
+    /// in the folder list and on its tab, and its folder says it waits.
+    func testTheStateOfAnAgentShowsWithItsSession() throws {
+        let phone = try device()
+        // A stand-in for Claude Code, under its name: it tells its hooks, as
+        // Claude Code does, that it waits for permission to run a command.
+        let folder = root.appendingPathComponent("stand-in")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let script = folder.appendingPathComponent("claude")
+        let event = #"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"make test"}}"#
+        try "#!/bin/sh\nprintf '%s' '\(event)' | '\(hostExecutable.path)' hook claude PermissionRequest\nexec sleep 600\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        phone.send(.create(CreateRequest(command: script.path, cwd: project.path, title: "review")))
+        wait("the host to know it waits") { phone.sessions.first?.state?.isWaiting == true }
+        let id = try XCTUnwrap(phone.sessions.first?.id)
+
+        app.wait(for: .containing("review, session, waiting for permission"), timeout: 15)
+        app.wait(for: .containing("project, folder, a session waits"))
+        app.press(.id("session-\(id)"))
+        app.wait(for: .containing("review, waiting for permission"))
+        shot("waiting")
+    }
+
+    /// NOTE-4: an agent of a session that is not in front that comes to
+    /// wait is told in a banner, which opens it.
+    func testAnAgentThatWaitsInAnotherSessionIsToldInABanner() throws {
+        let phone = try device()
+        app.press(.button("Shell"))
+        wait("the shell to start") { phone.sessions.count == 1 }
+        let shell = try XCTUnwrap(phone.sessions.first?.id)
+        // A stand-in for Claude Code that asks permission a moment after it starts.
+        let folder = root.appendingPathComponent("stand-in")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let script = folder.appendingPathComponent("claude")
+        let event = #"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"make deploy"}}"#
+        try "#!/bin/sh\nsleep 2\nprintf '%s' '\(event)' | '\(hostExecutable.path)' hook claude PermissionRequest\nexec sleep 600\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        phone.send(.create(CreateRequest(command: script.path, cwd: project.path, title: "deploy")))
+        wait("the agent's session") { phone.sessions.count == 2 }
+        let agent = try XCTUnwrap(phone.sessions.first { $0.id != shell }?.id)
+        // The shell is the one in front, and the window on History: the
+        // banner shows over every place, and Open goes to Sessions.
+        app.press(.id("session-\(shell)"))
+        app.press(.id("place-history"))
+        app.wait(for: .text("HISTORY"))
+
+        // Named after the conversation the stand-in folder's history gives it.
+        app.wait(for: .containing("needs permission"), timeout: 15)
+        app.wait(for: .containing("make deploy"))
+        shot("notice")
+        app.press(.button("Open"))
+        app.waitGone(.containing("needs permission"))
+        app.wait(for: .text("FOLDERS"))
+        app.wait(for: .id("session-\(agent)"))
+    }
+
     func testStartingSessionsAndFindingThemAgainAfterReopeningTheApp() throws {
         let phone = try device()
         // SES-2: a shell from the launch buttons.

@@ -105,9 +105,11 @@ final class RemoteMacTests: MacUITestCase {
         }
 
         // REMOTE-13: a conversation of the other Mac, handed off there.
-        app.press(.button("History"))
+        app.press(.id("place-history"))
         app.perform("Hand Off", on: .id("conversation-c-9"), timeout: 15)
         app.wait(for: .text("Hand Off"), timeout: 15)
+        // REMOTE-20: the other Mac's folders can be chosen, through its host.
+        app.wait(for: .button("Choose…"))
         wait("the prompt, from the other Mac's host", timeout: 15) {
             self.app.all(.role(kAXTextAreaRole as String)).contains { $0.value.contains(".agentterm/handoffs/") }
         }
@@ -274,5 +276,43 @@ final class RemoteMacTests: MacUITestCase {
         }
         wait("the other Mac after reopening", timeout: 20) { self.app.first(.id("mac-switcher"))?.value == "Other Mac" }
         wait("this Mac's host to be started", timeout: 15) { self.listens(on: self.port) }
+    }
+
+    /// REMOTE-19: the other Mac's host dies and is started again there.
+    /// This Mac says so in words, rather than showing an empty list.
+    func testWhenTheOtherMacsHostDiesThisMacSaysWhatEnded() throws {
+        try startOtherMac()
+        let otherDevice = try device("observer", state: otherState, port: otherPort)
+        otherDevice.send(.create(CreateRequest(command: "sleep 600", cwd: otherProject.path, title: "deploy")))
+        pair()
+        app.wait(for: .containing("deploy"), timeout: 15)
+
+        // Killed there, and started again there, as its own app would.
+        killHost(on: otherPort)
+        try startHost(state: otherState, home: otherHome, port: otherPort)
+        app.wait(for: .containing("The host on Other Mac stopped unexpectedly"), timeout: 30)
+        app.wait(for: .containing("and was started again"))
+        app.wait(for: .containing("Its session ended: deploy"))
+        shot("banner")
+        app.press(.button("Dismiss"))
+        app.waitGone(.containing("host on Other Mac stopped unexpectedly"))
+    }
+
+    /// SET-5: what the Mac on screen said, its schedules here, is not shown
+    /// once it is out of reach, nor under the Mac switched to.
+    func testTheSchedulesOfAMacOutOfReachAreNotShown() throws {
+        try startOtherMac()
+        let otherDevice = try device("observer", state: otherState, port: otherPort)
+        otherDevice.send(
+            .saveSchedule(
+                Schedule(
+                    id: "other", name: "Other's nightly", agent: "claude", folder: otherProject.path, prompt: "test", when: .daily(hour: 2, minute: 0),
+                    warningAccepted: true)))
+        pair()
+        app.press(.id("place-schedules"))
+        app.wait(for: .id("schedule-other"), timeout: 15)
+        killHost(on: otherPort)
+        app.waitGone(.id("schedule-other"), timeout: 20)
+        app.wait(for: .text("No schedules yet."))
     }
 }

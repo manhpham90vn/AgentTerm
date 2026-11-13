@@ -65,7 +65,7 @@ final class MoreWindowTests: MacUITestCase {
     func testSettingsListThePermissionsAgentsNeed() throws {
         // PERM-1.
         app.menu(["AgentTermMacUITest", "Settings…"])
-        app.press(.button("Permissions"))
+        app.press(.id("settings-permissions"))
         for permission in ["Accessibility", "Screen & System Audio Recording", "Automation", "Full Disk Access", "Microphone", "Camera"] {
             // Each says what it is, whether it is allowed, and what it is for.
             app.wait(for: .containing(permission + ", "))

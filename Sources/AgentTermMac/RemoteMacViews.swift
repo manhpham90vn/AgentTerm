@@ -147,11 +147,17 @@ struct PairMacSheet: View {
 /// show this Mac's disk, so the other Mac's host lists its folders instead.
 struct BrowseFoldersSheet: View {
     @EnvironmentObject private var model: AppModel
+    @Environment(\.dismiss) private var dismiss
+    /// Set to pick a folder for something else than the list: a handoff's,
+    /// a schedule's. The sheet then opens at `start` and hands the folder back.
+    var onPick: ((String) -> Void)?
+    var start: String?
+    var pickTitle = "Choose"
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Add a Folder on \(model.macName)").font(.system(size: 15, weight: .semibold))
+                Text(onPick == nil ? "Add a Folder on \(model.macName)" : "Choose a Folder on \(model.macName)").font(.system(size: 15, weight: .semibold))
                 Text(model.browseListing?.path ?? " ")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -181,22 +187,34 @@ struct BrowseFoldersSheet: View {
                     .padding(.vertical, 6)
                 }
             } else {
-                LoadingView("Loading the folders…") { model.browse(nil) }
+                LoadingView("Loading the folders…") { model.browse(start) }
             }
             Theme.hairline.frame(height: 1)
             HStack {
                 Spacer()
-                Button("Cancel", role: .cancel) { model.showBrowseFolders = false }
-                    .keyboardShortcut(.cancelAction)
-                Button("Add This Folder") { if let path = model.browseListing?.path { model.addRemoteFolder(path) } }
-                    .keyboardShortcut(.defaultAction)
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.browseListing == nil)
-                    .accessibilityIdentifier("add-remote-folder")
+                Button("Cancel", role: .cancel) {
+                    if onPick == nil { model.showBrowseFolders = false } else { dismiss() }
+                }
+                .keyboardShortcut(.cancelAction)
+                Button(onPick == nil ? "Add This Folder" : pickTitle) {
+                    guard let path = model.browseListing?.path else { return }
+                    if let onPick {
+                        onPick(path)
+                        dismiss()
+                    } else {
+                        model.addRemoteFolder(path)
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .buttonStyle(.borderedProminent)
+                .disabled(model.browseListing == nil)
+                .accessibilityIdentifier("add-remote-folder")
             }
             .padding(14)
         }
         .frame(width: 440, height: 420)
+        // Where it starts, not where the last look was left.
+        .onAppear { if onPick != nil { model.browse(start) } }
     }
 
     private func row(_ symbol: String, _ title: String, action: @escaping () -> Void) -> some View {

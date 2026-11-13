@@ -79,6 +79,9 @@ struct SessionTabs: View {
             }
             .background(Theme.panel)
             .overlay(alignment: .bottom) { Theme.hairline.frame(height: 1) }
+            // How tall it is, for the room a first session will have when
+            // it is started while the strip is not there yet.
+            .background(GeometryReader { proxy in Color.clear.onAppear { model.tabStripHeight = proxy.size.height } })
         }
     }
 }
@@ -107,12 +110,13 @@ private struct SessionTab: View {
                 .truncationMode(.tail)
                 .frame(maxWidth: 190, alignment: .leading)
                 .fixedSize(horizontal: true, vertical: false)
+            AgentStateMark(session: session)
             if model.foreignSizes[session.id] != nil {
                 Image(systemName: "iphone").font(.system(size: 9.5)).foregroundStyle(.secondary)
             }
             // The close button takes the shortcut's place under the pointer,
             // so the tab does not change width.
-            TabTrailing(id: TabID.session(session), number: number, hovering: hovering, closeHelp: "End this session") { model.close(session.id) }
+            TabTrailing(id: TabID.session(session), number: number, hovering: hovering, closeHelp: "End this session") { model.requestEnd(session.id) }
         }
         .padding(.leading, 10)
         .padding(.trailing, 6)
@@ -133,7 +137,7 @@ private struct SessionTab: View {
             TabStripMenu()
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(session.displayName)
+        .accessibilityLabel(AgentStateMark.label(session.displayName, session))
         .accessibilityIdentifier("tab-\(session.id)")
         .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
         // The tab's menu opens under the pointer only: what it holds is

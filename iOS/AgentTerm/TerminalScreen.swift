@@ -88,11 +88,33 @@ struct TerminalScreen: View {
                             LoadingView("Loading the session…", cover: Palette.canvas.opacity(0.92))
                         }
                     }
-                    .padding(.leading, model.foreignSize == nil ? 6 : 0)
-                    .padding(.top, model.foreignSize == nil ? 4 : 0)
-                    // Room under the last row, which can otherwise sit
-                    // right on the edge of what is below.
-                    .padding(.bottom, model.foreignSize == nil ? 4 : 0)
+                    .overlay(alignment: .top) {
+                        // Earlier lines on their way, scrolled to the top of
+                        // what was loaded: a strip, the screen stays (HIST-6).
+                        if model.loadingHistory == session {
+                            HStack(spacing: 8) {
+                                ProgressView().controlSize(.small)
+                                Text("Loading earlier lines…").font(.footnote)
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Capsule().fill(Palette.panel))
+                            .padding(.top, 6)
+                            .accessibilityElement(children: .combine)
+                            .accessibilityIdentifier("loading-history")
+                        }
+                        // How many earlier lines were asked for, for the tests:
+                        // a strip may come and go faster than they can look.
+                        Color.clear.frame(width: 1, height: 1)
+                            .accessibilityElement()
+                            .accessibilityIdentifier("history-loaded")
+                            .accessibilityValue(model.historyLoaded.map(String.init) ?? "")
+                    }
+                    // Room around the text, so it does not sit on the
+                    // screen's edges; under the last row too, which can
+                    // otherwise sit right on what is below.
+                    .padding(.horizontal, model.foreignSize == nil ? TerminalInsets.horizontal(onItsSide: isOnItsSide) : 0)
+                    .padding(.vertical, model.foreignSize == nil ? TerminalInsets.vertical : 0)
                 if isOnItsSide {
                     HStack(spacing: 0) {
                         Button {
@@ -138,7 +160,8 @@ struct TerminalScreen: View {
             }
         }
         .background(Palette.canvas.ignoresSafeArea())
-        .navigationTitle(model.session(session)?.displayName ?? "Session")
+        // With what its agent is doing, when that is known (#3).
+        .navigationTitle(model.session(session).map { info in info.state.map { "\(info.displayName) · \($0.name)" } ?? info.displayName } ?? "Session")
         // The terminal needs the room, and its own bars are under it.
         .toolbar(.hidden, for: .tabBar)
         .navigationBarTitleDisplayMode(.inline)
@@ -385,4 +408,11 @@ private struct ComposeBar: View {
             controller.type([0x0d])
         }
     }
+}
+
+/// Room around the terminal. A new session's size is worked out with it
+/// taken off (`PhoneModel.startingSize`), so it starts at the size it is shown at.
+enum TerminalInsets {
+    static func horizontal(onItsSide: Bool) -> CGFloat { onItsSide ? 8 : 10 }
+    static let vertical: CGFloat = 6
 }

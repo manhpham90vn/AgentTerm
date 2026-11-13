@@ -4,8 +4,8 @@ import AgentTermTerminal
 import Combine
 import SwiftUI
 
-/// The right side of the window: the folder's git changes, or the history of
-/// conversations each agent had in it.
+/// The right side of the window: the folder's git changes, the history of
+/// conversations each agent had in it, or its files.
 struct RightPanel: View {
     @AppStorage("rightPanelTab") private var tab = "git"
 
@@ -20,8 +20,9 @@ struct RightPanel: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             Theme.hairline.frame(height: 1)
+            WorktreeBar()
             if tab == "history" {
-                HistoryView()
+                HistoryView(ofFolder: true)
             } else if tab == "files" {
                 FilesView()
             } else {
@@ -57,17 +58,22 @@ private struct PanelTab: View {
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
         .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityIdentifier("panel-" + title.lowercased())
     }
 }
 
-/// Past conversations of the selected folder, one section per agent.
+/// Past conversations, one section per agent: every one on the Mac, each
+/// row naming its folder, in History; the folder on show's only, in the side
+/// panel, where picking one shows it in History.
 struct HistoryView: View {
     @EnvironmentObject private var model: AppModel
+    /// The side panel's: the folder on show's only.
+    var ofFolder = false
     @State private var collapsedAgents: Set<String> = []
     private let refresh = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
 
     private var sections: [(id: String, name: String, conversations: [Conversation])] {
-        let all = model.history ?? []
+        let all = list ?? []
         return AgentDetector.known.compactMap { agent in
             let own = all.filter { $0.agent == agent.id }
             return own.isEmpty ? nil : (agent.id, agent.name, own)
@@ -77,25 +83,13 @@ struct HistoryView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                // Same idea as the Git tab by default: the selected folder.
-                // "All" is the one place that lists every conversation.
-                Picker("Scope", selection: $model.historyShowsAll) {
-                    Text("This Folder").tag(false)
-                    Text("All").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .controlSize(.small)
-                .fixedSize()
-                .help("Show this folder's conversations, or every conversation on \(model.macName)")
-                Text(model.history.map { $0.count == 1 ? "1 conversation" : "\($0.count) conversations" } ?? "Loading…")
+                Text(list.map { $0.count == 1 ? "1 conversation" : "\($0.count) conversations" } ?? "Loading…")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .fixedSize()
                 Spacer()
                 Button {
-                    model.refreshHistory()
+                    model.refreshHistory(ofFolder: ofFolder)
                 } label: {
                     Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .semibold))
                 }
@@ -104,26 +98,28 @@ struct HistoryView: View {
                 .help("Refresh")
             }
             .padding(.horizontal, 14)
-            .padding(.vertical, 9)
+            // Under the list's title at the window's left, under the tabs in
+            // the side panel, which have no title between.
+            .padding(.top, ofFolder ? 9 : 2)
+            .padding(.bottom, 9)
             Theme.hairline.frame(height: 1)
             content
         }
-        .onAppear { model.refreshHistory() }
+        .onAppear { model.refreshHistory(ofFolder: ofFolder) }
         .onReceive(refresh) { _ in
-            if NSApp.isActive { model.refreshHistory() }
+            if NSApp.isActive { model.refreshHistory(ofFolder: ofFolder) }
         }
     }
 
+    private var list: [Conversation]? { ofFolder ? model.folderHistory : model.history }
+
     @ViewBuilder
     private var content: some View {
-        if model.selectedFolder == nil && !model.historyShowsAll {
-            placeholder("Select a folder to see its conversations, or switch to All.")
-        } else if let history = model.history {
+        if ofFolder && model.panelFolder == nil {
+            placeholder("Select a folder to see its conversations.")
+        } else if let history = list {
             if history.isEmpty {
-                placeholder(
-                    model.historyShowsAll
-                        ? "No agent has a conversation on \(model.macName) yet."
-                        : "No agent has a conversation in this folder yet.\nSwitch to All to see the ones from other folders.")
+                placeholder(ofFolder ? "No agent has a conversation in this folder yet." : "No agent has a conversation on \(model.macName) yet.")
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
@@ -135,7 +131,7 @@ struct HistoryView: View {
                                 }
                             if expanded {
                                 ForEach(section.conversations) { conversation in
-                                    ConversationRow(conversation: conversation, showsFolder: model.historyShowsAll)
+                                    ConversationRow(conversation: conversation, showsFolder: !ofFolder, inSheet: ofFolder)
                                 }
                             }
                         }
@@ -190,6 +186,8 @@ private struct ConversationRow: View {
     let conversation: Conversation
     /// In the list of everything, each row says which folder it ran in.
     var showsFolder = false
+    /// The side panel's: picked, it opens in a sheet over Sessions.
+    var inSheet = false
     @State private var hovering = false
 
     private static let relative: RelativeDateTimeFormatter = {
@@ -198,50 +196,34 @@ private struct ConversationRow: View {
         return formatter
     }()
 
-    /// The row's hover color as an opaque color, to put behind the actions.
     private static let hoverFill = Color(red: 0.152, green: 0.156, blue: 0.178)
-
-    private var actions: some View {
-        HStack(spacing: 10) {
-            if !targets.isEmpty {
-                Button {
-                    model.requestHandoff(conversation)
-                } label: {
-                    Label("Hand Off", systemImage: "arrowshape.turn.up.right.fill")
-                        .font(.system(size: 10.5, weight: .semibold))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .help("Give this work to another agent")
-            }
-            Button {
-                model.resume(conversation)
-            } label: {
-                Label("Resume", systemImage: "play.fill")
-                    .font(.system(size: 10.5, weight: .semibold))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(Theme.accent(for: conversation.agent))
-            .help("Continue this conversation in a new session")
-        }
-        .padding(.leading, 30)
-        .padding(.trailing, 8)
-        .padding(.vertical, 5)
-        .background(
-            // Fades in from the left so the title does not end at a hard
-            // edge, and is solid before the first icon so no text shows through it.
-            LinearGradient(
-                stops: [.init(color: Self.hoverFill.opacity(0), location: 0), .init(color: Self.hoverFill, location: 0.14)],
-                startPoint: .leading, endPoint: .trailing)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-    }
-
-    private var targets: [AgentInfo] { model.handoffTargets(from: conversation.agent) }
 
     private var when: String {
         // "in 0 sec" reads oddly for something that just happened.
         conversation.updatedAt.timeIntervalSinceNow > -60 ? "now" : Self.relative.localizedString(for: conversation.updatedAt, relativeTo: Date())
+    }
+
+    private var selected: Bool { !inSheet && model.historySelection?.id == conversation.id }
+
+    private var tip: String {
+        showsFolder ? conversation.title + "\n" + (conversation.cwd as NSString).abbreviatingWithTildeInPath : conversation.title
+    }
+
+    private var fill: Color { selected ? Color.white.opacity(0.11) : (hovering ? Self.hoverFill : .clear) }
+
+    /// In a new session, which is then what is looked at.
+    private func resume() {
+        model.resume(conversation)
+        model.panelConversation = nil
+        model.show(.sessions, toggling: false)
+    }
+
+    private func pick() {
+        if inSheet {
+            model.panelConversation = conversation
+        } else {
+            model.historySelection = conversation
+        }
     }
 
     var body: some View {
@@ -271,33 +253,137 @@ private struct ConversationRow: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(hovering ? Self.hoverFill : .clear)
+                .fill(fill)
         )
-        // The actions float over the end of the title instead of taking
-        // room in the row, so showing them never squeezes the time and
-        // folder line out of view.
-        .overlay(alignment: .topTrailing) {
-            if hovering { actions }
-        }
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
-        .onTapGesture(count: 2) { model.resume(conversation) }
-        // Resume and Hand Off have their own buttons on the row, so the menu
-        // only holds what has no button.
-        .contextMenu {
-            Button("Copy Resume Command") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(conversation.resumeCommand, forType: .string)
-            }
-        }
-        .help(showsFolder ? "\(conversation.title)\n\((conversation.cwd as NSString).abbreviatingWithTildeInPath)" : conversation.title)
-        // The row's buttons only show under the pointer. Without one, the
-        // row says what it is and offers what they do as its actions.
+        // Picked at once, it is shown in History's middle, with what can be
+        // done with it; a second click resumes it. With two tap gestures the
+        // first would wait to know there is no second.
+        .simultaneousGesture(TapGesture().onEnded(pick))
+        .simultaneousGesture(TapGesture(count: 2).onEnded(resume))
+        // Resume, Copy Resume Command and Hand Off are where it opens, in
+        // the middle or in a sheet: the row has no menu of its own.
+        .help(tip)
+        // The row says what it is and offers what the middle does as its actions.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(conversation.title)
         .accessibilityIdentifier("conversation-" + conversation.sessionID)
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction(named: "Resume") { model.resume(conversation) }
+        .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { pick() }
+        .accessibilityAction(named: "Resume") { resume() }
         .accessibilityAction(named: "Hand Off") { model.requestHandoff(conversation) }
+    }
+}
+
+/// Which of the folder's git worktrees the side panel shows (#33), and what
+/// to do with one whose work is finished (#23). Shown when the folder has
+/// more than its own.
+private struct WorktreeBar: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var discarding: WorktreeInfo?
+    @State private var settingUp = false
+    @State private var setup = ""
+
+    private var folder: String? { model.selectedFolder }
+    private var list: [WorktreeInfo] { folder.flatMap { model.worktrees[$0] } ?? [] }
+    private var shown: WorktreeInfo? { list.first { $0.path == (model.shownWorktree ?? folder) } ?? list.first }
+
+    private func title(_ worktree: WorktreeInfo) -> String {
+        if worktree.isMain { return (worktree.path as NSString).lastPathComponent + (worktree.branch.map { " · \($0)" } ?? "") }
+        return worktree.branch ?? (worktree.path as NSString).lastPathComponent
+    }
+
+    private func detail(_ worktree: WorktreeInfo) -> String {
+        if worktree.missing { return "missing: its folder is gone" }
+        var parts: [String] = []
+        if worktree.ahead > 0 { parts.append("\(worktree.ahead) ahead") }
+        if worktree.changed > 0 { parts.append("\(worktree.changed) changed") }
+        if !worktree.isAgentTerm && !worktree.isMain { parts.append((worktree.path as NSString).abbreviatingWithTildeInPath) }
+        if worktree.inUse { parts.append("in use") }
+        return parts.joined(separator: ", ")
+    }
+
+    var body: some View {
+        if let folder, list.count > 1, let shown {
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.branch").font(.system(size: 10.5)).foregroundStyle(.secondary)
+                Menu {
+                    ForEach(list) { worktree in
+                        Button {
+                            model.shownWorktree = worktree.isMain ? nil : worktree.path
+                        } label: {
+                            let more = detail(worktree)
+                            Text(title(worktree) + (more.isEmpty ? "" : " — \(more)"))
+                        }
+                        .disabled(worktree.missing)
+                    }
+                    Divider()
+                    Button("Setup Command for New Worktrees…") {
+                        setup = model.worktreeSetups[folder] ?? ""
+                        settingUp = true
+                    }
+                } label: {
+                    Text(title(shown)).font(.system(size: 12, weight: .medium)).lineLimit(1)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .accessibilityIdentifier("worktree-menu")
+                Text(detail(shown)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 0)
+                if !shown.isMain {
+                    Menu("Finish") {
+                        Button("Merge into \(list.first?.branch ?? "the folder's branch")") {
+                            model.finishWorktree(shown, of: folder, .merge, deleteBranch: shown.isAgentTerm)
+                            model.shownWorktree = nil
+                        }
+                        .disabled(shown.changed > 0 || shown.ahead == 0)
+                        Button("Open a Pull Request") { model.finishWorktree(shown, of: folder, .pullRequest, deleteBranch: false) }
+                            .disabled(model.diff?.pushRemote == nil && model.diff?.upstream == nil)
+                        Divider()
+                        Button("Throw Away…", role: .destructive) { discarding = shown }
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color.white.opacity(0.03))
+            .help("The side panel shows this worktree's changes, history and files")
+            .confirmationDialog(
+                "Throw away \(discarding.map(title) ?? "this worktree")?", isPresented: Binding(get: { discarding != nil }, set: { if !$0 { discarding = nil } })
+            ) {
+                Button("Throw Away the Worktree and Its Branch", role: .destructive) {
+                    if let discarding { model.finishWorktree(discarding, of: folder, .discard, deleteBranch: true) }
+                    model.shownWorktree = nil
+                }
+                Button("Throw Away the Worktree, Keep the Branch", role: .destructive) {
+                    if let discarding { model.finishWorktree(discarding, of: folder, .discard, deleteBranch: false) }
+                    model.shownWorktree = nil
+                }
+            } message: {
+                Text(discarding.map { $0.hasUnmergedWork ? "It has work that is not merged: \(detail($0)). It will be lost." : "Its folder is removed." } ?? "")
+            }
+            .sheet(isPresented: $settingUp) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("Setup Command").font(.headline)
+                    Text("Run in each new worktree of this folder before its session starts, as in a terminal: `npm install`, `cp ../../../.env .`. Nothing else is copied into a new worktree.")
+                        .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    TextField("None", text: $setup).textFieldStyle(.roundedBorder)
+                    HStack {
+                        Spacer()
+                        Button("Cancel") { settingUp = false }.keyboardShortcut(.cancelAction)
+                        Button("Save") {
+                            model.setWorktreeSetup(setup, for: folder)
+                            settingUp = false
+                        }
+                        .keyboardShortcut(.defaultAction)
+                    }
+                }
+                .padding(20)
+                .frame(width: 460)
+            }
+        }
     }
 }

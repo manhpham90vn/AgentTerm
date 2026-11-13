@@ -116,10 +116,24 @@ final class FilesModel: ObservableObject {
         staleReads = []
     }
 
-    private func read(_ path: String) {
+    private func read(_ path: String, anyway: Bool = false) {
         guard let remote else { return }
         readsDue[path, default: 0] += 1
-        remote(.readFile(path: path))
+        remote(.readFile(path: path, anyway: anyway ? true : nil))
+    }
+
+    /// Opens a text file that is over the size it is opened at by itself,
+    /// as the user asked (#21).
+    func openAnyway(_ path: String) {
+        guard let index = documents.firstIndex(where: { $0.path == path }) else { return }
+        if isRemote {
+            // Shown as loading until it comes.
+            documents[index].content = .text("")
+            documents[index].isLoading = true
+            read(path, anyway: true)
+        } else {
+            documents[index] = Self.load(path, anyway: true)
+        }
     }
 
     /// What another Mac's host answered about its files.
@@ -258,8 +272,8 @@ final class FilesModel: ObservableObject {
 
     // MARK: Documents
 
-    private static func load(_ path: String) -> OpenDocument {
-        let content = FileBrowser.read(path)
+    private static func load(_ path: String, anyway: Bool = false) -> OpenDocument {
+        let content = FileBrowser.read(path, anyway: anyway)
         var text = ""
         if case .text(let loaded) = content { text = loaded }
         return OpenDocument(path: path, content: content, text: text, savedText: text)

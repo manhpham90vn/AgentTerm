@@ -18,6 +18,14 @@ struct SessionsView: View {
                         VersionCard(match: model.hostMatch)
                     }
                     if model.status == .connected {
+                        // Said in words, rather than shown as a list that
+                        // emptied: the host on the Mac stopped, and its
+                        // sessions ended with it.
+                        ForEach(model.failures) { failure in
+                            FailureCard(failure: failure)
+                        }
+                    }
+                    if model.status == .connected {
                         // How the Mac is doing: the Mac this phone is
                         // connected to, not the phone itself.
                         SystemStatsPanel(store: model.system, large: true) { figures in
@@ -131,6 +139,35 @@ private struct VersionCard: View {
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.yellow.opacity(0.12)))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("version-card")
+    }
+}
+
+/// A part of AgentTerm on the Mac that stopped without being asked to.
+private struct FailureCard: View {
+    @EnvironmentObject private var model: PhoneModel
+    let failure: PartFailure
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(failure.headline(on: model.pairing?.name ?? "the Mac"))
+                    .font(.subheadline.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(failure.details)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("failure-card")
+            Spacer(minLength: 0)
+            Button("Dismiss") { model.dismiss(failure) }
+                .font(.footnote.weight(.semibold))
+                .accessibilityIdentifier("failure-dismiss")
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.orange.opacity(0.12)))
     }
 }
 
@@ -257,6 +294,8 @@ private struct FolderSection: View {
     @State private var dropTarget: String?
     @State private var renaming: TabGroup?
     @State private var newName = ""
+    /// Ending a session asks first, as everywhere else.
+    @State private var ending: SessionInfo?
 
     @ViewBuilder
     private func arrangeMenu(_ session: SessionInfo) -> some View {
@@ -442,9 +481,9 @@ private struct FolderSection: View {
                                 }
                             }
                             Button(role: .destructive) {
-                                model.end(session.id)
+                                ending = session
                             } label: {
-                                Label("End Session", systemImage: "xmark.circle")
+                                Label("End Session…", systemImage: "xmark.circle")
                             }
                         }
                         Palette.hairline.frame(height: 1).padding(.leading, 38)
@@ -454,6 +493,15 @@ private struct FolderSection: View {
                     .padding(.horizontal, 6)
                     .padding(.top, 12)
                     .padding(.bottom, 10)
+                    // Not on the section, whose alert to rename a group it would hide.
+                    .confirmationDialog(
+                        "End \(ending?.title ?? "this session")?", isPresented: Binding(get: { ending != nil }, set: { if !$0 { ending = nil } }),
+                        titleVisibility: .visible, presenting: ending
+                    ) { session in
+                        Button("End Session", role: .destructive) { model.end(session.id) }
+                    } message: { _ in
+                        Text("The program running in it is stopped.")
+                    }
             }
             .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -462,6 +510,37 @@ private struct FolderSection: View {
                 Button("Rename") { if let renaming { model.sessionLayout.rename(renaming.id, to: newName) } }
                 Button("Cancel", role: .cancel) {}
             }
+        }
+    }
+}
+
+/// What the agent in a session is doing (#3): working, waiting for
+/// permission or an answer, done. Nothing when that is not known; when
+/// something keeps it from being known, a mark whose label says why.
+private struct StateMark: View {
+    let session: SessionInfo
+
+    var body: some View {
+        if let state = session.state {
+            let (symbol, color): (String, Color) = {
+                switch state {
+                case .working: return ("circle.dotted", .blue)
+                case .waitingForPermission: return ("hand.raised.fill", .orange)
+                case .waitingForAnswer: return ("questionmark.bubble.fill", .orange)
+                case .done: return ("checkmark.circle.fill", .green)
+                }
+            }()
+            Image(systemName: symbol)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(color)
+                .accessibilityLabel(state.name)
+                .accessibilityIdentifier("state-\(session.id)")
+        } else if let note = session.stateNote {
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 13))
+                .foregroundStyle(.secondary)
+                .accessibilityLabel(note)
+                .accessibilityIdentifier("state-note-\(session.id)")
         }
     }
 }
@@ -484,10 +563,31 @@ private struct SessionRow: View {
             }
             // The conversation's title once the agent has saved one, the
             // agent's name until then.
-            Text(session.displayName)
-                .font(.body)
-                .lineLimit(1)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(session.displayName)
+                    .font(.body)
+                    .lineLimit(1)
+                if let branch = session.branch {
+                    Label(branch, systemImage: "arrow.triangle.branch")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
             Spacer(minLength: 8)
+            if session.schedule != nil {
+                Image(systemName: "calendar.badge.clock")
+                    .font(.system(size: 12))
+                    .foregroundStyle(session.schedulePermissions == .skipAll ? .orange : .secondary)
+                    .accessibilityLabel(session.schedulePermissions == .skipAll ? "A scheduled run, without asking for permission" : "A scheduled run")
+            }
+            if session.openedBy != nil {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Opened by an agent")
+            }
+            StateMark(session: session)
             Text("\(session.size.cols)×\(session.size.rows)")
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundStyle(.tertiary)

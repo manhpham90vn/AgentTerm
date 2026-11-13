@@ -31,8 +31,36 @@ final class AppModel: ObservableObject {
     @Published private(set) var sessions: [SessionInfo] = []
     @Published private(set) var agents: [AgentInfo] = []
     @Published private(set) var agentsLoaded = false
-    @Published var selectedFolder: String? { didSet { if selectedFolder != oldValue { folderChanged() } } }
-    @Published var selectedSession: SessionID?
+    @Published var selectedFolder: String? {
+        didSet {
+            guard selectedFolder != oldValue else { return }
+            // Another folder: its own worktree, unless a session says otherwise.
+            if let shownWorktree, let selectedFolder, WorktreePath.belongs(shownWorktree, to: selectedFolder) == false || shownWorktree == selectedFolder {
+                self.shownWorktree = nil
+            } else if selectedFolder == nil {
+                shownWorktree = nil
+            }
+            folderChanged()
+        }
+    }
+    /// The worktree of the selected folder the side panel shows (#23, #33),
+    /// nil for the folder itself.
+    @Published var shownWorktree: String? { didSet { if shownWorktree != oldValue { folderChanged() } } }
+    /// What the side panel shows: the worktree picked, or the folder.
+    var panelFolder: String? { shownWorktree ?? selectedFolder }
+    @Published var selectedSession: SessionID? {
+        // The side panel shows the worktree of the session in front, however
+        // it came to be selected (#23).
+        didSet {
+            guard selectedSession != oldValue, let session = sessions.first(where: { $0.id == selectedSession }) else { return }
+            if let project = WorktreePath.project(of: session.cwd), folders.contains(where: { $0.path == project }) {
+                if selectedFolder != project { selectedFolder = project }
+                shownWorktree = session.cwd
+            } else if folders.contains(where: { $0.path == session.cwd }) {
+                shownWorktree = nil
+            }
+        }
+    }
     /// Sessions currently sized by another device, with that device's grid.
     @Published private(set) var foreignSizes: [SessionID: TermSize] = [:]
     @Published private(set) var diff: DiffSnapshot?
@@ -63,6 +91,45 @@ final class AppModel: ObservableObject {
     /// keeps running across an update of the app, so after one it can be
     /// the old version's.
     @Published private(set) var hostMatch = ProtocolMatch.same
+
+    /// Parts of AgentTerm on the Mac on screen that stopped without being
+    /// asked to, as its host reports them, until they are dismissed.
+    @Published private(set) var failures: [PartFailure] = []
+
+    /// The user has seen it: it goes here and on every other device.
+    func dismiss(_ failure: PartFailure) {
+        failures.removeAll { $0.id == failure.id }
+        connection?.send(.dismissFailure(id: failure.id))
+    }
+
+    /// When this Mac's host died lately, as the app saw it go. A host that
+    /// dies this often within a minute is not started again by itself.
+    private var hostDeaths: [Date] = []
+    /// Three times in sixty seconds, as the host counts too.
+    static let deathsThatBreak = HostMarker.deathsThatBreak
+    static let deathWindow = HostMarker.deathWindow
+    /// True when the host died too often to be started again by itself.
+    @Published private(set) var hostBroken = false
+    /// How often it died within the minute, for saying so.
+    @Published private(set) var recentDeaths = 0
+    /// How the last host this app started ended, in words, once it has.
+    @Published private(set) var lastHostExit: String?
+    /// The host this app started last, and whether it ever answered.
+    private var launchedHost: pid_t?
+    private var launchedHostAnswered = false
+    /// Counts the starts, so that what is learnt of one that is over is dropped.
+    private var launchCount = 0
+    /// Why the host this app started could not be started: it ended
+    /// before it ever answered.
+    private var launchFailure: String?
+
+    /// What the launch screen says when the host keeps dying.
+    var brokenReason: String {
+        var text = "It stopped unexpectedly \(recentDeaths) times within a minute, so it is not started again by itself."
+        if let lastHostExit { text += " The last time, \(lastHostExit)." }
+        text += " Try Again starts it; its log is \((DaemonLauncher.logFile.path as NSString).abbreviatingWithTildeInPath)."
+        return text
+    }
 
     /// Stops the host that is running and starts this app's own in its
     /// place. Its sessions end with it.
@@ -131,6 +198,108 @@ final class AppModel: ObservableObject {
     /// Whether the host starts when the user logs in. Nil from a host that
     /// cannot be started that way, or that has not said yet.
     @Published private(set) var startAtLogin: Bool?
+    /// Whether agents may open shells the user sees, through AgentTerm's
+    /// MCP server installed in their configuration (#10). Nil when the
+    /// host does not install it.
+    @Published private(set) var agentShells: Bool?
+    /// Whether the agents are asked to run their commands in shells the user sees.
+    @Published private(set) var agentsUseShells: Bool?
+
+    func setAgentsUseShells(_ on: Bool) {
+        agentsUseShells = on
+        connection?.send(.setAgentsUseShells(on))
+    }
+
+    /// The schedules of the Mac on screen (#11), as its host keeps them.
+    @Published private(set) var schedules: [Schedule] = []
+
+    /// Each folder's git worktrees (#23, #33), as its host lists them.
+    @Published private(set) var worktrees: [String: [WorktreeInfo]] = [:]
+    @Published private(set) var worktreeSetups: [String: String] = [:]
+    /// What became of the last worktree that was finished.
+    @Published var worktreeSaid: String?
+
+    func listWorktrees(_ folder: String) { connection?.send(.listWorktrees(folder: folder)) }
+    func finishWorktree(_ worktree: WorktreeInfo, of folder: String, _ finish: WorktreeFinish, deleteBranch: Bool) {
+        connection?.send(.finishWorktree(folder: folder, path: worktree.path, finish: finish, deleteBranch: deleteBranch))
+    }
+    func setWorktreeSetup(_ command: String?, for folder: String) { connection?.send(.setWorktreeSetup(folder: folder, command: command)) }
+
+    func save(_ schedule: Schedule) { connection?.send(.saveSchedule(schedule)) }
+
+    /// The schedule being made or changed in Settings > Schedules. Kept here
+    /// rather than in the view: leaving Settings drops it.
+    @Published var editingSchedule: Schedule?
+    /// The pane of Settings: General each time Settings is opened.
+    @Published var settingsTab = "general"
+
+    /// The window's three places, chosen in the bar at its left edge, as
+    /// the iPhone's tabs are.
+    enum Place: String { case sessions, history, schedules, settings }
+    @Published private(set) var place = Place.sessions
+    /// The conversation picked in History, shown in the middle of the window.
+    @Published var historySelection: Conversation?
+    /// The conversation picked in the side panel's History, in a sheet over
+    /// Sessions.
+    @Published var panelConversation: Conversation?
+
+    /// Goes to a place, with its list shown. The place already shown hides
+    /// its list, or shows it again.
+    func show(_ place: Place, toggling: Bool = true) {
+        if place == self.place {
+            if toggling { showSidebar.toggle() } else { showSidebar = true }
+            return
+        }
+        if place != .sessions {
+            // What is typed there is not the terminal's.
+            NSApp.keyWindow?.makeFirstResponder(nil)
+        }
+        if place == .settings { settingsTab = "general" }
+        // A schedule half made is dropped when Schedules is left.
+        if self.place == .schedules { editingSchedule = nil }
+        self.place = place
+        showSidebar = true
+    }
+    func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
+
+    /// A schedule to start from: the folder in front, the first agent.
+    func newSchedule() -> Schedule {
+        let agent = agents.first { $0.path != nil }?.id ?? "claude"
+        let folder = selectedFolder ?? folders.first?.path ?? ""
+        return Schedule(name: "Every morning", agent: agent, folder: folder, prompt: "", when: .daily(hour: 9, minute: 0))
+    }
+
+    /// An agent's name for the user, its id when it is not known here.
+    func agentName(_ id: String) -> String { agents.first { $0.id == id }?.name ?? AgentDetector.known.first { $0.id == id }?.name ?? id }
+
+    /// An agent of a session that is not the one in front finished, or
+    /// waits for the user (#22): shown until it is opened or dismissed.
+    @Published private(set) var agentNotice: AgentNotice?
+    /// What was told of each session, so that each is told once.
+    private var told: [SessionID: AgentState] = [:]
+
+    /// Opens the session a notice is about.
+    func open(_ notice: AgentNotice) {
+        agentNotice = nil
+        guard let session = sessions.first(where: { $0.id == notice.session }) else { return }
+        // The session is in Sessions, wherever the window was.
+        show(.sessions, toggling: false)
+        select(session: session)
+    }
+
+    func dismissAgentNotice() { agentNotice = nil }
+
+    /// The host of this Mac learns from it whether someone is at the Mac:
+    /// another Mac's host is not told, since this Mac is not that one.
+    private func tellWhetherInFront() {
+        guard !isRemote else { return }
+        connection?.send(.appInFront(NSApp.isActive))
+    }
+
+    func setAgentShells(_ on: Bool) {
+        agentShells = on
+        connection?.send(.setAgentShells(on))
+    }
 
     func setStartAtLogin(_ on: Bool) {
         startAtLogin = on
@@ -191,13 +360,13 @@ final class AppModel: ObservableObject {
     /// Asks an agent for the message of what is staged in the selected
     /// folder. The host runs it; the answer lands in the message field.
     func writeCommitMessage() {
-        guard let directory = selectedFolder, status == .connected, !writingCommitMessage.contains(directory) else { return }
+        guard let directory = panelFolder, status == .connected, !writingCommitMessage.contains(directory) else { return }
         writingCommitMessage.insert(directory)
         connection?.send(.writeCommitMessage(path: directory))
     }
 
     func cancelCommitMessage() {
-        guard let directory = selectedFolder, writingCommitMessage.contains(directory) else { return }
+        guard let directory = panelFolder, writingCommitMessage.contains(directory) else { return }
         connection?.send(.cancelCommitMessage(path: directory))
     }
 
@@ -243,7 +412,7 @@ final class AppModel: ObservableObject {
     /// Pushes the selected folder's branch. A branch that follows nothing
     /// yet is asked about first, saying where it would go.
     func push() {
-        guard let directory = selectedFolder, let diff, let branch = diff.branch else { return }
+        guard let directory = panelFolder, let diff, let branch = diff.branch else { return }
         if diff.upstream == nil, let remote = diff.pushRemote {
             pendingFirstPush = FirstPush(folder: directory, branch: branch, remote: remote)
         } else {
@@ -256,7 +425,7 @@ final class AppModel: ObservableObject {
     }
 
     func pull() {
-        guard let directory = selectedFolder else { return }
+        guard let directory = panelFolder else { return }
         sync("pull", in: directory) { GitActions.pull(in: $0) }
     }
 
@@ -306,18 +475,12 @@ final class AppModel: ObservableObject {
         var keepDiff = false
         let id = UUID()
     }
-    /// Past agent conversations of the selected folder. `nil` while loading.
+    /// Every agent conversation on the Mac, as History lists them. `nil`
+    /// while loading.
     @Published private(set) var history: [Conversation]?
-    /// History lists the selected folder's conversations, or every
-    /// conversation on this Mac when this is on.
-    @Published var historyShowsAll = UserDefaults.standard.bool(forKey: "historyShowsAll") {
-        didSet {
-            guard historyShowsAll != oldValue else { return }
-            UserDefaults.standard.set(historyShowsAll, forKey: "historyShowsAll")
-            history = nil
-            refreshHistory()
-        }
-    }
+    /// The conversations of the folder on show, as the side panel's History
+    /// lists them: that folder's only. `nil` while loading.
+    @Published private(set) var folderHistory: [Conversation]?
     /// The folder list on the left.
     @Published var showSidebar = UserDefaults.standard.object(forKey: "showSidebar") as? Bool ?? true {
         didSet { UserDefaults.standard.set(showSidebar, forKey: "showSidebar") }
@@ -340,6 +503,9 @@ final class AppModel: ObservableObject {
 
     /// The room the terminal has in the window, measured by the view.
     var terminalArea: CGSize = .zero
+    /// The strip of tabs' height, as last shown: it is not there before the
+    /// first session, which has less room than the launch screen once it is.
+    var tabStripHeight: CGFloat = 37
 
     /// The grid a new session should start with: what fits the terminal's
     /// place in the window, so its first output is drawn for the right width.
@@ -367,9 +533,45 @@ final class AppModel: ObservableObject {
     private var connectAttempts = 0
     private var launchedDaemon = false
     private var selectNextAttached = false
+    /// What is being started and not shown yet: a conversation resumed, a
+    /// handoff. The middle of the window says so until its session is.
+    @Published private(set) var starting: String?
+
+    private func beginStarting(_ what: String) {
+        starting = what
+        // Never for good: a session the host did not start says nothing.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            if self?.starting == what { self?.starting = nil }
+        }
+    }
     private var diffTimer: Timer?
+    /// Watches the folder the side panel shows, on this Mac.
+    private var panelWatch: FolderWatch?
+    private var panelWatched: String?
+
+    /// Reads the changes again when the files of the folder shown change.
+    private func watchPanelFolder() {
+        let folder = isRemote ? nil : panelFolder
+        guard folder != panelWatched else { return }
+        panelWatched = folder
+        panelWatch = nil
+        guard let folder else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let paths = FolderWatch.paths(for: folder)
+            DispatchQueue.main.async {
+                guard let self, self.panelWatched == folder else { return }
+                self.panelWatch = FolderWatch(paths: paths, queue: .main) { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self, self.showDiff, self.panelFolder == folder else { return }
+                        self.refreshDiff()
+                    }
+                }
+            }
+        }
+    }
     private var diffGeneration = 0
     private var historyGeneration = 0
+    private var folderHistoryGeneration = 0
     private let foldersKey = "folders"
     private var pendingFolderSelection: String?
 
@@ -394,16 +596,36 @@ final class AppModel: ObservableObject {
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.syncTabs() }
             .store(in: &observers)
+        // A key or a click in the app: someone is at the Mac again, after a
+        // device was used. A click in a terminal another device sized
+        // takes it back for this Mac.
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown]) { [weak self] event in
+            self?.used(by: event)
+            return event
+        }
         // The SSH configuration may have been edited while the app was behind.
         NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
-            .sink { [weak self] _ in self?.refreshSSHHosts() }
+            .sink { [weak self] _ in
+                self?.refreshSSHHosts()
+                self?.tellWhetherInFront()
+            }
             .store(in: &observers)
+        NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
+            .sink { [weak self] _ in self?.tellWhetherInFront() }
+            .store(in: &observers)
+        // Another Mac's folder is asked about on a timer; its host works the
+        // changes out again only when its files changed. This Mac's own is
+        // read again when its files change (`panelWatch`) (#21).
         diffTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.showDiff, NSApp.isActive else { return }
+                guard let self, self.isRemote, self.showDiff, NSApp.isActive else { return }
                 self.refreshDiff()
             }
         }
+        // Changes made while the app was behind.
+        NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .sink { [weak self] _ in if self?.isRemote == false, self?.showDiff == true { self?.refreshDiff() } }
+            .store(in: &observers)
     }
 
     // MARK: Derived state
@@ -412,9 +634,27 @@ final class AppModel: ObservableObject {
 
     var currentController: TerminalController? { selectedSession.flatMap { controllers[$0] } }
 
+    /// What the host last said of whether someone is at the Mac: false once
+    /// a device was used, until this app is.
+    private var hostSaysMacInUse = true
+    private var eventMonitor: Any?
+
+    private func used(by event: NSEvent) {
+        if !hostSaysMacInUse {
+            // Said once: the host answers that the Mac is in use again.
+            hostSaysMacInUse = true
+            connection?.send(.used)
+        }
+        guard event.type == .leftMouseDown, let controller = currentController, foreignSizes[controller.session] != nil else { return }
+        let terminal = controller.view
+        guard event.window === terminal.window, terminal.bounds.contains(terminal.convert(event.locationInWindow, from: nil)) else { return }
+        // Clicking in it is using it, as typing is.
+        controller.claimSize()
+    }
+
     /// A folder's sessions in the order of the tabs, so the list on the
     /// left and the strip of tabs agree, and arranging one arranges both.
-    func sessions(in folder: Folder) -> [SessionInfo] { inTabOrder(sessions.filter { $0.cwd == folder.path }) }
+    func sessions(in folder: Folder) -> [SessionInfo] { inTabOrder(sessions.filter { WorktreePath.belongs($0.cwd, to: folder.path) }) }
 
     func inTabOrder(_ list: [SessionInfo]) -> [SessionInfo] {
         let place = Dictionary(tabLayout.order.enumerated().map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
@@ -427,7 +667,8 @@ final class AppModel: ObservableObject {
     /// Sessions started somewhere that is not one of the listed folders.
     var looseSessions: [SessionInfo] {
         let known = Set(folders.map(\.path))
-        return sessions.filter { !known.contains($0.cwd) }
+        // A session in a worktree of a folder is that folder's (#23).
+        return sessions.filter { !known.contains($0.cwd) && !known.contains(WorktreePath.project(of: $0.cwd) ?? "") }
     }
 
     /// Where a new session starts. Nil on another Mac with no folder picked:
@@ -442,10 +683,105 @@ final class AppModel: ObservableObject {
     /// phones and the other Macs reach this Mac through it all the same.
     private func startOwnHost() {
         guard let executable = DaemonLauncher.bundledExecutable else { return }
+        let arguments = ["--port", String(port)]
         let port = port
         DispatchQueue.global(qos: .utility).async {
             guard DaemonLauncher.listener(onPort: port) == nil else { return }
-            DaemonLauncher.launch(executable: executable, arguments: ["--port", String(port)])
+            // Through launchd while Start at Login is on, as always.
+            let item = LoginItem.forHost(executable: executable, arguments: arguments)
+            guard case .spawned(let pid) = DaemonLauncher.startHost(executable: executable, arguments: arguments, loginItem: item).start else { return }
+            // Only to take it off the system's books when it ends.
+            DaemonLauncher.watch(pid) { _ in }
+        }
+    }
+
+    /// The launch agent of this app's host, nil for an app with a state
+    /// folder of its own.
+    private func loginItem(_ executable: String) -> LoginItem? {
+        LoginItem.forHost(executable: executable, arguments: ["--port", String(port)])
+    }
+
+    /// Starts this Mac's host, and watches it: how it ends is what the app
+    /// says when it cannot be started, or keeps stopping. While Start at
+    /// Login is on, launchd starts it (`DaemonLauncher.startHost`), so the
+    /// host has one owner; the app learns from launchd how it ended.
+    private func launchHost(_ executable: String) {
+        launchFailure = nil
+        launchedHostAnswered = false
+        launchedHost = nil
+        launchCount += 1
+        let count = launchCount
+        let arguments = ["--port", String(port)]
+        let item = loginItem(executable)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let (start, lastExit) = DaemonLauncher.startHost(executable: executable, arguments: arguments, loginItem: item)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.launchCount == count else {
+                        if case .spawned(let pid) = start { DaemonLauncher.watch(pid) { _ in } }
+                        return
+                    }
+                    // How the host launchd ran last ended: launchd started
+                    // it again, or was about to.
+                    if let lastExit { self.lastHostExit = DaemonLauncher.describe(exitStatus: lastExit, log: item?.log) }
+                    switch start {
+                    case .spawned(let pid): self.watchSpawned(pid)
+                    case .launchd: if let item { self.watchLaunchd(item, count: count) }
+                    case .running: if let item { self.watchLaunchd(item, count: count, startIfGone: executable) }
+                    case .failed(let why): self.launchFailure = why
+                    }
+                }
+            }
+        }
+    }
+
+    private func watchSpawned(_ pid: pid_t) {
+        launchedHost = pid
+        DaemonLauncher.watch(pid) { [weak self] status in
+            MainActor.assumeIsolated {
+                guard let self, self.launchedHost == pid else { return }
+                let how = DaemonLauncher.describe(exitStatus: status)
+                self.lastHostExit = how
+                // One that ended before it ever answered could not be
+                // started: that is said at once, with its reason.
+                if !self.launchedHostAnswered { self.launchFailure = how }
+            }
+        }
+    }
+
+    /// The same for a host launchd started, which is not this app's child:
+    /// launchd is asked how it is doing until it answers. One that ended
+    /// before it ever answered could not be started, and launchd would
+    /// only try again every ten seconds: it is said at once, with its
+    /// reason, and launchd is told to stop until Try Again.
+    ///
+    /// `startIfGone`: the host launchd was running when the app looked may
+    /// have been the one that just died, not yet seen to end. Gone, it is
+    /// started afresh rather than left to launchd's ten seconds.
+    private func watchLaunchd(_ item: LoginItem, count: Int, look: Int = 1, startIfGone executable: String? = nil) {
+        guard look <= 30 else { return }
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            let state = item.jobState()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.launchCount == count, !self.launchedHostAnswered else { return }
+                    // Gone, and long enough after the start that launchd has
+                    // run it: it ended. Status 0 too: a host that keeps
+                    // dying does not run, and exits cleanly so launchd leaves it.
+                    if let executable, state?.pid == nil {
+                        self.launchHost(executable)
+                        return
+                    }
+                    if let state, state.pid == nil, state.lastExitStatus != 0 || look >= 3 {
+                        let how = DaemonLauncher.describe(exitStatus: state.lastExitStatus, log: item.log)
+                        self.lastHostExit = how
+                        self.launchFailure = how
+                        DispatchQueue.global(qos: .utility).async { item.unload() }
+                        return
+                    }
+                    self.watchLaunchd(item, count: count, look: look + 1, startIfGone: executable)
+                }
+            }
         }
     }
 
@@ -530,6 +866,7 @@ final class AppModel: ObservableObject {
         diff = nil
         closeDiffTab()
         history = nil
+        folderHistory = nil
         commitMessages = [:]
         isCommitting = false
         agents = []
@@ -632,12 +969,21 @@ final class AppModel: ObservableObject {
         sessionsKnown = false
         keepAwake = nil
         startAtLogin = nil
+        agentShells = nil
+        agentsUseShells = nil
+        // The next host says its own; until then none of this one's shows.
+        keepAwakeOptions = KeepAwakeOptions()
+        commitWriter = CommitWriterSettings()
+        schedules = []
+        worktrees = [:]
+        worktreeSetups = [:]
         hostVersion = 0
         system.stats = nil
         sshHosts = []
         writingCommitMessage = []
         syncing = [:]
         hostMatch = .same
+        failures = []
         diffAnswersDue = [:]
         if pendingCommit != nil {
             // Whether git took it went with the connection. The message stays.
@@ -662,9 +1008,14 @@ final class AppModel: ObservableObject {
             if !isRemote { checkWhoseHost() }
         case .closed(let reason):
             // The host went away under a working connection, and not because
-            // the user asked for it to be restarted: worth a report. Another
-            // Mac going out of reach is not that.
-            if wasConnected, !stoppingHost, !isRemote { Telemetry.shared.recordProblem(.hostExitedUnexpectedly) }
+            // anyone asked it to stop: a host that stops as asked removes
+            // its marker first, one that was killed or crashed cannot.
+            // Another Mac going out of reach is not that.
+            if wasConnected, !stoppingHost, !isRemote, HostMarker.exists(in: HostEnvironment.supportDirectory, port: port) {
+                Telemetry.shared.recordProblem(.hostExitedUnexpectedly)
+                let now = Date()
+                hostDeaths = hostDeaths.filter { now.timeIntervalSince($0) < Self.deathWindow } + [now]
+            }
             wasConnected = false
             stoppingHost = false
             connection = nil
@@ -693,13 +1044,33 @@ final class AppModel: ObservableObject {
             }
             return
         }
+        // Broken means three times in sixty seconds: then it is not started
+        // again by itself, and the user is told why, with Try Again.
+        if hostDeaths.count >= Self.deathsThatBreak {
+            recentDeaths = hostDeaths.count
+            hostBroken = true
+            status = .failed(brokenReason)
+            // Nor by launchd, which would start it again ten seconds later.
+            if let item = DaemonLauncher.bundledExecutable.flatMap(loginItem) {
+                DispatchQueue.global(qos: .utility).async { if item.jobState()?.pid == nil { item.unload() } }
+            }
+            return
+        }
         if !launchedDaemon, let executable = DaemonLauncher.bundledExecutable {
             launchedDaemon = true
-            DaemonLauncher.launch(executable: executable, arguments: ["--port", String(port)])
+            launchHost(executable)
+        }
+        if let launchFailure {
+            // It ended before it ever answered: waiting longer will not help.
+            status = .failed("The AgentTerm host could not be started: \(launchFailure).")
+            return
         }
         connectAttempts += 1
         guard connectAttempts <= 20 else {
-            status = .failed(reason ?? "The AgentTerm host is not running.")
+            status = .failed(
+                DaemonLauncher.bundledExecutable == nil
+                    ? "This copy of AgentTerm has no host program (agenttermd) next to it to start."
+                    : "The AgentTerm host does not answer on port \(port)\(reason.map { ": \($0)" } ?? ".")")
             return
         }
         status = .connecting
@@ -712,6 +1083,12 @@ final class AppModel: ObservableObject {
     func reconnect() {
         connectAttempts = 0
         launchedDaemon = false
+        // The user asked: whatever happened before starts over, also for
+        // the host, which counts the deaths it is told of too.
+        hostDeaths = []
+        if !isRemote { HostMarker.forgetDeaths(in: HostEnvironment.supportDirectory, port: port) }
+        hostBroken = false
+        launchFailure = nil
         status = .connecting
         connect()
     }
@@ -720,13 +1097,25 @@ final class AppModel: ObservableObject {
         switch message {
         case .welcome(let version, _):
             hostVersion = version
+            tellWhetherInFront()
             refreshSSHHosts()
             hostMatch = ProtocolMatch(host: version)
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             wasConnected = true
+            hostBroken = false
+            // The host the app started, itself or through launchd, is the
+            // one that answers.
+            launchedHostAnswered = true
+            // A host that is lost later is started again: until 0.6.0 this
+            // stayed set, and only the first host that was lost ever was.
+            launchedDaemon = false
         case .sessions(let list):
             sessionsKnown = true
             sessions = list
+            // The session in front of someone at this window needs no notice.
+            let shown = NSApp.isActive ? selectedSession : nil
+            if let latest = AgentNotice.notices(in: list, told: &told).last(where: { $0.session != shown }) { agentNotice = latest }
+            if let current = agentNotice, !list.contains(where: { $0.id == current.session && $0.state == current.state }) { agentNotice = nil }
             // Pick up sessions that were already running before this window opened.
             for info in list where controllers[info.id] == nil {
                 connection?.send(.attach(session: info.id, size: info.size))
@@ -736,6 +1125,22 @@ final class AppModel: ObservableObject {
             agentsLoaded = true
         case .startAtLogin(let on):
             startAtLogin = on
+        case .agentShells(let on):
+            agentShells = on
+        case .agentsUseShells(let on):
+            agentsUseShells = on
+        case .schedules(let list):
+            schedules = list
+        case .worktrees(let folder, let list, let setup):
+            worktrees[folder] = list
+            worktreeSetups[folder] = setup
+        case .worktreeFinished(_, _, let said):
+            worktreeSaid = said
+        case .macInUse(let inUse):
+            hostSaysMacInUse = inUse
+        case .agentShellResult:
+            // For `agenttermd mcp`.
+            break
         case .keepAwake(let on):
             keepAwake = on
         case .keepAwakeOptions(let options):
@@ -784,9 +1189,13 @@ final class AppModel: ObservableObject {
                 if selectNextAttached {
                     files.active = nil
                     diffInFront = false
+                    // Started from the header, a menu or History: the
+                    // session is looked at in Sessions, wherever the window was.
+                    show(.sessions, toggling: false)
                 }
                 selectNextAttached = false
                 selectedSession = info.id
+                starting = nil
             }
         case .replayed(let id):
             replaying.remove(id)
@@ -804,6 +1213,7 @@ final class AppModel: ObservableObject {
                 selectedSession = sessions.last(where: { $0.cwd == workingDirectory })?.id ?? sessions.last?.id
             }
         case .error(let text):
+            starting = nil
             if isRemote, text == "invalid token", let mac = remote {
                 // The other Mac took this one off its paired devices. What
                 // was not saved there cannot be saved any more.
@@ -857,7 +1267,7 @@ final class AppModel: ObservableObject {
                 commitMessages[path] = nil
                 files.refresh()
             }
-            guard path == selectedFolder else { break }
+            guard path == panelFolder else { break }
             diffGeneration += 1
             apply(snapshot, to: path)
         case .diffFile(let path, let file):
@@ -883,13 +1293,21 @@ final class AppModel: ObservableObject {
                     notice = "\(session.title) has no conversation to hand off in this session yet. It saves one after your first message."
                 }
             }
-            if historyShowsAll ? path == nil : (path != nil && path == selectedFolder), history != conversations { history = conversations }
+            // Every conversation is what History asks for; the folder on
+            // show's, the side panel's History.
+            if path == nil, history != conversations { history = conversations }
+            if let path, path == panelFolder, folderHistory != conversations { folderHistory = conversations }
         case .directory(let listing):
             browseListing = listing
         case .handoffPlan(let id, let prompt):
             remoteHandoffPlan = RemoteHandoffPlan(id: id, prompt: prompt)
         case .files, .file, .fileCreated, .fileSaved:
+            if case .files(let path, let entries) = message, repositoriesAsked.remove(path) != nil {
+                repositories[path] = entries.filter { $0.isDirectory && $0.isRepository == true }.map(\.path).sorted()
+            }
             files.handle(message)
+        case .failures(let list):
+            failures = list
         case .paired, .replaying:
             break
         }
@@ -914,6 +1332,28 @@ final class AppModel: ObservableObject {
         Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
         connection?.send(.create(CreateRequest(command: agent?.id, cwd: startingDirectory, title: agent?.name, size: size)))
     }
+
+    /// Starts an agent, or a shell, in a new git worktree of the selected
+    /// folder, on a branch of its own (#23). With changes not committed, the
+    /// user is asked first: the agent there will not see them.
+    func launchInWorktree(_ agent: AgentInfo?, confirmed: Bool = false) {
+        guard status == .connected, let folder = selectedFolder else { return }
+        if !confirmed, let diff, !(diff.staged.isEmpty && diff.unstaged.isEmpty) {
+            worktreeQuestion = agent.map { .agent($0) } ?? .shell
+            return
+        }
+        lastError = nil
+        selectNextAttached = true
+        Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
+        connection?.send(.createInWorktree(request: CreateRequest(command: agent?.id, cwd: folder, title: agent?.name, size: startingSize), branch: nil))
+    }
+
+    enum WorktreeLaunch: Equatable {
+        case agent(AgentInfo)
+        case shell
+    }
+    /// Asked before a worktree is made while the folder has changes.
+    @Published var worktreeQuestion: WorktreeLaunch?
 
     /// Makes the terminal text larger or smaller, or default when `delta` is nil.
     func changeFontSize(by delta: Double?) {
@@ -952,7 +1392,13 @@ final class AppModel: ObservableObject {
         files.active = nil
         diffInFront = false
         selectedSession = session.id
-        if folders.contains(where: { $0.path == session.cwd }) { selectedFolder = session.cwd }
+        if let project = WorktreePath.project(of: session.cwd), folders.contains(where: { $0.path == project }) {
+            selectedFolder = project
+            shownWorktree = session.cwd
+        } else if folders.contains(where: { $0.path == session.cwd }) {
+            selectedFolder = session.cwd
+            shownWorktree = nil
+        }
     }
 
     func addFolder() {
@@ -1018,14 +1464,13 @@ final class AppModel: ObservableObject {
 
     private func folderChanged() {
         diff = nil
+        watchPanelFolder()
+        if let selectedFolder { listWorktrees(selectedFolder) }
         // The diff tab stays: it belongs to its own folder, not to the one on show.
-        files.setRoot(selectedFolder)
+        files.setRoot(panelFolder)
         refreshDiff()
-        // The list of every conversation does not depend on the folder.
-        if !historyShowsAll {
-            history = nil
-            refreshHistory()
-        }
+        folderHistory = nil
+        refreshHistory(ofFolder: true)
     }
 
     // MARK: Handoff
@@ -1152,6 +1597,7 @@ final class AppModel: ObservableObject {
         Telemetry.shared.record(
             .handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: folder != nil && folder != conversation.cwd))
         let size = startingSize
+        beginStarting("Handing off to \(target.name)…")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = Result { try Handoff.prepare(conversation, to: target.id, plan: plan, prompt: prompt, note: note, in: folder) }
             DispatchQueue.main.async {
@@ -1170,6 +1616,7 @@ final class AppModel: ObservableObject {
                         self.connection?.send(.addFolder(path: prepared.directory))
                     }
                 case .failure(let error):
+                    self.starting = nil
                     self.notice = "\(error)"
                 }
             }
@@ -1196,6 +1643,7 @@ final class AppModel: ObservableObject {
         Telemetry.shared.record(
             .handoff(from: .init(id: conversation.agent), to: .init(id: target.id), otherFolder: folder != nil && folder != conversation.cwd))
         selectNextAttached = true
+        beginStarting("Handing off to \(target.name)…")
         connection?.send(
             .handoff(
                 agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd, target: target.id, plan: plan, prompt: prompt,
@@ -1214,6 +1662,18 @@ final class AppModel: ObservableObject {
         connection?.send(.listDirectory(path: path))
     }
 
+    /// The repositories directly inside a folder of the other Mac, as the
+    /// handoff offers to continue in, by folder. This Mac's are looked for
+    /// on its own disk.
+    @Published private(set) var repositories: [String: [String]] = [:]
+    private var repositoriesAsked: Set<String> = []
+
+    func askRepositories(in folder: String) {
+        guard isRemote else { return }
+        repositoriesAsked.insert(folder)
+        connection?.send(.files(path: folder))
+    }
+
     func addRemoteFolder(_ path: String) {
         connection?.send(.addFolder(path: path))
         pendingFolderSelection = path
@@ -1222,26 +1682,29 @@ final class AppModel: ObservableObject {
 
     // MARK: History
 
-    func refreshHistory() {
-        let everywhere = historyShowsAll
-        let directory = selectedFolder
-        guard everywhere || directory != nil else {
-            history = []
+    /// Every conversation, or with `ofFolder` the folder on show's.
+    func refreshHistory(ofFolder: Bool = false) {
+        let directory = panelFolder
+        if ofFolder && directory == nil {
+            folderHistory = []
             return
         }
         if isRemote {
-            connection?.send(.history(path: everywhere ? nil : directory))
+            connection?.send(.history(path: ofFolder ? directory : nil))
             return
         }
-        historyGeneration += 1
-        let generation = historyGeneration
+        // Each list has its own count: one asked for does not drop the other.
+        if ofFolder { folderHistoryGeneration += 1 } else { historyGeneration += 1 }
+        let generation = ofFolder ? folderHistoryGeneration : historyGeneration
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            let found = everywhere ? AgentHistory.allConversations() : AgentHistory.conversations(in: directory ?? "")
+            let found = ofFolder ? AgentHistory.conversations(in: directory ?? "") : AgentHistory.allConversations()
             DispatchQueue.main.async {
-                guard let self, generation == self.historyGeneration,
-                    self.historyShowsAll == everywhere, everywhere || self.selectedFolder == directory
-                else { return }
-                if self.history != found { self.history = found }
+                guard let self, generation == (ofFolder ? self.folderHistoryGeneration : self.historyGeneration) else { return }
+                if ofFolder {
+                    if self.panelFolder == directory, self.folderHistory != found { self.folderHistory = found }
+                } else if self.history != found {
+                    self.history = found
+                }
             }
         }
     }
@@ -1253,11 +1716,12 @@ final class AppModel: ObservableObject {
         selectNextAttached = true
         let size = startingSize
         let name = agents.first { $0.id == conversation.agent }?.name
+        beginStarting("Resuming the conversation in \(name ?? conversation.agent)…")
         connection?.send(.create(CreateRequest(command: conversation.resumeCommand, cwd: conversation.cwd, title: name, size: size)))
     }
 
     func refreshDiff() {
-        guard let directory = selectedFolder else {
+        guard let directory = panelFolder else {
             diff = nil
             return
         }
@@ -1272,7 +1736,7 @@ final class AppModel: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             let snapshot = GitDiff.snapshot(directory: directory)
             DispatchQueue.main.async { [weak self] in
-                guard let self, generation == self.diffGeneration, self.selectedFolder == directory else { return }
+                guard let self, generation == self.diffGeneration, self.panelFolder == directory else { return }
                 self.apply(snapshot, to: directory)
             }
         }
@@ -1303,12 +1767,12 @@ final class AppModel: ObservableObject {
 
     /// The change to mark in the Git tab's list: the diff tab's, while the
     /// list is of its folder.
-    var diffTabFileInList: FileDiff? { diffTab?.folder == selectedFolder ? diffTab?.file : nil }
+    var diffTabFileInList: FileDiff? { diffTab?.folder == panelFolder ? diffTab?.file : nil }
 
     /// Shows a change's diff in the middle pane. There is one diff tab; it
     /// follows the change picked in the Git tab.
     func openDiff(_ file: FileDiff) {
-        guard let folder = selectedFolder else { return }
+        guard let folder = panelFolder else { return }
         diffTab = OpenDiff(folder: folder, file: file)
         // From another Mac the list has no diffs in it: this file's is asked for.
         if isRemote {
@@ -1335,7 +1799,7 @@ final class AppModel: ObservableObject {
     /// Stages files for the next commit. No files means every change.
     func stage(_ files: [FileDiff]) {
         let paths = files.map(\.path)
-        if isRemote, let directory = selectedFolder {
+        if isRemote, let directory = panelFolder {
             sendForDiff(.gitStage(path: directory, files: paths), in: directory)
             return
         }
@@ -1345,7 +1809,7 @@ final class AppModel: ObservableObject {
     /// Takes files out of the next commit. No files means all of them.
     func unstage(_ files: [FileDiff]) {
         let paths = files.map(\.path)
-        if isRemote, let directory = selectedFolder {
+        if isRemote, let directory = panelFolder {
             sendForDiff(.gitUnstage(path: directory, files: paths), in: directory)
             return
         }
@@ -1354,7 +1818,7 @@ final class AppModel: ObservableObject {
 
     /// Commits what is staged in the selected folder with the message written for it.
     func commit() {
-        guard let directory = selectedFolder, !isCommitting else { return }
+        guard let directory = panelFolder, !isCommitting else { return }
         let message = commitMessages[directory] ?? ""
         isCommitting = true
         if isRemote {
@@ -1393,7 +1857,7 @@ final class AppModel: ObservableObject {
     /// Runs a git change in the selected folder off the main thread, then
     /// shows what git said if it failed and reads the changes again.
     private func git(_ action: @escaping (String) -> String?, then: ((Bool) -> Void)? = nil) {
-        guard let directory = selectedFolder else { return }
+        guard let directory = panelFolder else { return }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let problem = action(directory)
             DispatchQueue.main.async { [weak self] in

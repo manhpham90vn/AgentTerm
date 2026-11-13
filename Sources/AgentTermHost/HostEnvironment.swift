@@ -74,8 +74,22 @@ public enum HostEnvironment {
             env["LANG"] = "en_US.UTF-8"
             env["LC_CTYPE"] = "en_US.UTF-8"
         }
+        // Under XCTest, a session's zsh reads none of the user's startup
+        // files, as `LoginShellPath` does not start their shell: a test
+        // touches nothing of theirs, and their .zshrc took long enough on a
+        // busy machine for tests waiting on a session's program to give up.
+        // A test that gives its host a home of its own does so with ZDOTDIR.
+        if LoginShellPath.underTests, env["ZDOTDIR"] == nil { env["ZDOTDIR"] = testShellHome.path }
         return env
     }
+
+    /// An empty folder for a session's zsh to read its startup files from,
+    /// under XCTest.
+    private static let testShellHome: URL = {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-test-zdotdir", isDirectory: true)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder
+    }()
 
     /// Arguments that start `command` through the login shell, or a plain
     /// login shell when `command` is nil. Going through the shell gives the
@@ -109,28 +123,79 @@ public enum HostEnvironment {
 /// Runs a short helper command and returns its standard output.
 enum Subprocess {
     /// - Parameter mergeErrors: also capture what the command writes to standard error.
+    ///
+    /// Started with `posix_spawn` and waited for with `waitpid`: Foundation's
+    /// `Process` took some 70 ms to start a command and to see it end, which
+    /// a git action or a look at the changes runs several of (#21).
     static func run(
         _ executable: String, _ arguments: [String], cwd: String? = nil, timeout: TimeInterval = 10, mergeErrors: Bool = false,
         environment: [String: String]? = nil
     ) -> (status: Int32, output: Data)? {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executable)
-        process.arguments = arguments
-        if let environment { process.environment = environment }
-        if let cwd { process.currentDirectoryURL = URL(fileURLWithPath: cwd) }
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = mergeErrors ? pipe : FileHandle.nullDevice
-        process.standardInput = FileHandle.nullDevice
-        do { try process.run() } catch { return nil }
+        var pipe: [Int32] = [0, 0]
+        guard Darwin.pipe(&pipe) == 0 else { return nil }
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_adddup2(&actions, pipe[1], STDOUT_FILENO)
+        if mergeErrors {
+            posix_spawn_file_actions_adddup2(&actions, pipe[1], STDERR_FILENO)
+        } else {
+            posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0)
+        }
+        if let cwd { posix_spawn_file_actions_addchdir_np(&actions, cwd) }
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        // Nothing of this process's but the three is passed on.
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
 
-        let timer = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        let argv: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map { strdup($0) } + [nil]
+        let envp: [UnsafeMutablePointer<CChar>?] = (environment ?? ProcessInfo.processInfo.environment).map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer {
+            argv.forEach { free($0) }
+            envp.forEach { free($0) }
+        }
+        var pid: pid_t = 0
+        let spawned = posix_spawn(&pid, executable, &actions, &attributes, argv, envp)
+        close(pipe[1])
+        guard spawned == 0 else {
+            close(pipe[0])
+            return nil
+        }
+
+        // Stopped when it takes too long; never once it was waited for, when
+        // its number may be another program's.
+        let lock = NSLock()
+        var ended = false
+        let timer = DispatchWorkItem {
+            lock.lock()
+            defer { lock.unlock() }
+            if !ended { kill(pid, SIGTERM) }
+        }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
         // Read before waiting so a full pipe cannot stall the child.
-        let output = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
+        var output = Data()
+        var buffer = [UInt8](repeating: 0, count: 65536)
+        while true {
+            let count = read(pipe[0], &buffer, buffer.count)
+            if count > 0 {
+                output.append(buffer, count: count)
+            } else if count < 0 && errno == EINTR {
+                continue
+            } else {
+                break
+            }
+        }
+        close(pipe[0])
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+        lock.lock()
+        ended = true
+        lock.unlock()
         timer.cancel()
-        return (process.terminationStatus, output)
+        let signal = status & 0x7f
+        return (signal == 0 ? (status >> 8) & 0xff : signal, output)
     }
 }
 #endif

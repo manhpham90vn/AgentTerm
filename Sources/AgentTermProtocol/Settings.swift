@@ -12,12 +12,28 @@ public struct KeepAwakeOptions: Codable, Equatable, Sendable {
     public var minutes: Int?
     /// When the hold that is on now ends. The host sets it.
     public var until: Date?
+    /// Only while an agent is working (#7): a shell, an agent that waits or
+    /// is done, holds nothing.
+    public var onlyWhileWorking: Bool
 
-    public init(display: Bool = false, onlyOnPower: Bool = false, minutes: Int? = nil, until: Date? = nil) {
+    public init(display: Bool = false, onlyOnPower: Bool = false, minutes: Int? = nil, until: Date? = nil, onlyWhileWorking: Bool = false) {
         self.display = display
         self.onlyOnPower = onlyOnPower
         self.minutes = minutes
         self.until = until
+        self.onlyWhileWorking = onlyWhileWorking
+    }
+
+    private enum CodingKeys: String, CodingKey { case display, onlyOnPower, minutes, until, onlyWhileWorking }
+
+    /// Settings saved before an option was added read with it off.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        display = try container.decodeIfPresent(Bool.self, forKey: .display) ?? false
+        onlyOnPower = try container.decodeIfPresent(Bool.self, forKey: .onlyOnPower) ?? false
+        minutes = try container.decodeIfPresent(Int.self, forKey: .minutes)
+        until = try container.decodeIfPresent(Date.self, forKey: .until)
+        onlyWhileWorking = try container.decodeIfPresent(Bool.self, forKey: .onlyWhileWorking) ?? false
     }
 
     /// The lengths offered: until turned off, one hour, two, four, eight.

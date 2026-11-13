@@ -154,7 +154,7 @@ final class GitSyncTests: XCTestCase {
     }
 
     func testGitIsToldNeverToAskForAPassword() {
-        let environment = GitActions.remoteEnvironment
+        let environment = GitActions.actionEnvironment
         XCTAssertEqual(environment["GIT_TERMINAL_PROMPT"], "0")
         XCTAssertNil(environment["GIT_ASKPASS"])
         XCTAssertNil(environment["SSH_ASKPASS"])

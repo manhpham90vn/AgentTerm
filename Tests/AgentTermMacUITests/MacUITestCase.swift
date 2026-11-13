@@ -84,9 +84,32 @@ class MacUITestCase: XCTestCase {
         if app != nil { forgetPreferences() }
     }
 
+    /// A picture of the window in the middle of a test, with `ALL_SHOTS`.
+    func shot(_ name: String) {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["AGENTTERM_SHOT_ALWAYS"] != nil, let folder = environment["AGENTTERM_SHOT_DIR"], let app else { return }
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        app.capture(to: URL(fileURLWithPath: folder).appendingPathComponent("\(self.name.filter { $0.isLetter || $0.isNumber })-\(name).png"))
+    }
+
     /// Stops the program that listens on a port: a host the app started.
-    func stopWhateverListens(on port: UInt16) {
-        guard port != 0 else { return }
+    func stopWhateverListens(on port: UInt16, signal: Int32 = SIGTERM) {
+        for pid in listeners(on: port) { kill(pid, signal) }
+    }
+
+    /// Kills the host on one of the test's ports as a crash or macOS would:
+    /// it gets no chance to stop as it does when asked. Only ever a host of
+    /// this test, started by it or by the app under test.
+    func killHost(on port: UInt16) {
+        let killed = listeners(on: port)
+        XCTAssertFalse(killed.isEmpty, "no host listens on \(port)")
+        for pid in killed { kill(pid, SIGKILL) }
+        wait("the host to be gone") { Set(self.listeners(on: port)).isDisjoint(with: killed) }
+    }
+
+    /// The programs that listen on a port, this test aside.
+    func listeners(on port: UInt16) -> [pid_t] {
+        guard port != 0 else { return [] }
         let find = Process()
         find.executableURL = URL(fileURLWithPath: "/usr/sbin/lsof")
         find.arguments = ["-nP", "-iTCP:\(port)", "-sTCP:LISTEN", "-t"]
@@ -96,7 +119,7 @@ class MacUITestCase: XCTestCase {
         try? find.run()
         let found = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         find.waitUntilExit()
-        for pid in found.split(whereSeparator: \.isNewline).compactMap({ pid_t($0) }) where pid != ProcessInfo.processInfo.processIdentifier { kill(pid, SIGTERM) }
+        return found.split(whereSeparator: \.isNewline).compactMap { pid_t($0) }.filter { $0 != ProcessInfo.processInfo.processIdentifier }
     }
 
     /// The host's program. A test of what the app makes of a host that is
@@ -204,7 +227,7 @@ class MacUITestCase: XCTestCase {
         process.executableURL = hostExecutable
         process.arguments =
             ["--port", String(port), "--local-only", "--no-account-usage", "--home", home.path, "--agents", root.appendingPathComponent("agents").path] + extra
-        var environment = ProcessInfo.processInfo.environment
+        var environment = Self.ownHome(home)
         environment["AGENTTERM_STATE_DIR"] = state.path
         process.environment = environment
         process.standardOutput = FileHandle.nullDevice
@@ -220,10 +243,25 @@ class MacUITestCase: XCTestCase {
         return process
     }
 
+    /// This process's environment, with `home` as the home folder: the
+    /// login shells the host starts, for sessions and to find the user's
+    /// PATH, read their startup files from there, and none of those of the
+    /// person running the tests (TEST-1).
+    static func ownHome(_ home: URL) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = home.path
+        // zsh looks for its files here first, whatever HOME says.
+        environment["ZDOTDIR"] = home.path
+        // What the host and the app take for the home folder, and give
+        // their sessions as HOME: NSHomeDirectory() follows this, not HOME.
+        environment["CFFIXED_USER_HOME"] = home.path
+        return environment
+    }
+
     /// Starts the app on the test's host. Its preferences are its own too:
     /// with a home of its own it reads and writes none of the real app's.
     func launchApp() throws -> MacDriver {
-        var environment = ProcessInfo.processInfo.environment
+        var environment = Self.ownHome(home)
         environment["AGENTTERM_STATE_DIR"] = state.path
         environment["AGENTTERM_PORT"] = String(appPort)
         // The home the host was given: on its own Mac the app reads
@@ -286,6 +324,7 @@ class MacUITestCase: XCTestCase {
         var keepAwake: Bool? { last { if case .keepAwake(let on) = $0 { return on } else { return nil } } }
         var display: DisplaySettings? { last { if case .displaySettings(let settings) = $0 { return settings } else { return nil } } ?? nil }
         var commitWriter: CommitWriterSettings? { last { if case .commitWriter(let settings) = $0 { return settings } else { return nil } } }
+        var failures: [PartFailure]? { last { if case .failures(let list) = $0 { return list } else { return nil } } }
         /// The size a session has now, as told to a device that is attached to it.
         func size(of session: SessionID) -> TermSize? {
             last { if case .resized(session, let size, _) = $0 { return size } else { return nil } }

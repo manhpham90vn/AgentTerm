@@ -53,6 +53,24 @@ final class MacDriver {
         AXUIElementSetMessagingTimeout(app, 5)
     }
 
+    /// Closes the app's window with that title, as its close button does.
+    func closeWindow(titled title: String, file: StaticString = #filePath, line: UInt = #line) {
+        var value: CFTypeRef?
+        AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &value)
+        let windows = value as? [AXUIElement] ?? []
+        for window in windows {
+            var name: CFTypeRef?
+            AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &name)
+            guard name as? String == title else { continue }
+            var button: CFTypeRef?
+            AXUIElementCopyAttributeValue(window, kAXCloseButtonAttribute as CFString, &button)
+            guard let button, CFGetTypeID(button) == AXUIElementGetTypeID() else { break }
+            AXUIElementPerformAction(button as! AXUIElement, kAXPressAction as CFString)
+            return
+        }
+        XCTFail("no window titled \(title) to close", file: file, line: line)
+    }
+
     func quit() {
         guard let process, process.isRunning else { return }
         process.terminate()

@@ -122,6 +122,20 @@ final class StatusLineRelayTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: file)), input())
     }
 
+    /// USE-5: what the relay could not save is said, for the host to report.
+    func testWhatCannotBeSavedIsSaidAndForgottenOnceItIsSaved() throws {
+        // A folder where the file should be: it cannot be written.
+        try FileManager.default.createDirectory(atPath: file, withIntermediateDirectories: true)
+        _ = StatusLineRelay.run(input: input(), file: file, home: home, environment: [:])
+        let problem = StatusLineRelay.failureFile(for: file)
+        XCTAssertFalse(try String(contentsOfFile: problem, encoding: .utf8).isEmpty, "why it could not be saved")
+
+        try FileManager.default.removeItem(atPath: file)
+        _ = StatusLineRelay.run(input: input(), file: file, home: home, environment: [:])
+        XCTAssertEqual(try Data(contentsOf: URL(fileURLWithPath: file)), input())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: problem), "saved again, so nothing to report")
+    }
+
     func testRunsTheUsersOwnStatusLineWithTheSameInput() throws {
         try #"{"statusLine":{"type":"command","command":"/usr/bin/sed -n 's/.*display_name\":\"\\([^\"]*\\)\".*/[\\1] mine/p'"}}"#
             .write(toFile: home + "/.claude/settings.json", atomically: true, encoding: .utf8)

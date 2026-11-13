@@ -19,6 +19,66 @@ final class FlowTests: XCTestCase {
     }
 
     /// The main screens with the phone on its side, from a session's terminal.
+    /// PERF-6: how smoothly a terminal of 5,000 lines scrolls, as the time
+    /// frames were late while it coasted after a fast swipe.
+    private func measureScrolling(_ app: XCUIApplication, compose: XCUIElement) {
+        compose.tap()
+        compose.typeText("seq 1 5000")
+        app.buttons["Send"].tap()
+        if app.buttons["hide-keyboard"].firstMatch.waitForExistence(timeout: 3) { app.buttons["hide-keyboard"].firstMatch.tap() }
+        sleep(4)
+        let terminal = app.descendants(matching: .any)["terminal"].firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 5))
+        let options = XCTMeasureOptions()
+        options.invocationOptions = [.manuallyStop]
+        options.iterationCount = 5
+        // On a simulator only the length of the coast comes from the scroll
+        // metric; the processor time the app spends drawing it says how
+        // costly each frame is, which is what drawing on the GPU changes.
+        measure(metrics: [XCTOSSignpostMetric.scrollDecelerationMetric, XCTCPUMetric(application: app)], options: options) {
+            terminal.swipeDown(velocity: .fast)
+            stopMeasuring()
+            terminal.swipeUp(velocity: .fast)
+            terminal.swipeUp(velocity: .fast)
+        }
+    }
+
+    /// HIST-6: a long session opened again comes with the screen and 500
+    /// lines above it; scrolled to their top, a strip says earlier lines
+    /// load, and they come, a page at a time.
+    private func pagedHistory(_ app: XCUIApplication, compose: XCUIElement) {
+        compose.tap()
+        compose.typeText("seq 1 3000")
+        app.buttons["Send"].tap()
+        if app.buttons["hide-keyboard"].firstMatch.waitForExistence(timeout: 3) { app.buttons["hide-keyboard"].firstMatch.tap() }
+        sleep(3)
+        // Opened again by an app that has none of it: now with only the
+        // lines near the screen. (Started here, it came whole, and going
+        // back and in again keeps what the terminal has.)
+        app.terminate()
+        app.launch()
+        if app.buttons["First Mac"].waitForExistence(timeout: 15) { app.buttons["First Mac"].tap() }
+        let row = app.staticTexts["zsh"].firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 5))
+        row.tap()
+        let terminal = app.descendants(matching: .any)["terminal"].firstMatch
+        XCTAssertTrue(terminal.waitForExistence(timeout: 10))
+        sleep(2)
+        let loaded = app.descendants(matching: .any)["history-loaded"].firstMatch
+        func asked() -> Int { Int(loaded.value as? String ?? "") ?? 0 }
+        var seen: [Int] = []
+        for _ in 0..<120 where seen.count < 2 {
+            terminal.swipeDown(velocity: .fast)
+            sleep(1)
+            let now = asked()
+            if now > (seen.last ?? 500) {
+                seen.append(now)
+                capture("17-history-page-\(seen.count)")
+            }
+        }
+        XCTAssertEqual(seen, [1_500, 2_500], "scrolling up did not load earlier lines a page at a time")
+    }
+
     private func landscape(_ app: XCUIApplication, compose: XCUIElement) {
         XCUIDevice.shared.orientation = .landscapeLeft
         defer { XCUIDevice.shared.orientation = .portrait }
@@ -98,6 +158,30 @@ final class FlowTests: XCTestCase {
         // Connected: the Mac's folders and launch buttons show up.
         let start = app.buttons[launchButton].firstMatch
         XCTAssertTrue(start.waitForExistence(timeout: 15), "not connected to the host")
+        // HOST-8: the host on the Mac died before this one, and the phone
+        // is told so in words rather than shown an empty list.
+        if environment["AGENTTERM_EXPECT_HOST_DIED"] != nil {
+            let card = app.descendants(matching: .any)["failure-card"].firstMatch
+            XCTAssertTrue(card.waitForExistence(timeout: 10), "the phone did not say that the Mac's host had stopped")
+            XCTAssertTrue(card.label.contains("The host on First Mac stopped unexpectedly"), card.label)
+            XCTAssertTrue(card.label.contains("was started again"), card.label)
+            XCTAssertTrue(card.label.contains("Its 2 sessions ended: build, tests"), card.label)
+            capture("2a-host-died")
+            // Seen once, it goes.
+            app.buttons["failure-dismiss"].firstMatch.tap()
+            XCTAssertTrue(card.waitForNonExistence(timeout: 10), "the report stayed after it was dismissed")
+        }
+        // The second Mac is paired now, while its link is fresh: a link
+        // lives five minutes, and its part of the test comes later. Paired,
+        // it is the one on screen; the first comes back from the menu.
+        if let second = environment["AGENTTERM_SECOND_PAIR_URL"] {
+            app.open(try XCTUnwrap(URL(string: second)))
+            XCTAssertTrue(app.staticTexts["Second Mac"].waitForExistence(timeout: 15), "the second Mac did not pair")
+            app.buttons["mac-menu"].tap()
+            app.buttons["First Mac"].tap()
+            XCTAssertTrue(app.staticTexts["First Mac"].waitForExistence(timeout: 10))
+            XCTAssertTrue(start.waitForExistence(timeout: 15), "not connected to the first Mac again")
+        }
         capture("2-sessions")
         // The Mac's figures arrive a moment after the list and push it
         // down: a tap aimed at where the button was would land beside it.
@@ -115,6 +199,14 @@ final class FlowTests: XCTestCase {
         // A run that only looks at the app on its side.
         if environment["AGENTTERM_ONLY_LANDSCAPE"] != nil {
             landscape(app, compose: compose)
+            return
+        }
+        if environment["AGENTTERM_ONLY_SCROLL"] != nil {
+            measureScrolling(app, compose: compose)
+            return
+        }
+        if environment["AGENTTERM_ONLY_HISTORY"] != nil {
+            pagedHistory(app, compose: compose)
             return
         }
 
@@ -222,6 +314,20 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["First Mac"].waitForExistence(timeout: 5))
         let session = app.staticTexts["zsh"].firstMatch
         XCTAssertTrue(session.waitForExistence(timeout: 5))
+        // SES-25: ending it from its row's menu asks first.
+        session.press(forDuration: 1.2)
+        let endItem = app.buttons["End Session…"].firstMatch
+        XCTAssertTrue(endItem.waitForExistence(timeout: 5), "the row's menu has no End Session")
+        endItem.tap()
+        let confirm = app.buttons["End Session"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 5), "ending the session from its row did not ask first")
+        // Put away without answering: Cancel where the question has one,
+        // a tap beside it where it has none.
+        let cancel = app.buttons["Cancel"].firstMatch
+        if cancel.exists { cancel.tap() } else { app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).tap() }
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: confirm)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(session.waitForExistence(timeout: 5), "the session ended though it was not confirmed")
         if environment["AGENTTERM_TEST_PROJECT"] != nil {
             // How the Mac itself is doing, above its sessions.
             for figure in ["system-cpu", "system-memory", "system-temperature", "system-down", "system-battery", "system-uptime"] {
@@ -231,8 +337,22 @@ final class FlowTests: XCTestCase {
             // the Mac's Settings.
             app.tabBars.buttons["Settings"].tap()
             XCTAssertTrue(app.switches["keep-awake"].waitForExistence(timeout: 5), "Settings has no Keep Mac Awake switch")
-            XCTAssertTrue(app.staticTexts["Commit Messages"].exists)
             capture("7-settings-tab")
+            // Further down, under the agents' settings.
+            let commitMessages = app.staticTexts["Commit Messages"].firstMatch
+            for _ in 0..<4 where !commitMessages.isHittable { app.swipeUp() }
+            XCTAssertTrue(commitMessages.exists, "Settings has no Commit Messages")
+            // SCHED-14: Schedules in three groups, as the Mac shows them.
+            let schedules = app.buttons["schedules"].firstMatch
+            for _ in 0..<4 where !schedules.isHittable { app.swipeDown() }
+            schedules.tap()
+            XCTAssertTrue(app.navigationBars["Schedules"].waitForExistence(timeout: 5))
+            for group in ["RUNNING", "SCHEDULED", "PAST RUNS"] {
+                XCTAssertTrue(app.staticTexts[group].waitForExistence(timeout: 5) || app.staticTexts[group.capitalized].exists, "no \(group) group")
+            }
+            XCTAssertTrue(app.staticTexts["No run is going on."].exists)
+            capture("7-schedules")
+            app.navigationBars.buttons.firstMatch.tap()
             app.tabBars.buttons["History"].tap()
             XCTAssertTrue(app.navigationBars["History"].waitForExistence(timeout: 5))
             app.tabBars.buttons["Sessions"].tap()
@@ -437,9 +557,10 @@ final class FlowTests: XCTestCase {
 
         // A second Mac can be paired. It becomes the one on screen, with
         // nothing of the first Mac's sessions.
-        guard let second = environment["AGENTTERM_SECOND_PAIR_URL"] else { return }
-        app.open(try XCTUnwrap(URL(string: second)))
-        XCTAssertTrue(app.staticTexts["Second Mac"].waitForExistence(timeout: 15), "the second Mac did not pair")
+        guard environment["AGENTTERM_SECOND_PAIR_URL"] != nil else { return }
+        app.buttons["mac-menu"].tap()
+        app.buttons["Second Mac"].tap()
+        XCTAssertTrue(app.staticTexts["Second Mac"].waitForExistence(timeout: 15), "the second Mac is not on screen")
         XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 10))
         XCTAssertFalse(app.staticTexts["zsh"].exists, "the first Mac's session must not show under the second")
         // The second Mac's host says it is of an older release: the phone says so.
@@ -447,6 +568,20 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(versionCard.waitForExistence(timeout: 5), "a Mac of another version is not pointed out")
         XCTAssertTrue(versionCard.label.contains("Second Mac is an older version"), versionCard.label)
         capture("8-second-mac")
+
+        // SET-4: the second Mac kept awake, then out of reach (the script
+        // stops its host): its settings stay as it last said them, and
+        // cannot be changed until it is reached again.
+        app.tabBars.buttons["Settings"].tap()
+        let awake = app.switches["keep-awake"].firstMatch
+        XCTAssertTrue(awake.waitForExistence(timeout: 10), "the second Mac's settings are not shown")
+        awake.switches.firstMatch.exists ? awake.switches.firstMatch.tap() : awake.tap()
+        let gone = app.staticTexts.containing(NSPredicate(format: "label BEGINSWITH 'Not connected to Second Mac'")).firstMatch
+        XCTAssertTrue(gone.waitForExistence(timeout: 20), "nothing says the Mac is out of reach")
+        XCTAssertFalse(awake.isEnabled, "the setting of a Mac out of reach can still be changed")
+        XCTAssertEqual(awake.value as? String, "1", "the setting is not as the Mac last said")
+        capture("8a-second-mac-gone")
+        app.tabBars.buttons["Sessions"].tap()
 
         // The menu lists both, and switching goes back to the first Mac and
         // its session, which kept running.

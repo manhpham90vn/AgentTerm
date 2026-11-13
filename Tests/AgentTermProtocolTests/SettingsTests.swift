@@ -18,6 +18,10 @@ final class SettingsTests: XCTestCase {
             .sshHosts,
             .connectSSH(host: "build-server", size: TermSize(cols: 48, rows: 30)),
         ]
+        // HIST-6: a phone asks for only so many lines above the screen.
+        XCTAssertEqual(
+            MessageCoding.decode(ClientMessage.self, from: MessageCoding.encode(ClientMessage.attach(session: 7, size: .default, history: 500))),
+            .attach(session: 7, size: .default, history: 500))
         for message in client {
             XCTAssertEqual(MessageCoding.decode(ClientMessage.self, from: MessageCoding.encode(message)), message)
         }
@@ -30,6 +34,8 @@ final class SettingsTests: XCTestCase {
             .gitSynced(path: "/Users/me/app"),
             .startAtLogin(true),
             .replaying(session: 3, from: 123_456_789_012),
+            // HIST-6: how many lines above the screen the host keeps.
+            .replaying(session: 3, from: 42, above: 19_500),
             .diff(
                 path: "/Users/me/app",
                 snapshot: DiffSnapshot(isRepository: true, branch: "main", files: [], upstream: "origin/main", ahead: 2, behind: 1)),

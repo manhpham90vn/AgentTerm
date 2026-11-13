@@ -34,6 +34,8 @@ public final class AgentTermConnection: @unchecked Sendable {
     private let queue = DispatchQueue(label: "agentterm.client")
     /// Touched on the main queue only.
     private var closed = false
+    /// Joins a large message sent in pieces (`MessageParts`).
+    private var joiner = MessageParts.Joiner()
 
     /// What was sent before the host was greeted. An app asks for things
     /// on a timer, also while it is connecting, and the host closes a
@@ -235,8 +237,12 @@ public final class AgentTermConnection: @unchecked Sendable {
                     self.deliver { if !self.closed { self.onMessage?(message) } }
                 }
             case .binary:
-                if let data, let frame = DataFrame(decoding: data), frame.kind == .output {
+                guard let data, let frame = DataFrame(decoding: data) else { break }
+                if frame.kind == .output {
                     self.deliver { if !self.closed { self.onOutput?(frame.session, frame.payload) } }
+                } else if let whole = self.joiner.add(frame), let message = MessageCoding.decode(ServerMessage.self, from: whole) {
+                    // A large message, sent in pieces.
+                    self.deliver { if !self.closed { self.onMessage?(message) } }
                 }
             case .close:
                 self.finish(reason: nil)

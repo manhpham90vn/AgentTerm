@@ -73,13 +73,27 @@ git init -q -b main "$PROJECT/web"
 printf 'web\n' >> "$PROJECT/.git/info/exclude"
 printf '["%s"]' "$PROJECT" > "$STATE/folders.json"
 
+# A host that died on the first Mac before the one started here, with two
+# sessions: the first host has to tell the phone (HOST-8). What a host
+# leaves behind while it runs is a marker that names its process and its
+# sessions; a process that is gone stands for the one that died.
+sh -c 'exit 0' &
+DEAD=$!
+wait "$DEAD" || true
+printf '{"pid":%s,"startedAt":%s,"sessions":[{"name":"build","cwd":"%s"},{"name":"tests","cwd":"%s"}]}' \
+    "$DEAD" "$(date +%s)" "$PROJECT" "$PROJECT" > "$STATE/host-$PORT.json"
+
 # Two hosts with their own state, standing in for two Macs.
-AGENTTERM_STATE_DIR="$STATE" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" > "$STATE/daemon.log" 2>&1 &
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 # The second one says it is of an older release, to see the phone's warning.
 AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" --port "$SECOND_PORT" --local-only --protocol-version 1 > "$SECOND_STATE/daemon.log" 2>&1 &
 SECOND_DAEMON=$!
-trap 'kill "$DAEMON" "$SECOND_DAEMON" 2>/dev/null || true; rm -rf "$STATE" "$SECOND_STATE"' EXIT
+# SET-4: once the phone keeps the second Mac awake, that Mac goes out of
+# reach, for the phone to show its settings as they were and not change them.
+( while ! grep -q '"keepAwake":true' "$SECOND_STATE/settings.json" 2>/dev/null; do sleep 0.3; done; kill "$SECOND_DAEMON" ) &
+GONE_WATCH=$!
+trap 'kill "$DAEMON" "$SECOND_DAEMON" "$GONE_WATCH" 2>/dev/null || true; rm -rf "$STATE" "$SECOND_STATE"' EXIT
 for _ in $(seq 1 50); do [ -s "$STATE/token" ] && [ -s "$SECOND_STATE/token" ] && break; sleep 0.1; done
 [ -s "$STATE/token" ] && [ -s "$SECOND_STATE/token" ] || { echo "test-ios.sh: the hosts did not start" >&2; cat "$STATE/daemon.log" "$SECOND_STATE/daemon.log" >&2; exit 1; }
 
@@ -104,9 +118,14 @@ export TEST_RUNNER_AGENTTERM_PAIR_URL="$(AGENTTERM_STATE_DIR="$STATE" "$AGENTTER
 export TEST_RUNNER_AGENTTERM_SECOND_PAIR_URL="$(AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" pairing-link --port "$SECOND_PORT" --host 127.0.0.1 --name "Second Mac")"
 export TEST_RUNNER_AGENTTERM_LAUNCH="${AGENTTERM_LAUNCH:-Start Shell}"
 export TEST_RUNNER_AGENTTERM_TEST_PROJECT=1
+export TEST_RUNNER_AGENTTERM_EXPECT_HOST_DIED=1
 if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export TEST_RUNNER_AGENTTERM_SHOT_DIR="$SHOTS"; fi
 # LANDSCAPE=only looks at the app with the phone on its side and nothing else.
 if [ "${LANDSCAPE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_LANDSCAPE=1; fi
+# SCROLL=only measures how smoothly a long terminal scrolls, and nothing else.
+if [ "${SCROLL:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_SCROLL=1; fi
+# PAGES=only checks that a long session's earlier lines come a page at a time.
+if [ "${PAGES:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_HISTORY=1; fi
 # TAKEOVER=1 has something play the Mac: once the phone has a session open,
 # it is taken at a Mac's size, with output to scroll through. TAKEOVER=only
 # checks nothing else.
@@ -115,13 +134,15 @@ if [ -n "${TAKEOVER:-}" ]; then
     [ "$TAKEOVER" = only ] && export TEST_RUNNER_AGENTTERM_ONLY_MAC_TAKEOVER=1
     AGENTTERM_STATE_DIR="$STATE" "$AGENTTERMD" take-control --port "$PORT" --after 8 --hold 60 --type 'seq 1 400' > "$STATE/takeover.log" 2>&1 &
     TAKEOVER_PID=$!
-    trap 'kill "$DAEMON" "$SECOND_DAEMON" "$TAKEOVER_PID" 2>/dev/null || true; rm -rf "$STATE" "$SECOND_STATE"' EXIT
+    trap 'kill "$DAEMON" "$SECOND_DAEMON" "$GONE_WATCH" "$TAKEOVER_PID" 2>/dev/null || true; rm -rf "$STATE" "$SECOND_STATE"' EXIT
 fi
 
 if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     # The test arranged the sessions; the host has to have kept that.
     if [ "${TAKEOVER:-}" = only ]; then echo "iOS UI test passed (Mac takeover only)."; rm -f "$LOG"; exit 0; fi
     if [ "${LANDSCAPE:-}" = only ]; then echo "iOS UI test passed (landscape only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${PAGES:-}" = only ]; then echo "iOS UI test passed (paged history only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${SCROLL:-}" = only ]; then grep -E "Measured \[|average:" "$LOG" | cut -c1-300; echo "iOS UI test passed (scrolling measured)."; rm -f "$LOG"; exit 0; fi
     grep -q '"Group 1 api"' "$STATE/tabs.json" || { echo "test-ios.sh: the host did not save the arrangement of the sessions" >&2; exit 1; }
     # The test committed and pushed from the phone; the remote has to have it.
     [ "$(git -C "$REMOTE" log -1 --format=%s main)" = "test: add a second line" ] || { echo "test-ios.sh: the push from the phone did not reach the remote" >&2; exit 1; }

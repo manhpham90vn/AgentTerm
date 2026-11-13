@@ -37,6 +37,7 @@ final class ProtocolTests: XCTestCase {
             .moveFolder(path: "/Users/me/app", before: nil),
             .files(path: "/Users/me/app"),
             .readFile(path: "/Users/me/app/ghi chú.md"),
+            .readFile(path: "/Users/me/app/five.log", anyway: true),
             .writeFile(path: "/Users/me/app/ghi chú.md", text: "# Tiêu đề\n"),
             .createFile(directory: "/Users/me/app", name: "mới.txt", isDirectory: false),
             .renameFile(path: "/Users/me/app/a.txt", name: "b.txt"),
@@ -52,6 +53,7 @@ final class ProtocolTests: XCTestCase {
             .listDirectory(path: nil),
             .addFolder(path: "/Users/me/dự án"),
             .removeFolder(path: "/Users/me/dự án"),
+            .dismissFailure(id: "f-1"),
         ]
         for message in messages {
             let decoded = MessageCoding.decode(ClientMessage.self, from: MessageCoding.encode(message))
@@ -97,6 +99,15 @@ final class ProtocolTests: XCTestCase {
             .handoffPlan(id: "p-1", prompt: "You are taking over…"),
             .directory(DirectoryListing(path: "/Users/me", parent: "/Users", folders: ["Dev", "Tài liệu"], isHome: true)),
             .devices([DeviceInfo(id: "d-1", name: "iPhone", pairedAt: Date(timeIntervalSince1970: 1_800_000_000), lastSeenAt: nil, isConnected: true)]),
+            .failures([]),
+            .failures([
+                PartFailure(
+                    id: "f-1", part: .host, at: Date(timeIntervalSince1970: 1_800_000_000),
+                    ended: [EndedSession(name: "Sửa lỗi đăng nhập", cwd: "/Users/me/app", agent: "claude"), EndedSession(name: "zsh", cwd: "/Users/me")], restarted: true),
+                PartFailure(
+                    id: "f-2", part: PartFailure.Part(rawValue: "statusLineRelay"), at: Date(timeIntervalSince1970: 1_800_000_060), restarted: false, broken: true,
+                    reason: "It stopped three times in a minute."),
+            ]),
         ]
         for message in messages {
             let decoded = MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))
@@ -147,5 +158,116 @@ final class ProtocolTests: XCTestCase {
     func testSizeIsClamped() {
         XCTAssertEqual(TermSize(cols: 0, rows: -3).clamped, TermSize(cols: 2, rows: 2))
         XCTAssertEqual(TermSize(cols: 5000, rows: 30).clamped, TermSize(cols: 1000, rows: 30))
+    }
+
+    /// A part added to the protocol later still reads, by its name.
+    func testAFailureOfAPartNotKnownYetStillReads() {
+        let json = #"{"failures":{"_0":[{"id":"f","part":"sessionProgram","name":"build","at":1800000000,"ended":[],"restarted":false,"broken":false}]}}"#
+        guard case .failures(let list)? = MessageCoding.decode(ServerMessage.self, from: Data(json.utf8)) else { return XCTFail("did not decode") }
+        XCTAssertEqual(list.first?.part.rawValue, "sessionProgram")
+        XCTAssertEqual(list.first?.name, "build")
+    }
+
+    /// HOST-3, HOST-8: what both apps say of a host that died.
+    func testAFailureInWords() {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        var failure = PartFailure(part: .host, at: at, ended: [EndedSession(name: "build", cwd: "/p"), EndedSession(name: "tests", cwd: "/p")], restarted: true)
+        let headline = failure.headline(on: "First Mac", now: at)
+        XCTAssertTrue(headline.hasPrefix("The host on First Mac stopped unexpectedly at "), headline)
+        XCTAssertTrue(headline.hasSuffix(" and was started again."), headline)
+        XCTAssertTrue(failure.headline(now: at).hasPrefix("The AgentTerm host stopped unexpectedly"))
+        XCTAssertEqual(failure.details, "Its 2 sessions ended: build, tests.")
+        failure.ended = [EndedSession(name: "build", cwd: "/p")]
+        XCTAssertEqual(failure.details, "Its session ended: build.")
+        failure.ended = []
+        failure.reason = "It was killed."
+        XCTAssertEqual(failure.details, "No session was running in it. It was killed.")
+        failure.restarted = false
+        failure.broken = true
+        XCTAssertTrue(failure.headline(now: at).hasSuffix("and keeps stopping, so it is not started again by itself."))
+        // Another day says which.
+        XCTAssertTrue(failure.headline(now: at.addingTimeInterval(3 * 86400)).contains("stopped unexpectedly on "))
+    }
+
+    /// SES-23, AWAKE-4, USE-5: the other parts, in words.
+    func testTheOtherPartsInWords() {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        let killed = PartFailure(
+            part: .session, name: "build", at: at, ended: [EndedSession(name: "build", cwd: "/p")], restarted: false, reason: "It was killed (SIGKILL).")
+        XCTAssertTrue(killed.headline(on: "First Mac", now: at).hasPrefix("The program of “build” on First Mac stopped unexpectedly at "))
+        XCTAssertEqual(killed.details, "Its session ended. It was killed (SIGKILL).")
+
+        var awake = PartFailure(part: .keepAwake, at: at, restarted: false, reason: "macOS would not hold it.")
+        XCTAssertTrue(awake.headline(now: at).hasPrefix("The Mac could not be kept awake at "))
+        XCTAssertTrue(awake.headline(now: at).hasSuffix("."))
+        XCTAssertEqual(awake.details, "macOS would not hold it.", "nothing ends with the hold")
+        awake.restarted = true
+        XCTAssertTrue(awake.headline(now: at).hasSuffix(", and is kept awake again."))
+
+        let usage = PartFailure(part: .statusLine, name: "review", at: at, restarted: false)
+        XCTAssertTrue(usage.headline(now: at).hasPrefix("The usage of “review” could not be saved at "))
+        XCTAssertEqual(usage.details, "")
+    }
+
+    /// NOTE-1: an agent that is done or waits is told once; one that asks
+    /// something else is told again; one that keeps waiting, or works, is not.
+    func testWhatIsToldOfTheAgents() {
+        func session(_ id: SessionID, _ state: AgentState?) -> SessionInfo {
+            SessionInfo(id: id, title: "s\(id)", cwd: "/p", size: .default, createdAt: Date(), state: state)
+        }
+        let permission = AgentState.waitingForPermission(AgentQuestion(text: "make test"))
+        let done = AgentState.done(said: "All tests pass.")
+        var told: [SessionID: AgentState] = [:]
+        // On connecting: what waits or is done, at once.
+        XCTAssertEqual(AgentNotice.notices(in: [session(1, permission), session(2, .working(since: Date())), session(3, nil)], told: &told).map(\.session), [1])
+        XCTAssertEqual(AgentNotice.notices(in: [session(1, permission)], told: &told), [], "keeps waiting: told once")
+        XCTAssertEqual(AgentNotice.notices(in: [session(1, .working(since: Date()))], told: &told), [])
+        let again = AgentNotice.notices(in: [session(1, done)], told: &told)
+        XCTAssertEqual(again.map(\.why), ["is done"])
+        XCTAssertEqual(again.first?.detail, "All tests pass.")
+        XCTAssertTrue(again.first?.takesAReply == true)
+        // Asked something else, told again.
+        let question = AgentState.waitingForAnswer(AgentQuestion(text: "Which colour?", choices: ["Red", "Blue"]))
+        XCTAssertEqual(AgentNotice.notices(in: [session(1, question)], told: &told).first?.detail, "Which colour?\nRed · Blue")
+        XCTAssertFalse(AgentNotice(session: 1, name: "", folder: "", state: permission).takesAReply, "a permission is answered in the session")
+        // Ended: forgotten.
+        _ = AgentNotice.notices(in: [], told: &told)
+        XCTAssertTrue(told.isEmpty)
+    }
+
+    /// LIVE-1: the Live Activity shows only while the phone is connected, no
+    /// one is at the Mac, and an agent works or waits; it ends at once when
+    /// the connection ends or the Mac is used, and shows "done" at the end.
+    func testWhenTheLiveActivityShows() {
+        func session(_ state: AgentState?) -> SessionInfo { SessionInfo(id: 1, title: "s", cwd: "/p", size: .default, createdAt: Date(), state: state) }
+        let working = [session(.working(since: Date()))]
+        let waiting = [session(.waitingForAnswer(AgentQuestion(text: "?")))]
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: true, macInUse: false, sessions: working), .show)
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: true, macInUse: false, sessions: waiting), .show)
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: true, macInUse: true, sessions: working), .endNow, "someone is at the Mac")
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: false, macInUse: false, sessions: working), .endNow, "no connection to keep it true")
+        XCTAssertEqual(LiveActivityRule.decide(enabled: false, connected: true, macInUse: false, sessions: working), .endNow, "switched off")
+        XCTAssertEqual(LiveActivityRule.decide(enabled: true, connected: true, macInUse: false, sessions: [session(.done(said: nil)), session(nil)]), .endShowingDone)
+    }
+
+    /// PERF-1: a message larger than a frame may be is sent in pieces, none
+    /// larger than 256 KB, and joined whole; one that fits is not split.
+    func testALargeMessageIsSentInPiecesAndJoined() throws {
+        XCTAssertNil(MessageParts.frames(for: Data(count: 1000), id: 1))
+        let message = Data((0..<(1_000_000)).map { UInt8($0 % 251) })
+        let frames = try XCTUnwrap(MessageParts.frames(for: message, id: 7))
+        XCTAssertEqual(frames.count, 4)
+        XCTAssertTrue(frames.allSatisfy { $0.encoded().count <= MessageParts.limit })
+        XCTAssertEqual(frames.map(\.kind), [.messagePart, .messagePart, .messagePart, .messageEnd])
+        var joiner = MessageParts.Joiner()
+        var whole: Data?
+        for frame in frames { whole = joiner.add(DataFrame(decoding: frame.encoded())!) ?? whole }
+        XCTAssertEqual(whole, message)
+        // Pieces of a message that never ended are not taken for the next.
+        _ = joiner.add(frames[0])
+        let other = try XCTUnwrap(MessageParts.frames(for: Data(repeating: 1, count: 300_000), id: 8))
+        var second: Data?
+        for frame in other { second = joiner.add(frame) ?? second }
+        XCTAssertEqual(second, Data(repeating: 1, count: 300_000))
     }
 }

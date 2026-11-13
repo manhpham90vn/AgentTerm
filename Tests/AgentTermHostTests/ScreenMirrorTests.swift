@@ -100,6 +100,33 @@ final class ScreenMirrorTests: XCTestCase {
         assertSame(client, original)
     }
 
+    /// HIST-6: a phone is sent the screen and only so many lines above it,
+    /// told how many the host keeps, and asks for more as it scrolls up.
+    func testOnlySoManyLinesAboveTheScreenAreWrittenOut() {
+        let output = (1...300).map { "line \($0)\r\n" } + ["$ "]
+        let (mirror, original) = session(output)
+        XCTAssertEqual(mirror.linesAbove, 291, "300 lines and the prompt, ten rows on the screen")
+
+        let client = Client(size: size)
+        client.feed(mirror.snapshot(linesAbove: 50))
+        let lines = text(of: client)
+        XCTAssertEqual(lines.count, 50 + size.rows)
+        XCTAssertEqual(lines.first, "line 242", "the fifty lines just above the screen")
+        // The screen, the cursor and the modes are those of the session.
+        XCTAssertEqual(Array(lines.suffix(size.rows)), Array(text(of: original).suffix(size.rows)))
+        XCTAssertEqual(cursor(of: client), cursor(of: original))
+
+        // More of them: the same lines, and those above them.
+        let more = Client(size: size)
+        more.feed(mirror.snapshot(linesAbove: 150))
+        XCTAssertEqual(text(of: more).count, 150 + size.rows)
+        XCTAssertEqual(Array(text(of: more).suffix(lines.count)), lines)
+        // More than it keeps is all it keeps.
+        let all = Client(size: size)
+        all.feed(mirror.snapshot(linesAbove: 10_000))
+        XCTAssertEqual(text(of: all), text(of: original))
+    }
+
     func testAFullScreenProgramShowsWithoutDrawingAgain() {
         let (mirror, original) = session([
             "before the program\r\n$ agent\r\n",
@@ -250,20 +277,47 @@ final class ScreenMirrorTests: XCTestCase {
         XCTAssertEqual(text(of: client).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }, ["before", "after"])
     }
 
-    /// SES-21, for the second half.
-    func testManyLinesAreWrittenOutQuickly() {
-        let mirror = ScreenMirror(size: TermSize(cols: 120, rows: 40), scrollback: 10_000)
+    /// Two hundred colored lines of a session's output.
+    private var manyLines: Data {
         var piece = ""
         for number in 1...200 { piece += "\(escape)[3\(number % 8)m\(number)\(escape)[0m " + String(repeating: "word ", count: 18) + "\r\n" }
-        let data = Data(piece.utf8)
-        let fed = Date()
-        for _ in 0..<60 { mirror.feed(data) }
-        let feeding = Date().timeIntervalSince(fed)
-        let started = Date()
-        let written = mirror.snapshot()
-        let writing = Date().timeIntervalSince(started)
-        print("fed \(data.count * 60) bytes in \(feeding) s, wrote \(written.count) bytes in \(writing) s")
-        XCTAssertLessThan(writing, 2)
+        return Data(piece.utf8)
+    }
+
+    /// A mirror fed `pieces` times `manyLines`, and how long its screen
+    /// takes to be written out: the shortest of three tries, since a
+    /// machine that is busy for a moment makes one try longer, never shorter.
+    private func writingTime(pieces: Int) -> (mirror: ScreenMirror, written: Data, seconds: TimeInterval) {
+        let mirror = ScreenMirror(size: TermSize(cols: 120, rows: 40), scrollback: 10_000)
+        let data = manyLines
+        for _ in 0..<pieces { mirror.feed(data) }
+        var shortest = TimeInterval.infinity
+        var written = Data()
+        for _ in 0..<3 {
+            // Nothing new, but what was written out before is not kept.
+            mirror.feed(Data())
+            let started = Date()
+            written = mirror.snapshot()
+            shortest = min(shortest, Date().timeIntervalSince(started))
+        }
+        return (mirror, written, shortest)
+    }
+
+    /// SES-21. Each half compares the work with itself rather than with a
+    /// number of seconds, which held on one machine and not on a slower
+    /// one (issue #32).
+    func testManyLinesAreWrittenOutQuickly() {
+        let data = manyLines
+        // Writing out takes as long again for as many lines again: a long
+        // session costs in proportion, not more. 12,000 lines fed keep
+        // 10,040 (the screen and the 10,000 above it); 13 pieces keep 2,640,
+        // a quarter of that. In proportion, the long one takes about four
+        // times as long; were each line to cost more the more there are,
+        // fifteen times or more.
+        let short = writingTime(pieces: 13)
+        let (mirror, written, writing) = writingTime(pieces: 60)
+        print("wrote 2,640 lines in \(short.seconds) s, 10,040 lines (\(written.count) bytes) in \(writing) s")
+        XCTAssertLessThan(writing, short.seconds * 8, "writing out does not grow in proportion to the lines")
         // Several clients attach to a session that says nothing meanwhile,
         // the Mac app and a phone coming back for one: written out once.
         let again = Date()

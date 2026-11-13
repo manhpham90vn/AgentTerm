@@ -51,6 +51,13 @@ itself.
   for it, and the 10,000 lines above it to scroll back through. All of it
   is laid out for the size the session has now. A terminal scrolls back
   20,000 lines, on the Mac and on the iPhone.
+- The iPhone opens a session with its screen and the 500 lines above it.
+  Scrolled to the top of those, a strip at the top says "Loading earlier
+  lines…", the next 1,000 come, and the line that was in view stays in
+  view. What it has is kept: going back to the session, or reconnecting,
+  brings only what was written since. A session started on the iPhone
+  comes whole. The Mac gets all of it.
+- The iPhone's terminal is drawn on the GPU.
 
 ### Session names
 
@@ -61,6 +68,165 @@ itself.
   keeps the shell's name.
 - The name and the agent's icon are the same on the Mac (folder list and
   tabs) and on the iPhone.
+
+### What the agent is doing
+
+- Each agent's session shows whether its agent is working, waiting for
+  permission, waiting for an answer, or done: a mark next to its name in
+  the folder list and on its tab on the Mac, in the sessions list and the
+  terminal's title on the iPhone. A folder's row says when one of its
+  sessions waits.
+- The state comes from what the agent says about itself, through hooks
+  AgentTerm gives it for that session only, never from the screen. A state
+  that is shown is true; where it is not known, nothing is shown.
+- A shell has no state. An agent that has just started has none until it
+  says something. After Escape or Control C is typed to a working agent,
+  its state is not known until the agent says more.
+- Codex runs the hooks only once the user trusts them: when Codex asks,
+  choose "Trust all and continue". Until then, its session says so.
+- Antigravity does not say when it waits for permission: while it runs a
+  tool, its state is not shown, and its session says why.
+
+### Worktrees
+
+- **A session in a worktree of its own** (#23): an agent's launch button,
+  or the shell's, has "Start … in a New Worktree" in its menu. AgentTerm
+  makes a branch (`agentterm/<agent>-<number>` unless named) cut from the
+  folder's current commit, a git worktree for it in
+  `<folder>/.agentterm/worktrees/<branch>`, and starts the session there.
+  Nothing is brought along: no uncommitted change, nothing git ignores;
+  with changes not committed, the app asks first. A folder can name a
+  setup command (`npm install`) that is run in each new worktree first.
+- The session is listed under its folder with its branch, on the Mac and
+  the iPhone. Selecting it, the Git, History and Files tabs show its
+  worktree.
+- **The worktrees of the folder that is open** (#33): when a folder's
+  repository has more than its own, a bar at the top of the side panel
+  lists them all, whoever made them, with their branch, how far ahead they
+  are, what is changed, and those whose folder is gone, as missing; ones
+  outside the folder show their path. Picking one shows its changes,
+  history and files, with the same actions as the folder.
+- **Bringing the work back**: for a worktree, Finish merges its branch into
+  the folder's and removes it (with its branch, for one AgentTerm made),
+  opens a pull request with `gh`, or throws it away, which asks first and
+  says what is not merged. A worktree a session runs in is not removed.
+- `.agentterm/` is listed in the repository's own exclude file and is not
+  shown in the Files tab.
+
+### Schedules
+
+- A schedule starts an agent with a prompt in a folder: once at a time,
+  every day at a time, on some weekdays at a time, or a little after the
+  agent's account limit starts over. On or off without being deleted. Made
+  and changed in the Mac's Schedules, a place of the window, and the
+  iPhone's Settings > Schedules; the host keeps them and runs them, with
+  the app closed too.
+- **Schedules** shows them in three groups, the same on both: **Running**,
+  the runs whose session still runs, each opening its session; **Scheduled**,
+  every schedule, the next to run first, then those waiting for a limit,
+  then those turned off; and **Past Runs**, the runs that are over, newest
+  first, with what came of each (started, skipped, missed). On the Mac the
+  list is at the left, each schedule with its switch, and the schedule
+  picked, or one being made with +, is in the middle with every run it
+  had; one half made is dropped when Schedules is left.
+- **Permissions.** A schedule says how its agent handles permissions:
+  skip all (the default: nobody is there to answer), accept edits, or ask.
+  Codex offers no "accept edits". Before a schedule that skips them is
+  saved, the app says in words what each run may do on the Mac, and it is
+  saved only once that is accepted. Sessions started by hand keep asking.
+- **Nothing to do when it runs.** A run gives itself what it needs: its
+  agent's switch for the mode, and the folder trusted where the agent would
+  ask. Claude Code's trust is written into its settings when the schedule
+  is saved; Codex's hooks run without the user's trust; Copilot CLI and
+  Antigravity are told for the run.
+- **Runs.** A run is a session like any other, in the folder, named after
+  the schedule and marked as its run, and stays open when the agent is done,
+  for a day, so what it did can be read. A run whose turn before it is
+  still going is skipped and said to be. At most two run at the same
+  moment; a third waits for its turn. A run missed while the Mac slept or
+  was off runs once when it is next awake, or is skipped, as the schedule
+  says; never more than once for all the times missed. A schedule made
+  after its time today first runs at its next time.
+- A schedule about to run keeps the Mac awake from ten minutes before,
+  whatever the keep-awake switch says. Waking a sleeping Mac is not done.
+- Each schedule lists its last runs: when, and what came of it.
+
+### When an agent is done or needs you
+
+- While the Mac is used from the iPhone, the iPhone says when an agent has
+  finished its task or needs an instruction (a permission, a question):
+  a banner in the app for a session other than the one on screen, and a
+  notification just after the app was left, while iOS lets it run. Once
+  iOS has put the app to sleep nothing arrives, until it is opened again.
+  There is no push through Apple.
+- Each is told once: an agent that asks again something else is told
+  again, one that keeps waiting is not. On connecting, what waits or is
+  done and was not told yet is told at once.
+- Nothing is told on the iPhone while someone is at the Mac: its app in
+  front, or a key or the pointer used in the last five minutes. Once the
+  iPhone (or another device) was used, no one is at the Mac, also after the
+  phone is put away, until the Mac app is used again: a key or a click in
+  its window.
+- A notification for a question, or for a finished task, takes a short
+  reply, written or dictated, sent as the next message; it asks for the
+  phone to be unlocked first. One for a permission has no buttons: the
+  agents do not say which choices they offer, so touching it opens the
+  session. A reply that arrives after the agent moved on is dropped, and
+  the app says so.
+- What the agent said shows on the lock screen only where iOS shows
+  previews there; by default it does not.
+- A switch in the iPhone's Settings ("Tell me when an agent is done or
+  needs me") turns it off.
+- On the Mac, a banner says so for a session that is not the one in front,
+  and opens it.
+
+### The Live Activity
+
+- While agents work, the iPhone's lock screen and Dynamic Island show it
+  without the app being opened: how many work, which wait for an
+  instruction, which are done, by the sessions' names only. Touching it
+  opens the app on the session that waits.
+- Only while all three hold: the iPhone is connected to the Mac, no one is
+  at the Mac (as for notifications), and an agent works or waits. It ends
+  at once when the connection ends or the Mac is used again, since it
+  could no longer be kept true; when every agent is done it stays showing
+  that, which stays true.
+- It is updated only while iOS lets the app run, a short while after it
+  left the front: there is no push through Apple. A switch in the iPhone's
+  Settings turns it off.
+
+### Shells an agent opens
+
+- An agent can open a shell as a session the user sees: asked to "open an
+  SSH session to the build server and check the logs", it opens it as a
+  tab, works in it, and the user watches and can type in it too. On the
+  Mac it is a tab and a row in its agent's folder, on the iPhone a row,
+  marked as opened by an agent.
+- It is done through AgentTerm's MCP server, which AgentTerm installs in
+  the settings of Claude Code, Codex, Copilot CLI and Antigravity for the
+  whole user, by default, the first time it runs. Settings ("Agents can
+  open shells you see", on the Mac and the iPhone) removes it from them,
+  and puts it back.
+- Its tools: open a shell (with a command or without), list the shells,
+  read a shell's screen, type into it (text and keys by name), wait until
+  its screen is still or shows a text, close it.
+- The shells agents open are every agent's: an agent lists them, with
+  their folders, and uses one that is free rather than open one more, so
+  that each agent does not leave shells of its own behind. An agent never
+  reaches the user's own sessions, nor an agent's session. It opens shells
+  only, never another agent.
+- When the agent's session ends, the shells it opened stay, for the user
+  and for the other agents.
+- Outside a session of AgentTerm (an agent run in another terminal), the
+  server offers no tools.
+- **Agents run their commands in shells you see**, on by default, next to
+  the switch above: each agent is asked to run its commands in a shell of
+  the server, one already open if there is one free in its folder, rather
+  than in its own out of sight, and to leave it open for the next task. Claude
+  Code is told so in its system prompt; Copilot CLI and Antigravity in
+  instructions files of AgentTerm's, which they read as they read a
+  project's; Codex through the server's instructions, which it follows. An
+  agent still decides for itself.
 
 ### Usage
 
@@ -111,7 +277,7 @@ rather than guessed.
 
 ### The Mac at a glance
 
-In a line under the Mac's launch buttons, and above the sessions on the
+In a line under the Mac's launch buttons while Sessions is shown, and above the sessions on the
 iPhone, six figures say how the Mac itself is doing, the ones a system monitor shows:
 processor in use across all cores, memory in use (as a share, and as
 gigabytes of what is installed), network speed down and up, temperature,
@@ -130,12 +296,16 @@ under 20% that is not charging turns amber.
 ### Terminal size
 
 - The terminal resizes to fit the device being used. Opening a session on the
-  iPhone, or typing in it there, gives the PTY the iPhone's size and the
-  program redraws for it.
+  iPhone, coming back to it there after the phone was away, or typing in it
+  there, gives the PTY the iPhone's size and the program redraws for it,
+  without a button.
+- A device that was using a session and goes (the phone put away, out of
+  reach) leaves it at its size: the session is not handed back to the Mac
+  until someone uses it there.
 - A device that only shows a session never changes its size. The Mac app
   lists and shows every session, including the ones a phone is typing in; it
-  takes a session's size only when the user types in it on the Mac or presses
-  "Use This Window's Size".
+  takes a session's size only when the user types or clicks in it on the Mac
+  or presses "Use This Window's Size".
 - While another device is using a session, the Mac shows that device's
   terminal centered in a frame, like a preview of its screen, with a line
   above saying so. This is the same for shells and for agents.
@@ -198,13 +368,23 @@ conversation over to a neighbouring project.
 
 ### macOS window
 
-Three panes, like a code editor. The toolbar follows them: the button that
-hides the folder list is at the far left, the launch buttons for the agents
-are in the middle, followed by the pairing button, which is filled so it
+Like a code editor: a bar of places at the left edge, then three panes. The
+bar has the window's places, as the iPhone has its tabs: **Sessions**,
+**History** and **Schedules** at its top, **Settings** (⌘,) at its foot. The
+place shown is marked; pressing it again hides its list, and pressing it
+once more shows it. The toolbar follows the panes: the launch buttons for
+the agents are in the middle, followed by the pairing button, which is filled so it
 stands out, and in the far right corner is the button that hides the side
 panel.
 
-- **Left: folders.** A Settings button sits in the bottom left corner. Project folders the user added, each with its running
+- **Left: the place's list.** In Sessions, the folders. In History, the
+  conversations (below). In Schedules, the runs and the schedules (see
+  Schedules). In Settings, its panes, General, Git, Permissions and
+  Privacy; the pane picked takes the middle of the window, over the
+  terminals, which keep running and come back as they were when another
+  place is picked. Settings opens on General each time. Settings is not a
+  window of its own.
+- **The folders.** Project folders the user added, each with its running
   sessions underneath. A session shows its agent's icon and a name. The list belongs to the host, so the iPhone shows the
   same folders. Sessions started elsewhere are listed under "Other".
   A folder is dragged onto another to go before it, or moved up and down
@@ -226,7 +406,11 @@ panel.
   its tabs; clicking the label folds the group away. A tab takes on the
   place it is dropped in: pinned among the pinned, in the group of the tab
   it lands next to, or on a group's label to join it.
-- **Right: side panel**, with three tabs. The panel can be hidden.
+- **Right: side panel**, with three tabs, Git, History and Files. The panel can be hidden. It is there in Sessions only, and so is its button: in History, Schedules and Settings what is in the middle is what the window is about.
+  - **History** of the panel: the conversations each agent had in the
+    selected folder only; conversations that ran in a subfolder belong to
+    that subfolder. One picked there is shown in a sheet over Sessions, with
+    what History shows of it (below); Sessions stays.
   - **Git.** Uncommitted git changes of the selected folder: the changed files
     with added and removed line counts. Clicking a file shows its diff in the
     middle pane, in one diff tab that follows the file picked. A button in
@@ -268,13 +452,15 @@ panel.
     Not part of it: staging part of a file, discarding changes, amending,
     force push, choosing a remote or another branch, and resolving a pull
     that conflicts.
-  - **History.** The conversations each agent had in the selected folder, one
-    section per agent, newest first, with a title and how
-    long ago it was. A conversation can be resumed, which opens it in its
-    agent in a new session, or handed off to another agent. Like the Git
-    tab it covers the selected folder only: conversations that ran in a
-    subfolder belong to that subfolder. A switch at the top changes the list
-    to **All**: every conversation on the Mac, each row naming its folder.
+- **History**, the place in the bar at the left: every conversation the
+    agents had on the Mac, one section per agent, newest first, each with a
+    title, its folder and how long ago it was. A conversation can be
+    resumed, which opens it in its agent in a new session, or handed off to
+    another agent. Picked, it is shown in the middle of the window, over the
+    terminals, as the iPhone shows one: its agent, title and folder, Resume,
+    Copy Resume Command, and the handoff's folder, agent, prompt and
+    instructions. Resuming or handing off goes to Sessions, on the new
+    session. With none picked, the middle says to choose one.
 
 ### Keeping the Mac awake
 
@@ -285,7 +471,7 @@ holds the hold on sleep, so it works with the window closed, and lets go
 when the last session ends. Closing the lid still puts the Mac to sleep.
 Off by default.
 
-Three options go with it, in the same places, and like the switch they are
+Four options go with it, in the same places, and like the switch they are
 the host's, so both apps show the same:
 
 - **Turn off by itself** after 1, 2, 4 or 8 hours, counted from when it is
@@ -294,6 +480,10 @@ the host's, so both apps show the same:
 - **Keep the display on too.** Without it the display may turn off.
 - **Only while the Mac is plugged in.** On battery the Mac sleeps as usual,
   and is kept awake again once power is back.
+- **Only while an agent is working.** The Mac is kept awake while at least
+  one agent is working (see "What the agent is doing"), and let go when
+  none is: an agent that waits for the user, or is done, and a shell, hold
+  nothing. Off by default; off, any open session keeps the Mac awake.
 
 ### Menu bar (Mac)
 
@@ -351,6 +541,33 @@ ships with, a banner says so, with the other host's path, and offers **Use
 This App's Host…**: the other host is stopped, after asking since its
 sessions end with it, and the app's own is started.
 
+### A host that stopped
+
+A host that stops without being asked to (killed, by macOS or by another
+program, or crashed) takes its sessions with it. When the next host
+starts, every app is told so, also one that connects later, until the user
+has dismissed it on one device:
+
+- The Mac app starts its host again by itself, and a banner says that the
+  host stopped unexpectedly, when, which sessions ended with it, and that
+  it was started again.
+- On the iPhone, and on a Mac showing another Mac, the same in words: "The
+  host on <Mac> stopped unexpectedly … and was started again", with the
+  sessions that ended, rather than a list that emptied.
+- With the app closed, the host started at login (Start at Login on) is
+  started again by macOS (launchd) when it is killed or crashes, so the
+  iPhone still reaches the Mac; the next app to connect is told what
+  ended. With Start at Login off and the app closed, nothing starts it
+  again.
+- A host that dies three times within sixty seconds is not started again
+  by itself, by the app or by launchd: the Mac app says that it keeps
+  stopping, how the last one ended when it knows, and offers Try Again.
+- A host the app starts that cannot start (its port is taken, for one)
+  is said so at once, with the host's own words why, and Try Again.
+
+A stop that was asked for (Restart Host, replacing another copy's host,
+logging out) is not reported.
+
 ### What the two apps share
 
 The Mac and the iPhone offer the same things wherever the device allows:
@@ -400,8 +617,9 @@ and touch up what an agent wrote without leaving the app.
 - Markdown opens as a rendered preview, with a switch to the source. Code
   blocks in it are colored, and blocks marked `mermaid` are drawn as
   diagrams. A `.mmd` or `.mermaid` file is previewed as a diagram too.
-- Images are shown. Files that are not text, or larger than 2 MB, are not
-  opened.
+- Images are shown. Files that are not text are not opened. A text file
+  larger than 2 MB says so and offers **Open Anyway**, which opens it, up to
+  20 MB.
 - The tree, and open files without unsaved changes, follow changes made
   elsewhere, by an agent for one, within a few seconds.
 - The files that were open come back as tabs the next time the app starts.
@@ -448,7 +666,7 @@ that Mac; pairing another adds it to the list, and holding a Mac forgets it.
 
 Inside a Mac there are three tabs: **Sessions** (how the Mac is doing, then
 the folders and their sessions), **History** (every conversation on the
-Mac) and **Settings**, in the order of the Mac's Settings window: General
+Mac) and **Settings**, in the order of the Mac's Settings: General
 (keeping the Mac awake with its options, the temperature's unit), Git
 (commit messages, diffs), Privacy, then the Mac itself (switching to
 another, forgetting this one) and About (the version and the links). The
@@ -474,7 +692,7 @@ button at the top right of Sessions goes back to the list of Macs.
   be staged, unstaged and committed as on the
   Mac, the branch pushed and pulled, and the commit message written by an
   agent. **History**: the conversations each agent had in the
-  folder, with a switch to every conversation on the Mac. **Files**: see
+  folder only, as on the Mac; every conversation is in the History tab. **Files**: see
   Files above.
 - A conversation can be resumed in its agent, or handed off to another
   installed agent. The handoff sheet shows the prompt the agent will start

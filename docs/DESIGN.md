@@ -84,8 +84,16 @@ implements "the client being used wins":
   later and the phone would only see a corner of it.
 - A client's reported size is kept while another client drives, so typing
   there later switches to its current size at once.
-- When the driver detaches, the most recently active remaining client becomes
-  the driver. With no client left the size stays as it is.
+- When the driver detaches, a driver that used the session (took control or
+  typed) leaves its size: nobody drives until a client uses the session
+  again, and the size stays (`SizeArbiter`, SIZE-8). The program's
+  questions to its terminal are answered meanwhile by the most recently
+  active client (`answerer`). A driver that only watched, being the only one
+  there, hands over to the most recently active remaining client. With no
+  client left the size stays as it is.
+- The iPhone takes control of the session open on it whenever its replay
+  ends, so coming back after it was away takes the phone's size at once. The
+  Mac app takes control when a key is typed or the terminal is clicked.
 - After every change the host sends `resized` to each attached client with a
   `driver` flag. A client that is not the driver shows the driver's grid
   rather than its own, so the content lines up.
@@ -126,6 +134,33 @@ Keeping the Mac's own, larger grid and letting the narrower output flow into
 it was tried and dropped: it reads well for programs that draw relative to
 the cursor, but the picture on the Mac is then not the picture on the phone.
 
+### Writing a screen out off the sessions' queue
+
+Each session's `ScreenMirror` is used only on a queue of its own
+(`mirrorQueue`): its output is fed there, it is resized there, and a client
+that attaches gets the screen written out there, 82 ms for 10,000 lines,
+while the queue every session's output and every request go through goes
+on (PERF-7). The client is sent `attached` at once; what the session writes
+until the screen is ready is kept for it (`awaitingScreen`) and sent after
+the screen, so it counts on from the end of it. A newer attach of the same
+client drops a screen still on its way.
+
+### Earlier lines a page at a time
+
+`attach` takes `history`: how many lines above the screen to write out,
+the nearest ones (`ScreenMirror.snapshot(linesAbove:)`); nil for all.
+`replaying` says, in `above`, how many the host keeps. The iPhone attaches
+with 500 (`TerminalController.historyAsked`); when the view is scrolled to
+its top by a finger (watched on `contentOffset`, since the emulator does not
+say it scrolled while a finger moves it), and the host keeps more, it
+attaches again with 1,000 more. That replay is drawn over the same
+terminal, not a new one, and says so in a strip rather than over the
+screen; it does not take the session's size again. Once drawn, a swipe
+still coasting is stopped and the row that was at the top is put back by
+number, again after the emulator's next frames, which follow its output to
+the bottom, until it stays (HIST-6). A reconnect asks with `have` and the
+same `history`, and gets only what came since.
+
 ### The size a session starts with
 
 A session is created with the grid that fits the place its terminal will be
@@ -134,6 +169,12 @@ font before any terminal view exists. With a guessed size the shell draws
 its first prompt for the wrong width. zsh then leaves a stray "%" on screen:
 it prints that mark and pads the line to the width it believes in, and the
 padding wraps where the real width is smaller.
+
+That place is the terminal's pane less the room kept around the text
+(`TerminalInsets`: 14 points at the sides, 10 above and 8 below on the Mac;
+10 at the sides, 8 on its side, and 6 above and below on the iPhone). On the
+Mac the launch screen, where a first session is started from, has no strip
+of tabs yet, so the strip's height, as last shown, is taken off too (SIZE-7).
 
 The same mark can still show after the width changes later (rotating the
 phone, changing the text size, another device taking over), because the
@@ -189,16 +230,19 @@ Client to host:
 | `files(path)` / `readFile(path)` / `writeFile(path, text)` | A folder's files, what a file holds, and saving it. |
 | `createFile(directory, name, isDirectory)` / `renameFile(path, name)` / `trashFile(path)` | Change the files. Answered with the folder's listing. |
 | `listDirectory(path)` | The folders inside a folder, or inside home. |
+| `dismissFailure(id)` | The user has seen the report of a part that stopped: it is dropped for every client. |
 
 Host to client: `welcome`, `sessions`, `agents`, `folders`, `attached`,
 `resized`, `exited`, `error`, `diff`, `diffFile`, `history`, `directory`,
-`commitMessage`, `sshHosts`, and for pairing `paired`, `pairingCode`,
-`devices`. The session list, the folder list and the host's settings
+`commitMessage`, `sshHosts`, `failures`, and for pairing `paired`,
+`pairingCode`, `devices`. The session list, the folder list and the host's settings
 (`tabLayout`, `keepAwake`, `keepAwakeOptions`, `commitWriter`) are pushed to
 every client when they change.
 
-The protocol version is 6 since 0.4.0, which added the messages for push
-and pull, commit messages, keep awake options and SSH hosts.
+The protocol version is 7 since 0.6.0, which added `failures` and
+`dismissFailure` (see "A part that stopped"). It was 6 from 0.4.0, which
+added the messages for push and pull, commit messages, keep awake options
+and SSH hosts.
 
 The folder list is host state, saved in `folders.json`, so the Mac and the
 iPhone show the same projects and the phone can start an agent in any of them.
@@ -310,12 +354,34 @@ for a branch that follows none, the remote a first push would go to:
 `origin`, else the first remote. `GitActions.push` runs `git push`, or
 `git push --set-upstream <remote> <branch>` for that first push;
 `GitActions.pull` runs `git pull --no-edit`, so it merges or rebases as the
-repository is set up to. Both run with `GIT_TERMINAL_PROMPT=0`, no askpass
-program and `SSH_ASKPASS_REQUIRE=never`: credential helpers and the SSH
-agent still answer, and anything that would wait for typing fails with
+repository is set up to. Commit, push and pull all run with
+`GitActions.actionEnvironment`: `GIT_TERMINAL_PROMPT=0`, no askpass
+program, `SSH_ASKPASS_REQUIRE=never` and `GIT_EDITOR=true`, so that neither
+git nor a hook can sit waiting for a password: credential helpers and the
+SSH agent still answer, and anything that would wait for typing fails with
 git's own message, since there is no terminal to type in. A pull that
 leaves a merge or a rebase under way is aborted, unless one was already
 under way before it, which is the user's and is left alone.
+
+Commit, push and pull run with the `PATH` of the user's login shell, not
+the host's own: the host is started by the app or by launchd, whose `PATH`
+is the system's short one, and git starts credential helpers (`!gh auth
+git-credential`), hooks' tools and `git-lfs` by name. `LoginShellPath`
+asks `$SHELL -l -i -c` for it once, prints it behind a marker so whatever
+the startup files print is left out, and keeps it; when the shell says
+nothing, the host's `PATH` is used. When git then says a program was not
+found ("command not found", "is not a git command"), the shell is asked
+again, and the action is run once more only if the `PATH` it gives is
+another one: the program may have been installed since. The first ask
+waits for the shell to start (at most 8 seconds), so the actions are never
+run on the main thread. Under XCTest the user's own shell is never
+started: `LoginShellPath` answers nothing there unless a test stands a
+shell of its own in, so the tests read none of the user's startup files.
+When a push or pull fails because nothing gave git
+a sign-in ("could not read Username for '<url>'") and a credential helper
+was not found, a sentence naming the host and the helper is put above
+git's words: "git could not sign in to github.com: its credential helper
+`gh` was not found."
 
 ## Commit messages written by an agent
 
@@ -382,8 +448,10 @@ its own reading of the configuration, never a command.
 
 `SleepGuard` holds an IOKit power assertion: `PreventUserIdleSystemSleep`,
 or `PreventUserIdleDisplaySleep` when the display is to stay on. The host
-holds it while the switch is on, a session exists, and, with "only on
-power", `IOPSGetProvidingPowerSourceType` does not say battery; it looks
+holds it while the switch is on, a session exists (with "only while an
+agent is working", a session whose agent is working: the host looks again
+whenever a state changes), and, with "only on power",
+`IOPSGetProvidingPowerSourceType` does not say battery; it looks
 again on its timer, so plugging in or pulling the cable is followed within
 seconds. A hold given a length carries the time it ends in the options;
 when that passes the host switches it off and tells the clients. The
@@ -531,6 +599,225 @@ them in, so every client shows the same name without reading any files:
 
 Handing off a running session uses `conversationID` when it is set.
 
+## What the agent is doing
+
+`SessionInfo.state` is an `AgentState`: `working(since:)`,
+`waitingForPermission(AgentQuestion)`, `waitingForAnswer(AgentQuestion)`,
+`done(said:)`, or nil when it is not known. `stateNote` says why it cannot
+all be known, when there is something to say. The host works both out, so
+every client shows the same.
+
+**From the agent itself.** When the host starts an agent's session it gives
+the agent hooks for that session only (`AgentHooks`), in the way each agent
+takes them, without a change to the user's configuration:
+
+| Agent | Given by | Events |
+|---|---|---|
+| Claude Code | `--settings`, with the status line | `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Notification`, `Stop` |
+| Codex | one `-c hooks.<Event>=...` for each | `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`, `Stop`, `Interrupt` |
+| Copilot CLI | `--plugin-dir`, a plugin in the host's `hooks/copilot` | `userPromptSubmitted`, `preToolUse`, `permissionRequest`, `postToolUse`, `postToolUseFailure`, `agentStop` |
+| Antigravity | `--add-dir`, the host's `hooks/antigravity` holding `.agents/hooks.json`, trusted for the session by `--settings` with the folders the user trusts | `PreInvocation`, `PreToolUse`, `PostToolUse`, `Stop` |
+
+Every hook runs `agenttermd hook <agent> <event>`. It saves what it is told,
+with the agent, the event and the time, in the file `AGENTTERM_EVENTS`
+names: `session-<id>.events.json` in the usage folder, set in the session's
+environment, which the agents pass on to their hooks. The command is the
+same for every session because Codex trusts a hook by its command and asks
+again when it changes. For Antigravity's `PreToolUse` the hook answers
+`{"decision":"allow"}`, which leaves the decision to its own rules.
+
+The host watches the usage folder and reads a session's file when it
+changes, and on every refresh in case a change was missed; only the latest
+event is kept, since the state follows from it. `AgentHooks.change` makes
+the state from it, from what each agent was seen to tell its hooks on
+2026-11-13 (Claude Code 2.1.323, Copilot CLI 1.0.110, Antigravity 1.5.7;
+Codex 0.167.2 from its documentation, since it runs no hook it was not told
+to trust). Working stays working since it began.
+
+What cannot be known:
+
+- **Codex** runs no hook until the user trusts it, so its session's state
+  is not known until it says something, and `stateNote` says how to trust
+  the hooks.
+- **Antigravity** says nothing when it waits for permission: its question
+  comes after `PreToolUse`, with nothing in between. So while a tool runs,
+  its state is not known, and `stateNote` says so.
+- **The choices of a permission** are in no agent's hooks; those of a
+  question are, for all but Codex, which has no question event.
+- **A turn the user stops** is told by Codex (`Interrupt`) and not by the
+  others. Escape alone or Control C typed to a working session makes its
+  state not known until the agent says more.
+
+## Worktrees
+
+`GitWorktrees` (host): `create(in:agent:branch:)` runs `git worktree add -b
+<branch> <top>/.agentterm/worktrees/<branch> HEAD` after listing
+`.agentterm/` in the exclude file, and returns the folder's place inside
+the new worktree. Paths are written the way the folder is: git gives real
+paths, and a folder opened through a symbolic link (`/var`, `/tmp`) would
+otherwise not be found in them. `list(folder:inUse:)` reads `git worktree
+list --porcelain`: each worktree's branch, commits ahead of the folder's
+branch, files changed, and whether its folder is gone; a session counts
+for the deepest worktree it is in. `finish` merges (`--no-edit`, undone on
+a conflict, refused with uncommitted changes) and removes, pushes and runs
+`gh pr create --fill` through the login shell, or removes with `--force`.
+
+Messages: `createInWorktree(request:branch:)`, `listWorktrees(folder:)`,
+`finishWorktree(folder:path:finish:deleteBranch:)` (refused while a session
+runs in it), `setWorktreeSetup(folder:command:)`, kept in `worktrees.json`;
+answered with `worktrees(folder:list:setup:)` and `worktreeFinished`.
+`SessionInfo.branch` names a session's worktree branch; `WorktreePath`
+tells which folder a session in `.agentterm/worktrees` belongs to. The setup
+command runs through the login shell in the new worktree before the
+session, so the agent is still known by its command.
+
+On the Mac, `AppModel.panelFolder` is the worktree shown (`shownWorktree`)
+or the selected folder; the side panel's diff, commits, history and files
+follow it, and selecting a session in a worktree shows that worktree.
+
+## Schedules
+
+`Schedule` (protocol): its agent, folder, prompt, `ScheduleTime` (`once`,
+`daily`, `weekly`, `limitReset`), `SchedulePermissions` (`skipAll`,
+`acceptEdits`, `ask`), whether it is on, whether a missed run catches up,
+whether its warning was accepted, its last 20 runs and its next run. The
+host keeps them in `schedules.json` next to `folders.json`, with until when
+it looked (`checked`), from when each schedule is looked at (`from`, set
+when it is made or its time changes), and the last limit reset each agent
+ran for. Clients send `saveSchedule`, `removeSchedule` and are told
+`schedules`.
+
+**Shown.** `ScheduleOverview` (protocol), which both apps use, groups the
+schedules with the sessions that still run: the runs whose session is one
+of them (running), every schedule by its next run (then those with none,
+then those off), and the other runs, newest first. Nothing is added to the
+protocol: a run names its session, and the session list says which run.
+
+**Saving.** Refused when the agent does not offer the mode, when it skips
+permissions without its warning accepted, or without a prompt. Then
+`ScheduleRunner.trustFolder` trusts the folder where the agent keeps that:
+`projects[<folder>].hasTrustDialogAccepted` in `~/.claude.json`, and
+`trustedFolders` in `~/.copilot/config.json` for Copilot CLI when it does
+not skip permissions. The rest of those files is left as it was.
+
+**Running.** Every 20 seconds, on its clock (`Configuration.now`, which
+tests set), the host takes each schedule's first time after the later of
+`checked` and its `from`: one that is now or past is due, once, however
+many came between. A look more than 90 seconds after the last means the
+Mac slept: a due time older than that is a missed run, run now or recorded
+as missed as the schedule says. `limitReset` is due two minutes after the
+latest `resetsAt` of the agent's account limits that it has not run for.
+A due run of a schedule whose last run is still going (its session runs
+and its agent is not done) is skipped; with two runs going, it waits. A
+run is `ScheduleRunner.launch`: the agent's command with its switch
+(`claude --permission-mode bypassPermissions|acceptEdits`, `codex
+--dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust`,
+`copilot` with `COPILOT_ALLOW_ALL=true` or `--allow-tool=write`, `agy
+--dangerously-skip-permissions` or `--mode accept-edits`) and the prompt,
+started as a session with no client attached, `SessionInfo.schedule` and
+`schedulePermissions` set; Antigravity gets the folder among those it
+trusts for the session. A run's session done for 24 hours is closed. The
+hold on sleep is also taken while a schedule's next run is ten minutes or
+less away.
+
+## When an agent is done or needs you
+
+Each app works out what to tell of from the states the host sends (#3),
+with `AgentNotice.notices(in:told:)`: a session whose agent is done or waits
+in a state it was not told in before. `told` is kept by the app for each
+Mac across connections, so that coming back to the app tells nothing
+twice; a session that works again, or whose state is not known, is
+forgotten in it, so that what it says next is new.
+
+**Whether someone is at the Mac.** The host works it out on its refresh and
+when it changes: the Mac app says whether it is in front
+(`appInFront(Bool)`, only to its own Mac's host), and `MacUse.idleSeconds`
+reads macOS's `HIDIdleTime`. Five minutes without either is no one there.
+A device that types or takes control of a session makes it no one there,
+whatever the two say, until this Mac's own app types, takes control or
+says `used` (a key or a click in its window, sent once after it was told
+no one is there) (NOTE-7). Every client is told `macInUse(Bool)`; the
+iPhone tells nothing while it is true.
+
+**On the iPhone.** In front, a banner over the sessions list, for a session
+other than the one on screen. Behind, a local notification
+(`AgentNotifications`): the app asks iOS for a little more time when it
+leaves the front (`beginBackgroundTask`), during which the connection
+lives. A question's or a finished task's notification has a text reply
+action that asks for the phone to be unlocked; the reply is sent as
+`answer(session:to:text:)`, naming the state it answers, and the host types
+it, then Return, only while the session is still in that state; else it
+answers `error` and types nothing. A reply given while the connection was
+gone waits for it. Notifications hide their text where iOS hides previews.
+
+**On the Mac.** A banner over the window for a session that is not the one
+selected while the app is in front.
+
+## The Live Activity
+
+A widget extension, `AgentTermLiveActivity` (`iOS/AgentTermLiveActivity`),
+with `AgentsActivityAttributes` (`iOS/Shared`, in both targets): the Mac's
+name, and as content how many work and the names of those that wait and
+are done. The app starts, updates and ends it (`PhoneModel.updateLiveActivity`)
+whenever the sessions, the connection or `macInUse` change, as
+`LiveActivityRule.decide` says: shown while connected, no one at the Mac
+and an agent working or waiting; ended at once otherwise, but with the
+last state left showing when every agent is done. Its link,
+`<scheme>://session?id=<n>`, opens the session that waits. No push token is
+asked for: updates come from the app while iOS lets it run.
+
+Its bundle identifier is the app's with `.LiveActivity`; the release lane
+signs it with a profile of its own from `match`.
+
+## Shells an agent opens
+
+AgentTerm's MCP server is `agenttermd mcp` (`AgentShellsMCP`): JSON-RPC, one
+message to a line, on standard input and output. Its tools are
+`open_shell`, `list_shells`, `read_screen`, `send_input`, `wait` and
+`close_shell`. `wait` reads the screen every 0.2 seconds until a text
+appears, or the screen has been the same for a while, or the time is up.
+
+**Which session's agent it is.** The host gives every agent's session a key
+of its own, with its port, in `AGENTTERM_MCP`; the agent passes its
+environment on to the server it starts. The server signs in to the host as
+any app on the Mac does, with the Mac's own token from the state folder,
+and sends each request as `agentShell(id:key:request:)`. The host looks up
+the session whose key it is and answers `agentShellResult(id:result:)` to
+that connection only. A key names a running agent's session or nothing.
+Without the variable, the server offers no tools. With "agents run their
+commands in shells you see" on (the host's `agentsUseShells`, on by
+default) the variable ends with `use`: the server's instructions are then
+`AgentShellsInstructions.useShells`, and the agents are told the same
+where each reads it (MCP-13): Claude Code is started with
+`--append-system-prompt`; Antigravity gets a rule always on,
+`.agents/rules/agentterm.md` in the folder it is given with `--add-dir`;
+Copilot CLI gets `COPILOT_CUSTOM_INSTRUCTIONS_DIRS` naming a folder of the
+host's with `instructions/agentterm.instructions.md` (after any the user's
+environment names). Copilot CLI takes MCP servers' instructions only from
+servers it allows, and Antigravity not at all. Codex follows the server's.
+
+**What it may reach.** A shell it opens is a session like any other, in the
+agent's folder and at its size, with `SessionInfo.openedBy` naming the
+agent's session. Listing, reading, typing and closing are done on any
+session with an `openedBy`, whichever agent opened it, so that agents share
+their shells rather than each open its own; never on the user's sessions or
+an agent's session. Two agents typing into one shell at once is not
+prevented. A command whose first word is an agent's is
+refused. Typing is the same as typing: text, and keys by name turned into
+the bytes a terminal sends (`TerminalKeys`). When the agent's session ends,
+the server it started ends with it, and its shells stay, for the others.
+
+**Installed in the agents.** `AgentShellsInstall` runs each installed agent's
+own command, through the login shell: `claude mcp add --scope user
+agentterm -- <agenttermd> mcp`, `codex mcp add agentterm -- …`, `copilot
+mcp add agentterm -- …`, `agy mcp add agentterm -- …`, and `mcp remove
+agentterm` to take it out. `agent-shells.json` in the state folder keeps
+whether it is on (on unless turned off) and which agents have it, with the
+program it names: only those are ever removed, and an agent is asked again
+when the host's program moved. The host does it at start and on
+`setAgentShells`, off its queue, and tells every client `agentShells(Bool)`.
+A host with a state folder of its own (a test, a trial run) never does.
+
 ## Handoff
 
 `Handoff.prepare` turns a `Conversation` into a handoff file and a command:
@@ -638,6 +925,135 @@ the same folder can therefore be mixed up; the History tab is exact.
 - If the app cannot connect, it starts the `agenttermd` that sits next to its
   own executable, in a new session so it outlives the app, and retries.
 
+## A part that stopped
+
+A part of AgentTerm that stops without being asked to is reported to every
+client in a message of its own, `failures([PartFailure])`, rather than left
+for the clients to work out from a list that emptied. The parts are the
+host, a session's program, the hold that keeps the Mac awake, and the
+status line relay (see "The other parts" below). A `PartFailure` says:
+
+| Field | Means |
+|---|---|
+| `id` | Names the report, for `dismissFailure` |
+| `part` | Which part: `host`, `session`, `keepAwake`, `statusLine`. Text, not a closed list, so a client reads a part added after it was built |
+| `name` | Which one, for a part there are several of (a session); nil for the host |
+| `at` | When it stopped, as near as is known |
+| `ended` | The sessions that ended with it: name, folder, agent |
+| `restarted` | Whether it was started again by itself |
+| `broken` | It stopped too often (three times in sixty seconds) and is not started again by itself |
+| `reason` | Why it stopped, or why starting it again failed, when that is known |
+
+The host sends the list of reports nobody has seen on connecting and
+whenever it changes. A client that dismisses one (`dismissFailure`) drops
+it for all of them. The list is kept in `failures.json` in the state
+folder, at most twenty, so a host that is restarted, or dies itself, still
+has it. Both apps word a report the same way (`PartFailure.headline`,
+`details`).
+
+**The other parts.** None of them is started again by the host:
+
+- **A session's program** that dies of SIGKILL or of a signal a crash
+  gives (SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGTRAP, SIGFPE) is reported
+  with its session, which ends as it always did. A program the user
+  stopped (Control C, SIGINT) or that ended by itself is not, nor one whose
+  end was asked for: closing a session sends SIGHUP and, three seconds
+  later, SIGKILL, and the host notes that the end was asked for before it
+  sends either. A program that exits by itself with the status a signal
+  would give (137 for SIGKILL) is taken for killed. Offering to resume the
+  agent's conversation in a new session is for a later release.
+- **The hold that keeps the Mac awake** that macOS refuses is reported
+  once. The host asks for it again on every refresh, and the report says
+  so once it is held (`restarted`).
+- **The status line relay** runs once each time Claude Code updates its
+  status line, so there is nothing that keeps running to start again.
+  When it cannot save what it was given, it writes why next to the file
+  (`<file>.failed`) and removes that once it saves again. The host looks
+  for it on every refresh and reports it once for the session, and again
+  only if it was saved in between.
+
+**How a death is told from a stop.** A running host keeps a marker,
+`host-<port>.json` in its state folder (`HostMarker`): its process, and its
+sessions by name, written again when they change. It touches the file
+every few seconds, so its modification time is when the host was last
+known to be alive. A stop that was asked for (SIGTERM, SIGINT: Restart
+Host, replacing another copy's host, logging out) removes the marker before
+the clients' connections close. A host that is killed or crashes cannot.
+So a host that starts, once its port is its own, and finds a marker whose
+process no longer runs as a host knows the one before it died: it adds a
+report of the host, with that marker's sessions and time, and writes its
+own marker.
+
+**The host watched by the Mac app.** When the app's connection to its own
+host closes, the app looks for the marker: there, the host died; gone, it
+was stopped. A death is counted. The app starts the host again by itself
+(`DaemonLauncher.startHost`: through launchd while Start at Login is on,
+see below), and the new host reports what ended. After
+three deaths within sixty seconds the app does not start it again: the
+launch screen says that the host keeps stopping, how often, and how the
+last one ended, with Try Again, which starts over. The app knows how a
+host it started ended because it is that host's parent: it waits for it
+(`DaemonLauncher.watch`), which also keeps ended hosts off the system's
+books, and puts the status in words (`describe(exitStatus:)`: killed,
+crashed, or exited, with the last "agenttermd: …" line of its log). A host
+it started that ends before it ever answered could not be started, and the
+app says so at once with that reason, instead of trying twenty times. A
+host started by someone else, launchd or a test, gives the app no status:
+the report then says only that it stopped.
+
+Until 0.6.0 the app started its host again only the first time it was
+lost: the flag that says it has started one was never reset after a host
+answered.
+
+**How the host is started: one owner.** With Start at Login on, the host
+is a launch agent (`LoginItem`): `~/Library/LaunchAgents/<bundle
+id>.host.plist`, with `RunAtLoad`, and `KeepAlive` = `SuccessfulExit:
+false`. launchd starts it at login and starts it again when it crashed or
+was killed; a host that was stopped as asked (SIGTERM, SIGINT) exits with
+status 0, and launchd leaves it. While the switch is on, the app does not
+spawn the host either: it asks launchd (`DaemonLauncher.startHost`), so
+there is never a second host racing the first for the port.
+
+`startHost` decides, in this order:
+
+1. launchd runs the job already (it started it again after a death):
+   nothing to start.
+2. The switch is on: the property list is brought up to date
+   (`refresh()`: the host of this app, as this version writes it), the job
+   is unloaded if launchd still has it, and loaded (`launchctl bootstrap`),
+   which starts it at once. A job launchd is waiting to start again is
+   started this way too, instead of after launchd's ten-second throttle.
+   Should launchd refuse it, the app spawns the host itself.
+3. The switch is off: a job launchd still has loaded from before is
+   unloaded, so it cannot start a host next to the app's, and the app
+   spawns its own (`DaemonLauncher.launch`).
+
+The switch only writes or removes the file. Turning it on loads nothing,
+since that would start a second host: the host that runs then is the
+app's until it next stops, and launchd's from the next start on. Turning
+it off unloads nothing, since that would stop the host: launchd keeps
+watching the host it runs until it stops.
+
+A host launchd started is not the app's child, so the app asks launchd
+how it ended (`jobState()`: `launchctl list <label>`, whose
+`LastExitStatus` is the status `waitpid` gives) and puts it in the same
+words. One that ended before it ever answered could not be started: the
+app says so, and unloads the job until Try Again, since launchd would
+only start it again every ten seconds.
+
+**Broken under launchd.** With the app closed nobody counts deaths but
+the host. The marker carries the times of the deaths within the last
+minute from one host to the next (`HostMarker.deaths`). A host that
+starts and finds that its predecessor was the third to die within sixty
+seconds reports that death as broken (`broken`, not `restarted`), removes
+the marker, and exits with status 0 (`StartError.keepsDying`), so that
+launchd does not start it again. The next start is one the user makes:
+logging in, opening the app, Try Again. With the app open the app counts
+as before, says the host keeps stopping after the third death, and
+unloads the job. Try Again clears the deaths in the marker
+(`forgetDeaths`), keeping the marker itself so the death it holds is
+still reported.
+
 ## Another Mac
 
 The Mac app can show another Mac instead of the one it runs on
@@ -735,5 +1151,11 @@ toolbar, before the agents, switches between this Mac and the paired ones.
 - A terminal wider than the Mac window (a phone in landscape next to a narrow
   window) is clipped rather than scaled.
 - The host does not apply backpressure to a slow client.
-- The daemon is started by the app, not as a login item, so after a reboot
-  nothing runs until the app is opened.
+- The daemon is started by the app, or by launchd when the user asked for
+  Start at Login. With Start at Login off and the app closed nothing
+  watches it: a host that dies then is reported only when the next one
+  starts. With it on, a host the app started before the switch was turned
+  on is launchd's only from its next start.
+- A host that cannot even start (its port taken at login) is started
+  again by launchd every ten seconds while the app is closed: it is not
+  counted as dying, since it never ran.

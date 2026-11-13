@@ -85,13 +85,6 @@ struct SidebarView: View {
                 .padding(.horizontal, 8)
                 .padding(.bottom, 10)
             }
-
-            // Bottom left corner: the way into Settings, permissions included.
-            Theme.hairline.frame(height: 1)
-            SettingsLink { SettingsRowLabel() }
-                .buttonStyle(.plain)
-                .help("Settings and the permissions agents need (⌘,)")
-                .padding(8)
         }
         .background(Theme.panel)
         // A folder dragged in from the Finder is added to the list.
@@ -238,9 +231,13 @@ struct FolderRow: View {
         model.selectedFolder = folder.path
         // Jump to this folder's most recent session, or its launch screen.
         model.selectedSession = model.sessions.last { $0.cwd == folder.path }?.id
+        model.shownWorktree = nil
     }
 
     private var isSelected: Bool { model.selectedFolder == folder.path && model.selectedSession == nil }
+
+    /// Sessions of this folder whose agent waits for the user.
+    private var waiting: Int { model.sessions.filter { WorktreePath.belongs($0.cwd, to: folder.path) && $0.state?.isWaiting == true }.count }
 
     var body: some View {
         HStack(spacing: 7) {
@@ -252,6 +249,12 @@ struct FolderRow: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer(minLength: 0)
+            if waiting > 0 {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.orange)
+                    .help(waiting == 1 ? "A session waits for you" : "\(waiting) sessions wait for you")
+            }
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 6)
@@ -261,7 +264,7 @@ struct FolderRow: View {
         .onTapGesture { select() }
         // One thing to press, for VoiceOver and anything else without a pointer.
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(folder.name), folder")
+        .accessibilityLabel("\(folder.name), folder" + (waiting == 0 ? "" : waiting == 1 ? ", a session waits" : ", \(waiting) sessions wait"))
         .accessibilityIdentifier("folder-" + folder.path)
         .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { select() }
@@ -304,6 +307,14 @@ struct SessionRow: View {
                     .font(.system(size: 12.5))
                     .lineLimit(1)
                     .truncationMode(.tail)
+                if let branch = session.branch {
+                    // In a worktree of its own (#23).
+                    Label(branch, systemImage: "arrow.triangle.branch")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
                 if showsPath {
                     Text((session.cwd as NSString).abbreviatingWithTildeInPath)
                         .font(.system(size: 10.5))
@@ -313,6 +324,23 @@ struct SessionRow: View {
                 }
             }
             Spacer(minLength: 0)
+            if let schedule = session.schedule {
+                // A run of a schedule, and whether its agent asks (#11).
+                Image(systemName: "calendar.badge.clock")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(session.schedulePermissions == .skipAll ? .orange : .secondary)
+                    .help(
+                        "A run of “\(schedule)”"
+                            + (session.schedulePermissions == .skipAll ? ": it runs without asking for permission" : ", \(session.schedulePermissions?.label.lowercased() ?? "")"))
+            }
+            if let owner = session.openedBy {
+                // Opened by an agent through MCP: it may type here too.
+                Image(systemName: "sparkles")
+                    .font(.system(size: 9.5))
+                    .foregroundStyle(.secondary)
+                    .help("Opened by " + (model.sessions.first { $0.id == owner }?.displayName ?? "an agent whose session has ended"))
+            }
+            AgentStateMark(session: session)
             if model.foreignSizes[session.id] != nil {
                 Image(systemName: "iphone")
                     .font(.system(size: 10))
@@ -331,7 +359,8 @@ struct SessionRow: View {
             }
             if hovering {
                 Button {
-                    model.close(session.id)
+                    // Asks first, as everything that ends a session does.
+                    model.requestEnd(session.id)
                 } label: {
                     Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
                 }
@@ -349,39 +378,13 @@ struct SessionRow: View {
         .onTapGesture { model.select(session: session) }
         .help(session.summary.map { "\(session.title): \($0)" } ?? session.title)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(session.displayName), session")
+        .accessibilityLabel(
+            AgentStateMark.label(
+                "\(session.displayName), session" + (session.branch.map { ", in worktree \($0)" } ?? "") + (session.openedBy == nil ? "" : ", opened by an agent"),
+                session)
+        )
         .accessibilityIdentifier("session-\(session.id)")
         .accessibilityAddTraits(model.selectedSession == session.id ? [.isButton, .isSelected] : .isButton)
         .accessibilityAction { model.select(session: session) }
-    }
-}
-
-/// The Settings row at the foot of the sidebar.
-private struct SettingsRowLabel: View {
-    @State private var hovering = false
-
-    var body: some View {
-        HStack(spacing: 9) {
-            Image(systemName: "gearshape.fill")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(.white.opacity(0.9))
-                .frame(width: 24, height: 24)
-                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.12)))
-            Text("Settings")
-                .font(.system(size: 13, weight: .medium))
-            Spacer(minLength: 0)
-            Text(AppVersion.current == "dev" ? "dev" : "v" + AppVersion.current)
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.tertiary)
-                .help("\(AppVersion.label), protocol \(agenttermProtocolVersion)")
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 7)
-        .background(
-            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(hovering ? Color.white.opacity(0.10) : Color.white.opacity(0.05))
-        )
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
     }
 }

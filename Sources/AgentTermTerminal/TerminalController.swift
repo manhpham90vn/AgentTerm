@@ -51,8 +51,23 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
         // under the terminal, so that one would be a second, different row
         // of keys that comes and goes.
         view.inputAccessoryView = nil
+        // Drawn on the GPU: drawing every frame on the processor made
+        // scrolling stutter on the phone (PERF-6). It falls back to the
+        // processor by itself where Metal is not there.
+        try? view.setUseMetal(true)
+        // Scrolled by a finger to the top of what is loaded: the lines above
+        // it are asked for (HIST-6). The emulator does not say it scrolled
+        // while a finger moves the view, so where the view is is watched.
+        offsetWatch = view.observe(\.contentOffset, options: [.new]) { [weak self] view, _ in
+            guard view.contentOffset.y <= 1, view.isTracking || view.isDecelerating else { return }
+            DispatchQueue.main.async { self?.loadMoreHistory() }
+        }
         #endif
     }
+
+    #if os(iOS)
+    private var offsetWatch: NSKeyValueObservation?
+    #endif
 
     /// The exact size in points of the grid the emulator currently draws,
     /// which is smaller than the view while another device's size is shown.
@@ -138,7 +153,10 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
     /// without answers for good.
     private func armReplayTimeout(seconds: TimeInterval) {
         replayTimeout?.cancel()
-        let timeout = DispatchWorkItem { [weak self] in self?.isReplaying = false }
+        let timeout = DispatchWorkItem { [weak self] in
+            self?.isReplaying = false
+            self?.replayDrawn()
+        }
         replayTimeout = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: timeout)
     }
@@ -151,8 +169,84 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
             replayTimeout?.cancel()
             replayTimeout = nil
             isReplaying = false
+            DispatchQueue.main.async { [weak self] in self?.replayDrawn() }
         }
         return true
+    }
+
+    // MARK: History asked for a page at a time (HIST-6)
+
+    /// How many lines above the screen to be sent; nil for all of them. A
+    /// phone opens a long session with a few hundred, and asks for more as
+    /// it is scrolled to the top of what it has.
+    public var historyAsked: Int?
+    /// How many lines the host keeps above the screen, as it said.
+    public var historyKept: Int?
+    /// How many more lines each look past the top asks for.
+    public static let historyPage = 1_000
+    /// Earlier lines are on their way: shown in a strip, not over the screen.
+    public private(set) var loadingHistory = false {
+        didSet { if loadingHistory != oldValue { onLoadingHistory?(loadingHistory) } }
+    }
+    public var onLoadingHistory: ((Bool) -> Void)?
+    /// Asks the host for this many lines above the screen.
+    public var onNeedsHistory: ((Int) -> Void)?
+    /// What was in view when more was asked for: how many lines were
+    /// loaded, and the row at the top.
+    private var inView: (loaded: Int, top: Int)?
+
+    public var hasMoreHistory: Bool {
+        guard let asked = historyAsked, let kept = historyKept else { return false }
+        return kept > asked
+    }
+
+    /// Asks for the next page of lines above what is loaded.
+    public func loadMoreHistory() {
+        guard let asked = historyAsked, hasMoreHistory, !loadingHistory, !isReplaying else { return }
+        // The view says where it is as a share of the lines above the screen.
+        let loaded = min(asked, historyKept ?? asked)
+        inView = (loaded, Int((view.scrollPosition * Double(loaded)).rounded()))
+        loadingHistory = true
+        historyAsked = asked + Self.historyPage
+        onNeedsHistory?(asked + Self.historyPage)
+    }
+
+    /// Puts `row` at the top again after the emulator's next frames, which
+    /// follow its output to the bottom, until it stays there.
+    private func keepInView(row: Int, tries: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            guard let self else { return }
+            #if os(iOS)
+            if self.view.isTracking { return }
+            #endif
+            let maximum = max(1, Swift.min(self.historyAsked ?? 0, self.historyKept ?? 0))
+            if abs(self.view.scrollPosition - Double(row) / Double(maximum)) > 0.0005 { self.view.scrollTo(row: row) }
+            if tries > 1 { self.keepInView(row: row, tries: tries - 1) }
+        }
+    }
+
+    /// A replay was drawn. One that brought earlier lines leaves in view
+    /// the line that was there, now further down the buffer.
+    private func replayDrawn() {
+        guard let inView else { return }
+        self.inView = nil
+        let loaded = min(historyAsked ?? 0, historyKept ?? 0)
+        let target = max(0, loaded - inView.loaded + inView.top)
+        guard loaded > 0 else {
+            loadingHistory = false
+            return
+        }
+        // The emulator follows its output to the bottom on its next frames,
+        // after the replay it just drew: the line is put back in view after
+        // them, and again until it stays, unless a finger moves the view.
+        #if os(iOS)
+        // A swipe still coasting would carry the view on from where it was
+        // in the lines it had before: it is stopped first.
+        view.setContentOffset(view.contentOffset, animated: false)
+        #endif
+        view.scrollTo(row: target)
+        keepInView(row: target, tries: 8)
+        loadingHistory = false
     }
 
     /// Sends bytes as if they were typed in the terminal.
@@ -268,7 +362,11 @@ public final class TerminalController: NSObject, TerminalViewDelegate {
 
     public nonisolated func setTerminalTitle(source: TerminalView, title: String) {}
     public nonisolated func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
-    public nonisolated func scrolled(source: TerminalView, position: Double) {}
+    public nonisolated func scrolled(source: TerminalView, position: Double) {
+        // At the top of what is loaded: the lines above it are asked for.
+        guard position <= 0.001 else { return }
+        DispatchQueue.main.async { [weak self] in self?.loadMoreHistory() }
+    }
     public nonisolated func bell(source: TerminalView) {}
     public nonisolated func iTermContent(source: TerminalView, content: ArraySlice<UInt8>) {}
     public nonisolated func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}

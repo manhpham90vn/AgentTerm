@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 6
+public let agenttermProtocolVersion = 7
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -58,10 +58,26 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
     public var conversationID: String?
     /// What the conversation has used, as far as the agent records it.
     public var usage: SessionUsage?
+    /// What the agent is doing, as it says it itself. Nil when that is not
+    /// known: a shell, an agent that has said nothing yet.
+    public var state: AgentState?
+    /// Why the state of this session's agent is not known, or not all of
+    /// it, and what to do about it, when there is something to say.
+    public var stateNote: String?
+    /// The agent's session that opened this shell through MCP (#10), when
+    /// one did. The shell stays, and is the user's, when that one ends.
+    public var openedBy: SessionID?
+    /// The branch of the worktree it runs in, when AgentTerm made one for it (#23).
+    public var branch: String?
+    /// The schedule this session is a run of (#11), by name, and how its
+    /// agent handles permissions.
+    public var schedule: String?
+    public var schedulePermissions: SchedulePermissions?
 
     public init(
         id: SessionID, title: String, cwd: String, size: TermSize, createdAt: Date,
-        agent: String? = nil, summary: String? = nil, conversationID: String? = nil, usage: SessionUsage? = nil
+        agent: String? = nil, summary: String? = nil, conversationID: String? = nil, usage: SessionUsage? = nil,
+        state: AgentState? = nil, stateNote: String? = nil, openedBy: SessionID? = nil
     ) {
         self.id = id
         self.title = title
@@ -72,6 +88,9 @@ public struct SessionInfo: Codable, Equatable, Identifiable, Sendable {
         self.summary = summary
         self.conversationID = conversationID
         self.usage = usage
+        self.state = state
+        self.stateNote = stateNote
+        self.openedBy = openedBy
     }
 
     /// What to call the session in a list: its summary, or its title until
@@ -156,7 +175,10 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// session's output the sender's terminal already is, as `replaying`
     /// and what followed it told: the host then sends only what came after,
     /// when it still keeps that. Nil for a terminal that starts empty.
-    case attach(session: SessionID, size: TermSize, have: Int? = nil)
+    /// `history` is how many of the lines above the screen to send, the
+    /// nearest ones; nil for all of them. A phone opens a long session with
+    /// a few hundred and attaches again with more as it scrolls up.
+    case attach(session: SessionID, size: TermSize, have: Int? = nil, history: Int? = nil)
     case detach(session: SessionID)
     /// Reports that the sender's own grid changed (a window was resized, a
     /// keyboard appeared). The session follows only if the sender is the one
@@ -222,7 +244,9 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Asks for the files and folders in a folder. Answered with `files`.
     case files(path: String)
     /// Asks for what a file holds. Answered with `file`.
-    case readFile(path: String)
+    /// `anyway`: a text file over the size the editor opens by itself, up
+    /// to `FileContent.largestOpenedAnyway`, which the user asked for.
+    case readFile(path: String, anyway: Bool? = nil)
     /// Replaces a file's text. Answered with `fileSaved`.
     case writeFile(path: String, text: String)
     /// Creates an empty file or a folder. Answered with `fileCreated`, then
@@ -249,6 +273,43 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case handoff(agent: String, sessionID: String, cwd: String, target: String, plan: String?, prompt: String?, note: String, size: TermSize, folder: String?)
     /// Asks which folders are inside a folder, or inside home when `path` is nil.
     case listDirectory(path: String?)
+    /// The user has seen the report of a part that stopped: it is no longer
+    /// sent, to this client or any other. Answered with `failures` to all.
+    case dismissFailure(id: String)
+    /// An agent's request about the shells it opened (#10): sent by
+    /// `agenttermd mcp`, with the key of the agent's session. Answered with
+    /// `agentShellResult` to that client only.
+    case agentShell(id: Int, key: String, request: AgentShellRequest)
+    /// Installs the MCP server in each agent's configuration, or removes it.
+    case setAgentShells(Bool)
+    /// Asks the agents to run their commands in shells the user sees,
+    /// opened through the MCP server, rather than in their own (on by default).
+    case setAgentsUseShells(Bool)
+    /// A reply to an agent where it was told of (#22): typed into the
+    /// session, then Return, only while its agent is still in `to`, the
+    /// state the reply answers. One that comes after it moved on is dropped.
+    case answer(session: SessionID, to: AgentState, text: String)
+    /// The Mac app is in front, or is no longer: then the Mac is in use.
+    case appInFront(Bool)
+    /// Someone used the Mac app: a key or a click in its window. The Mac
+    /// is then in use again after a device was used.
+    case used
+    /// Adds a schedule, or changes the one with its id (#11). One that
+    /// skips permissions is refused unless its warning was accepted.
+    case saveSchedule(Schedule)
+    case removeSchedule(id: String)
+    /// Starts a session in a new git worktree of `request.cwd`, on a branch
+    /// of its own cut from the folder's current commit (#23). Nil `branch`
+    /// names it after the agent.
+    case createInWorktree(request: CreateRequest, branch: String?)
+    /// The worktrees of a folder's repository (#23, #33). Answered with `worktrees`.
+    case listWorktrees(folder: String)
+    /// Merges, opens a pull request for, or throws away a worktree, and
+    /// removes it (but for a pull request), its branch too when asked.
+    case finishWorktree(folder: String, path: String, finish: WorktreeFinish, deleteBranch: Bool)
+    /// The command a folder runs in each new worktree before its agent
+    /// (`npm install`); nil or empty for none.
+    case setWorktreeSetup(folder: String, command: String?)
 }
 
 /// JSON text frames sent by the host.
@@ -263,8 +324,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// the session's output what follows starts. It is the `have` the
     /// client attached with when the host could go on from there. Any other
     /// number means all that is kept comes again, for a terminal that
-    /// starts empty.
-    case replaying(session: SessionID, from: Int)
+    /// starts empty. `above` is how many lines the host keeps above the
+    /// screen, whether or not all of them follow.
+    case replaying(session: SessionID, from: Int, above: Int? = nil)
     /// Sent after `attached` and the session's earlier output that follows
     /// it: everything before this was a replay of what already happened.
     case replayed(session: SessionID)
@@ -324,6 +386,27 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case file(path: String, content: FileContent, data: Data?)
     case fileSaved(path: String)
     case fileCreated(path: String, isDirectory: Bool)
+    /// The parts of AgentTerm that stopped without being asked to and that
+    /// the user has not seen yet, oldest first. Sent on connecting and
+    /// whenever the list changes.
+    case failures([PartFailure])
+    case agentShellResult(id: Int, result: AgentShellResult)
+    /// Whether the MCP server is installed in the agents' configuration.
+    /// Not sent by a host that does not install it (a test's, a trial run).
+    case agentShells(Bool)
+    /// Whether the agents are asked to run their commands in shells the user sees.
+    case agentsUseShells(Bool)
+    /// Whether someone is at the Mac (#22, #24): its app in front, or a key
+    /// or the pointer used in the last five minutes; and not since a device
+    /// (an iPhone, another Mac) was used, until the Mac app is used again.
+    case macInUse(Bool)
+    /// Every schedule, with its last runs and when it runs next.
+    case schedules([Schedule])
+    /// A folder's worktrees, the folder's own first, and its setup command.
+    case worktrees(folder: String, list: [WorktreeInfo], setup: String?)
+    /// What became of `finishWorktree`: a pull request's address, or that
+    /// it was merged or removed.
+    case worktreeFinished(folder: String, path: String, said: String)
 }
 
 public enum MessageCoding {

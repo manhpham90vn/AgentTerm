@@ -550,17 +550,16 @@ private struct PatchLines: View {
 
 // MARK: History
 
-/// Conversations of one folder, or of the whole Mac when `folder` is nil,
-/// one section per agent.
+/// Conversations of one folder only, or of the whole Mac when `folder` is
+/// nil (the History tab), one section per agent: as on the Mac, a folder's
+/// history has no switch to everything, the History tab has that.
 struct HistoryList: View {
     @EnvironmentObject private var model: PhoneModel
     let folder: String?
-    @AppStorage("historyShowsAll") private var storedShowsAll = false
     @State private var selected: Conversation?
     @State private var collapsedAgents: Set<String> = []
 
-    /// With no folder there is only "everything" to show.
-    private var showsAll: Bool { folder == nil || storedShowsAll }
+    private var showsAll: Bool { folder == nil }
     private var key: String { showsAll ? "" : (folder ?? "") }
 
     private var sections: [(id: String, name: String, conversations: [Conversation])] {
@@ -575,12 +574,6 @@ struct HistoryList: View {
         VStack(spacing: 0) {
             if folder != nil {
                 HStack(spacing: 10) {
-                    Picker("Scope", selection: $storedShowsAll) {
-                        Text("This Folder").tag(false)
-                        Text("All").tag(true)
-                    }
-                    .pickerStyle(.segmented)
-                    .fixedSize()
                     if let count = model.histories[key]?.count {
                         Text(count == 1 ? "1 conversation" : "\(count) conversations")
                             .font(.footnote)
@@ -648,7 +641,6 @@ struct HistoryList: View {
             }
         }
         .onAppear(perform: load)
-        .onChange(of: storedShowsAll) { _, _ in load() }
         .sheet(item: $selected) { conversation in
             ConversationSheet(conversation: conversation)
                 .environmentObject(model)

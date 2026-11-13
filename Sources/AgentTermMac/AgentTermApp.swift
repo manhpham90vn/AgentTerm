@@ -47,6 +47,10 @@ struct AgentTermApp: App {
                 Button("Add Folder…") { model.addFolder() }
                     .keyboardShortcut("o")
             }
+            // Settings is a place in the window, not a window of its own.
+            CommandGroup(replacing: .appSettings) {
+                SettingsCommand(model: model)
+            }
             CommandGroup(replacing: .saveItem) {
                 SaveCommand(files: model.files)
             }
@@ -76,10 +80,6 @@ struct AgentTermApp: App {
             MenuBarMenu(model: model)
         }
 
-        Settings {
-            SettingsTabs()
-                .environmentObject(model)
-        }
     }
 }
 
@@ -106,6 +106,7 @@ private struct MenuBarMenu: View {
             ForEach(model.sessions) { session in
                 Button(session.displayName) {
                     showWindow()
+                    model.show(.sessions, toggling: false)
                     model.select(session: session)
                 }
             }
@@ -144,7 +145,10 @@ private struct MenuBarMenu: View {
             model.showPairing = true
         }
         .disabled(model.isRemote)
-        SettingsLink { Text("Settings and Permissions…") }
+        Button("Settings and Permissions…") {
+            showWindow()
+            model.show(.settings, toggling: false)
+        }
         Divider()
         Button("Quit \(AppChannel.current.appName)") { NSApp.terminate(nil) }
             .keyboardShortcut("q")
@@ -158,7 +162,6 @@ private struct MenuBarMenu: View {
     }
 }
 
-/// The panes of the Settings window. The one last looked at comes back.
 /// Asks once, at the first launch of a build that can send them, whether
 /// crash reports may be sent. Until answered, none are.
 private struct CrashReportQuestion: ViewModifier {
@@ -174,128 +177,126 @@ private struct CrashReportQuestion: ViewModifier {
     }
 }
 
-private struct SettingsTabs: View {
-    @AppStorage("settingsTab") private var tab = "general"
-
-    var body: some View {
-        TabView(selection: $tab) {
-            SettingsView().tabItem { Label("General", systemImage: "gearshape") }.tag("general")
-            GitSettingsView().tabItem { Label("Git", systemImage: "arrow.triangle.branch") }.tag("git")
-            PermissionsView().tabItem { Label("Permissions", systemImage: "lock.shield") }.tag("permissions")
-            PrivacySettingsView().tabItem { Label("Privacy", systemImage: "hand.raised") }.tag("privacy")
-        }
-    }
-}
-
-private struct SettingsView: View {
+struct SettingsView: View {
     @EnvironmentObject private var model: AppModel
     @AppStorage(MenuBarMode.key) private var staysInMenuBar = MenuBarMode.defaultValue
     @AppStorage(SystemStats.temperatureUnitKey) private var temperatureUnit = SystemStats.celsius
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            SettingsHeader(symbol: "gearshape.fill", tint: .gray, title: "General", subtitle: "How \(AppChannel.current.appName) behaves on this Mac.")
-            SettingsCard {
-                Toggle(isOn: $staysInMenuBar) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Stay in the menu bar when the window is closed")
-                            .font(.system(size: 13, weight: .medium))
-                        Text(
-                            staysInMenuBar
-                                ? "Closing the window leaves the app running, with an icon in the menu bar to open it again. Quit from that menu or with ⌘Q."
-                                : "Closing the window quits the app. Sessions keep running either way: the host that holds them is a separate program."
-                        )
-                        .font(.system(size: 11.5))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .toggleStyle(.switch)
-                // The words next to a switch are its label only to the eye.
-                .accessibilityLabel("Stay in the menu bar when the window is closed")
-                .accessibilityIdentifier("menu-bar")
-            }
-            if let startAtLogin = model.startAtLogin {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                SettingsHeader(symbol: "gearshape.fill", tint: .gray, title: "General", subtitle: "How \(AppChannel.current.appName) behaves on this Mac.")
                 SettingsCard {
-                    Toggle(isOn: Binding(get: { startAtLogin }, set: { model.setStartAtLogin($0) })) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Start the host when you log in")
-                                .font(.system(size: 13, weight: .medium))
-                            Text(
-                                "After the Mac restarts, your iPhone can reach it without this app being opened first. Only the host starts, with no window; the app uses it when you open it."
-                            )
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                    VStack(alignment: .leading, spacing: 10) {
+                        SettingSwitch(
+                            "Stay in the menu bar when the window is closed", id: "menu-bar",
+                            detail: staysInMenuBar ? "Closing the window leaves the app in the menu bar." : "Closing the window quits the app.",
+                            help: "Sessions keep running either way: the host that holds them is a separate program. Quit from the menu bar's menu or with ⌘Q.",
+                            isOn: $staysInMenuBar)
+                        if let startAtLogin = model.startAtLogin {
+                            Divider()
+                            SettingSwitch(
+                                "Start the host when you log in", id: "start-at-login",
+                                detail: "Your iPhone reaches the Mac after a restart, without the app opened.",
+                                help: "Only the host starts, with no window; the app uses it when you open it.",
+                                isOn: Binding(get: { startAtLogin }, set: { model.setStartAtLogin($0) }))
+                        }
+                        if let agentShells = model.agentShells {
+                            Divider()
+                            SettingSwitch(
+                                "Agents can open shells you see", id: "agent-shells",
+                                detail: "An agent can open a shell as a tab here, and reaches only the shells it opened.",
+                                help:
+                                    "Through AgentTerm's MCP server, put in the settings of Claude Code, Codex, Copilot CLI and Antigravity; turning this off takes it out. An agent opens shells only, never another agent.",
+                                isOn: Binding(get: { agentShells }, set: { model.setAgentShells($0) }))
+                            if let useShells = model.agentsUseShells {
+                                Divider()
+                                SettingSwitch(
+                                    "Agents run their commands in shells you see", id: "agents-use-shells",
+                                    detail: "They are asked to use those shells rather than their own.",
+                                    help:
+                                        "Claude Code is told in its system prompt, Copilot CLI and Antigravity in instructions files of AgentTerm's, Codex through the MCP server's instructions. An agent still decides for itself.",
+                                    isOn: Binding(get: { useShells }, set: { model.setAgentsUseShells($0) })
+                                )
+                                .disabled(!agentShells)
+                            }
                         }
                     }
-                    .toggleStyle(.switch)
-                    .accessibilityLabel("Start the host when you log in")
-                    .accessibilityIdentifier("start-at-login")
                 }
-            }
-            if let keepAwake = model.keepAwake {
-                SettingsCard {
-                    Toggle(isOn: Binding(get: { keepAwake }, set: { model.setKeepAwake($0) })) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Keep the Mac awake while sessions are running")
-                                .font(.system(size: 13, weight: .medium))
-                            Text(
-                                "The Mac does not go to sleep by itself while a session is open, so agents keep working and your iPhone can still reach them. Closing the lid still puts the Mac to sleep. With no session open the Mac sleeps as usual."
-                            )
-                            .font(.system(size: 11.5))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                        }
+                if let keepAwake = model.keepAwake {
+                    SettingsCard {
+                        SettingSwitch(
+                            "Keep the Mac awake while sessions are running", id: "keep-awake",
+                            detail: "So agents keep working and your iPhone can reach them.",
+                            help: "Closing the lid still puts the Mac to sleep. With no session open the Mac sleeps as usual.",
+                            isOn: Binding(get: { keepAwake }, set: { model.setKeepAwake($0) }))
+                        KeepAwakeOptionsView(isOn: keepAwake)
                     }
-                    .toggleStyle(.switch)
-                    .accessibilityLabel("Keep the Mac awake while sessions are running")
-                    .accessibilityIdentifier("keep-awake")
-                    KeepAwakeOptionsView(isOn: keepAwake)
                 }
-            }
-            SettingsCard {
-                HStack {
-                    VStack(alignment: .leading, spacing: 3) {
+                SettingsCard {
+                    HStack {
                         Text("Temperature").font(.system(size: 13, weight: .medium))
-                        Text("The unit of the Mac's temperature in the line under the launch buttons. The iPhone app follows.")
-                            .font(.system(size: 11.5))
+                            .help("The unit of the Mac's temperature in the line under the launch buttons. The iPhone app follows.")
+                        Spacer(minLength: 12)
+                        Picker("Temperature", selection: Binding(get: { temperatureUnit }, set: { unit in model.setDisplay { $0.temperatureUnit = unit } })) {
+                            Text("Celsius (°C)").tag(SystemStats.celsius)
+                            Text("Fahrenheit (°F)").tag(SystemStats.fahrenheit)
+                        }
+                        .labelsHidden()
+                        .fixedSize()
+                    }
+                    Divider().padding(.vertical, 8)
+                    HStack(spacing: 14) {
+                        // The iPhone app has to be of a version that speaks the same protocol.
+                        Text("\(AppVersion.current) · protocol \(agenttermProtocolVersion)")
+                            .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                        Spacer()
+                        Link(destination: ProjectLinks.page) { Label("Project page", systemImage: "globe") }
+                            .help(ProjectLinks.page.absoluteString)
+                        Link(destination: ProjectLinks.source) { Label("Source", systemImage: "chevron.left.forwardslash.chevron.right") }
+                            .help(ProjectLinks.source.absoluteString)
                     }
-                    Spacer(minLength: 12)
-                    Picker("Temperature", selection: Binding(get: { temperatureUnit }, set: { unit in model.setDisplay { $0.temperatureUnit = unit } })) {
-                        Text("Celsius (°C)").tag(SystemStats.celsius)
-                        Text("Fahrenheit (°F)").tag(SystemStats.fahrenheit)
-                    }
-                    .labelsHidden()
-                    .fixedSize()
+                    .font(.system(size: 12.5))
                 }
             }
-            SettingsCard {
-                HStack {
-                    Text("Version").font(.system(size: 13, weight: .medium))
-                    Spacer()
-                    // The iPhone app has to be of a version that speaks the same protocol.
-                    Text("\(AppVersion.current) · protocol \(agenttermProtocolVersion)")
-                        .font(.system(size: 12.5, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                Divider().padding(.vertical, 10)
-                HStack(spacing: 16) {
-                    Text("About").font(.system(size: 13, weight: .medium))
-                    Spacer()
-                    Link(destination: ProjectLinks.page) { Label("Project page", systemImage: "globe") }
-                        .help(ProjectLinks.page.absoluteString)
-                    Link(destination: ProjectLinks.source) { Label("Source on GitHub", systemImage: "chevron.left.forwardslash.chevron.right") }
-                        .help(ProjectLinks.source.absoluteString)
-                }
-                .font(.system(size: 12.5))
-            }
+            .padding(24)
+            .frame(maxWidth: 680, alignment: .top)
+            .frame(maxWidth: .infinity)
         }
-        .padding(24)
-        .frame(width: 600, alignment: .top)
-        .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// A switch with its name and one line under it; the rest on hover.
+private struct SettingSwitch: View {
+    let title: String
+    let id: String
+    let detail: String
+    let help: String
+    @Binding var isOn: Bool
+
+    init(_ title: String, id: String, detail: String, help: String, isOn: Binding<Bool>) {
+        self.title = title
+        self.id = id
+        self.detail = detail
+        self.help = help
+        _isOn = isOn
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.system(size: 13, weight: .medium))
+                Text(detail).font(.system(size: 11.5)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Spacer(minLength: 8)
+            // The switch itself is what VoiceOver and the tests press.
+            Toggle(title, isOn: $isOn).labelsHidden().toggleStyle(.switch)
+                .accessibilityLabel(title)
+                .accessibilityIdentifier(id)
+        }
+        .help(help)
     }
 }
 
@@ -340,6 +341,10 @@ private struct KeepAwakeOptionsView: View {
             Toggle(isOn: binding(\.onlyOnPower)) {
                 Text("Only while the Mac is plugged in").font(.system(size: 12.5))
             }
+            Toggle(isOn: binding(\.onlyWhileWorking)) {
+                Text("Only while an agent is working").font(.system(size: 12.5))
+            }
+            .help("An agent that waits for you, is done, or a shell, does not keep the Mac awake")
         }
         .toggleStyle(.checkbox)
     }
@@ -347,7 +352,7 @@ private struct KeepAwakeOptionsView: View {
 
 /// Which agent writes commit messages in the Git tab, and how it is asked.
 /// The host keeps these, so the iPhone's Write button does the same.
-private struct GitSettingsView: View {
+struct GitSettingsView: View {
     @EnvironmentObject private var model: AppModel
     @State private var modelName = ""
     @State private var prompt = ""
@@ -502,8 +507,8 @@ private struct GitSettingsView: View {
             .fixedSize(horizontal: false, vertical: true)
         }
         .padding(24)
-        .frame(width: 600, alignment: .top)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: 680, alignment: .top)
+        .frame(maxWidth: .infinity)
         .onAppear(perform: load)
         .onChange(of: model.commitWriter) { old, new in
             // The settings changed, here through the agent's picker or on
@@ -516,7 +521,7 @@ private struct GitSettingsView: View {
 }
 
 /// What AgentTerm reports to its developer, and the switches for it.
-private struct PrivacySettingsView: View {
+struct PrivacySettingsView: View {
     @StateObject private var preferences = TelemetryPreferences()
 
     var body: some View {
@@ -556,8 +561,8 @@ private struct PrivacySettingsView: View {
             }
         }
         .padding(24)
-        .frame(width: 600, alignment: .top)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(maxWidth: 680, alignment: .top)
+        .frame(maxWidth: .infinity)
     }
 }
 
@@ -691,5 +696,20 @@ private struct TabCommands: View {
         .disabled(model.tabCount < 2)
         Button(model.sessions.isEmpty ? "Close All Tabs" : "Close All Tabs…") { model.closeTabs() }
             .disabled(model.tabCount == 0)
+    }
+}
+
+/// ⌘, : Settings, in the window, which is brought back if it was closed.
+private struct SettingsCommand: View {
+    @ObservedObject var model: AppModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        Button("Settings…") {
+            openWindow(id: "main")
+            NSApp.activate(ignoringOtherApps: true)
+            model.show(.settings, toggling: false)
+        }
+        .keyboardShortcut(",")
     }
 }

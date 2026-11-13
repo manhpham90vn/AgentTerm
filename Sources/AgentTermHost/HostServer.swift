@@ -40,19 +40,42 @@ public final class HostServer {
         /// Path of `agenttermd`, which Claude Code sessions run as their status
         /// line to report their usage. `nil` leaves Claude Code as it is.
         public var statusLineTool: String?
-        /// Where those reports are kept, one file per session.
+        /// Where those reports are kept, one file per session, and what the
+        /// agents' hooks tell of each session (`AgentHooks`).
         public var usageDirectory: URL?
+        /// Where the host keeps what it gives Copilot CLI and Antigravity
+        /// for their hooks: a plugin, a folder. Nil gives those two none.
+        public var hooksDirectory: URL?
+        /// Installs the MCP server in the agents' configuration (#10). Nil
+        /// installs nothing: a test's host, a trial run.
+        public var agentShells: AgentShellsInstall?
+        /// How long since a key or the pointer was used on the Mac, in
+        /// seconds; nil when that is not known. A test stands one in.
+        public var idleSeconds: () -> TimeInterval? = { MacUse.idleSeconds() }
         /// Asks the agents' services what their accounts have left. `nil`
         /// asks nobody, which is what tests want.
         public var fetchAccountUsage: ((String) -> AccountUsage?)?
         /// Whether the Mac is plugged in. Tests say so themselves.
         public var isOnPower: () -> Bool = { PowerSource.isOnPower }
+        /// Takes or lets go of the hold that keeps the Mac awake (whether to
+        /// hold, whether the display too) and says whether it is held. Nil
+        /// for macOS's own; a test stands in one that refuses.
+        public var holdAwake: ((_ held: Bool, _ display: Bool) -> Bool)?
         /// Home folder whose SSH configuration names the hosts to offer.
         /// Nil reads the one of `home`.
         public var sshHome: String?
         /// How often sessions are named and measured, in seconds. Tests
         /// shorten it.
         public var refreshInterval: TimeInterval = 6
+        /// How often schedules are looked at, in seconds (#11). Tests shorten it.
+        public var scheduleInterval: TimeInterval = 20
+        /// The time, for schedules. A test sets its own clock.
+        public var now: () -> Date = Date.init
+        /// Where the host notes that it is running (`HostMarker`), so the
+        /// host after it can tell that it died, and keeps the reports of
+        /// parts that stopped until someone has seen them (`FailureLog`).
+        /// Nil does neither.
+        public var stateDirectory: URL?
 
         public init(
             port: UInt16 = agenttermDefaultPort,
@@ -85,10 +108,17 @@ public final class HostServer {
 
     public enum StartError: Error, CustomStringConvertible {
         case listenerFailed(String)
+        /// The hosts before this one died too often within a minute
+        /// (`HostMarker.deathsThatBreak`): it is not to run until the user
+        /// asks. A host that gets this exits with status 0, so that launchd
+        /// does not start it again either.
+        case keepsDying(Int)
 
         public var description: String {
             switch self {
             case .listenerFailed(let reason): return "could not listen: \(reason)"
+            case .keepsDying(let count):
+                return "the host stopped unexpectedly \(count) times within a minute, so it is not started again until AgentTerm is opened and asked to"
             }
         }
     }
@@ -100,6 +130,13 @@ public final class HostServer {
         let isLocal: Bool
         var identity: DeviceRegistry.Identity?
         var attached: Set<SessionID> = []
+        /// Sessions whose screen is being written out for this client, with
+        /// the output that came since, sent once the screen is.
+        var awaitingScreen: [SessionID: (attach: Int, output: [DataFrame])] = [:]
+        /// A Mac app that says it is in front: someone is at the Mac.
+        var inFront = false
+        /// Numbers the large messages sent in pieces.
+        var nextMessage: UInt32 = 0
 
         var authenticated: Bool { identity != nil }
         /// The Mac's own apps may pair and revoke devices.
@@ -116,8 +153,12 @@ public final class HostServer {
         var info: SessionInfo
         let process: PTYProcess
         var arbiter: SizeArbiter
-        /// The session's screen, which a client that attaches is sent.
+        /// The session's screen, which a client that attaches is sent. Only
+        /// used on `mirrorQueue`: writing it out for a client that attaches
+        /// takes tens of milliseconds for a long session, which the queue
+        /// every session's output goes through must not wait for (#21).
         let mirror: ScreenMirror
+        let mirrorQueue: DispatchQueue
         /// The last of the raw output, for a client that was here before.
         var scrollback = Data()
         /// Where the end of `scrollback` is in all the session ever wrote.
@@ -126,11 +167,24 @@ public final class HostServer {
         /// back with a place in a session of before must not be taken to
         /// have a place in this one.
         var written = Int.random(in: 0..<(1 << 40))
+        /// Its program was asked to end (the tab closed, the host stopping):
+        /// a signal it then dies of is not reported.
+        var endAsked = false
+        /// What the status line relay could not save was reported.
+        var usageFailureReported = false
+        /// The last event its agent's hooks saved, as read.
+        var lastEvent: Data?
+        /// Its agent was given hooks: its state can be known.
+        var hooked = false
+        /// What its agent's MCP server names it by, to open and reach the
+        /// shells it opens (#10). Agents' sessions only.
+        var agentKey: String?
 
         init(info: SessionInfo, process: PTYProcess, screenLines: Int) {
             self.info = info
             self.process = process
             self.mirror = ScreenMirror(size: info.size, scrollback: screenLines)
+            self.mirrorQueue = DispatchQueue(label: "agentterm.screen.\(info.id)")
             self.arbiter = SizeArbiter(fallback: info.size)
         }
     }
@@ -143,6 +197,32 @@ public final class HostServer {
     /// The last changes read per folder, so asking for one file's diff right
     /// after the list does not run git again.
     private var diffCache: [String: (snapshot: DiffSnapshot, at: Date)] = [:]
+    /// The folders whose changes clients ask about, watched so that they are
+    /// worked out again only after their files changed; the last few only.
+    private var diffWatches: [String: FolderWatch] = [:]
+    private var diffWatchOrder: [String] = []
+    private var diffDirty: Set<String> = []
+    private static let diffWatchesKept = 8
+
+    private func watchForDiff(_ path: String) {
+        diffWatchOrder.removeAll { $0 == path }
+        diffWatchOrder.append(path)
+        guard diffWatches[path] == nil else { return }
+        while diffWatchOrder.count > Self.diffWatchesKept {
+            let oldest = diffWatchOrder.removeFirst()
+            diffWatches[oldest] = nil
+            diffDirty.remove(oldest)
+        }
+        workQueue.async { [weak self] in
+            let paths = FolderWatch.paths(for: path)
+            self?.queue.async {
+                guard let self, self.diffWatchOrder.contains(path), self.diffWatches[path] == nil else { return }
+                self.diffWatches[path] = FolderWatch(paths: paths, queue: self.queue) { [weak self] in self?.diffDirty.insert(path) }
+                // What changed before the watch began is not known: once more.
+                self.diffDirty.insert(path)
+            }
+        }
+    }
     /// Handoff plans that were shown to a user, until they are used. The
     /// prompt in a plan names a file, and the handoff has to write that file.
     private var handoffPlans: [String: (plan: Handoff.Plan, at: Date)] = [:]
@@ -166,6 +246,12 @@ public final class HostServer {
     private var boundPort: UInt16 = 0
     private var folders: [String] = []
     private let registry: DeviceRegistry
+    /// Parts that stopped without being asked to, until the user has seen
+    /// them on one of the clients.
+    private var failures: [PartFailure] = []
+    /// What this host notes about itself in the state folder while it runs.
+    private var marker: HostMarker?
+    private var markerFile: URL?
 
     public init(configuration: Configuration) {
         self.configuration = configuration
@@ -182,6 +268,8 @@ public final class HostServer {
             keepAwakeOptions = saved.keepAwakeOptions ?? KeepAwakeOptions()
             commitWriter = saved.commitWriter ?? CommitWriterSettings()
             displaySettings = saved.display
+            startAtLoginChosen = saved.startAtLoginChosen ?? false
+            agentsUseShells = saved.agentsUseShells ?? true
         }
         if let file = tabLayoutFile, let data = try? Data(contentsOf: file),
             let saved = try? JSONDecoder().decode(TabLayout.self, from: data)
@@ -236,11 +324,37 @@ public final class HostServer {
         var keepAwakeOptions: KeepAwakeOptions?
         var commitWriter: CommitWriterSettings?
         var display: DisplaySettings?
+        /// The user turned Start at Login on or off once: from then on it
+        /// is theirs. Until then it is turned on, the default.
+        var startAtLoginChosen: Bool?
+        /// Whether the agents are asked to use shells the user sees; on when unset.
+        var agentsUseShells: Bool?
+    }
+
+    /// Whether the user has turned Start at Login on or off.
+    private var startAtLoginChosen = false
+    /// Whether the agents are asked to run their commands in shells the
+    /// user sees (on by default).
+    private var agentsUseShells = true
+    /// Asked only where the agents can open them: the MCP server is installed.
+    private var asksToUseShells: Bool { agentsUseShells && (configuration.agentShells?.isOn ?? false) }
+
+    /// Start at Login is on by default: turned on the first time a host
+    /// that can be started at login runs, until the user has chosen.
+    private func startAtLoginByDefault() {
+        // Without a settings file the user's choice could not be kept: then
+        // it is not turned on by itself either.
+        guard let item = configuration.loginItem, settingsFile != nil, !startAtLoginChosen else { return }
+        if !item.isOn { try? item.turnOn() }
+        startAtLoginChosen = true
+        saveSettings()
     }
 
     private func saveSettings() {
         guard let file = settingsFile else { return }
-        let settings = Settings(keepAwake: keepAwake, keepAwakeOptions: keepAwakeOptions, commitWriter: commitWriter, display: displaySettings)
+        let settings = Settings(
+            keepAwake: keepAwake, keepAwakeOptions: keepAwakeOptions, commitWriter: commitWriter, display: displaySettings,
+            startAtLoginChosen: startAtLoginChosen, agentsUseShells: agentsUseShells)
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? MessageCoding.encode(settings).write(to: file, options: .atomic)
     }
@@ -256,7 +370,40 @@ public final class HostServer {
             broadcastKeepAwake()
         }
         let powered = !keepAwakeOptions.onlyOnPower || configuration.isOnPower()
-        sleepGuard.set(held: keepAwake && !sessions.isEmpty && powered, display: keepAwakeOptions.display)
+        // Any session holds the Mac awake, or only an agent at work.
+        let running = keepAwakeOptions.onlyWhileWorking ? sessions.values.contains { $0.info.state?.isWorking == true } : !sessions.isEmpty
+        let soon = schedules.contains { schedule in
+            schedule.enabled && schedule.nextRun.map { $0.timeIntervalSince(configuration.now()) <= Self.awakeBeforeRun } == true
+        }
+        let wanted = (keepAwake && running && powered) || soon
+        let held =
+            configuration.holdAwake.map { $0(wanted, keepAwakeOptions.display) }
+            ?? sleepGuard.set(held: wanted, display: keepAwakeOptions.display)
+        noteSleepHold(wanted: wanted, held: held)
+    }
+
+    /// The report of a hold macOS refused, while it is refused.
+    private var refusedHold: String?
+
+    /// A hold that is wanted and refused is reported once; it is asked for
+    /// again on every refresh, and the report says so once it is held.
+    private func noteSleepHold(wanted: Bool, held: Bool) {
+        if wanted && !held {
+            guard refusedHold == nil else { return }
+            let failure = PartFailure(
+                part: .keepAwake, at: Date(), restarted: false,
+                reason: "macOS would not hold it, so the Mac may sleep while sessions run. AgentTerm asks again every few seconds.")
+            refusedHold = failure.id
+            report(failure)
+        } else if let id = refusedHold {
+            refusedHold = nil
+            // Held again: said in the report that is still there. One that
+            // is no longer wanted is left as it was.
+            guard wanted, let index = failures.firstIndex(where: { $0.id == id }) else { return }
+            failures[index].restarted = true
+            saveFailures()
+            broadcastFailures()
+        }
     }
 
     private func broadcastKeepAwake() {
@@ -296,15 +443,32 @@ public final class HostServer {
     @discardableResult
     public func start() throws -> UInt16 {
         let port = try listen(on: "127.0.0.1", port: configuration.port)
-        queue.sync { boundPort = port }
+        let deaths = queue.sync {
+            boundPort = port
+            // Only once the port is this host's: a host that cannot listen
+            // there leaves the one that can to find out what happened.
+            return noteStart()
+        }
+        if let deaths {
+            stop()
+            throw StartError.keepsDying(deaths)
+        }
 
         // Names sessions after the conversations their agents are having.
         let summaries = DispatchSource.makeTimerSource(queue: queue)
         summaries.schedule(deadline: .now() + min(3, configuration.refreshInterval), repeating: configuration.refreshInterval)
         summaries.setEventHandler { [weak self] in
             guard let self else { return }
+            // Still alive: what the next host takes for the time this one
+            // died, should it die.
+            if let file = self.markerFile { HostMarker.touch(file) }
             // Power may have been plugged in or pulled since the last look.
             self.updateSleepGuard()
+            self.updateMacInUse()
+            self.checkLoginItem()
+            self.checkStatusLines()
+            // In case the folder's watch missed one.
+            self.readEvents()
             self.refreshSummaries()
         }
         // The Mac itself is measured more often than its sessions: a
@@ -314,6 +478,17 @@ public final class HostServer {
         system.setEventHandler { [weak self] in self?.refreshSystemStats() }
         queue.sync {
             summaryTimer = summaries
+            watchEvents()
+            // Installed by default the first time, and again after the app moved.
+            setAgentShells(nil)
+            loadSchedules()
+            loadWorktreeSetups()
+            startAtLoginByDefault()
+            let timer = DispatchSource.makeTimerSource(queue: queue)
+            timer.schedule(deadline: .now() + min(1, configuration.scheduleInterval), repeating: configuration.scheduleInterval)
+            timer.setEventHandler { [weak self] in self?.checkSchedules() }
+            timer.resume()
+            scheduleTimer = timer
             systemTimer = system
             scheduleKeepAwakeEnd()
         }
@@ -331,9 +506,19 @@ public final class HostServer {
 
     public func stop() {
         queue.sync {
+            // A stop that was asked for, so it is not a death. Before the
+            // clients are let go: an app that sees its connection close
+            // looks for the marker to know which of the two it was.
+            if let file = markerFile { try? FileManager.default.removeItem(at: file) }
+            markerFile = nil
+            marker = nil
             tailscaleTimer?.cancel()
             tailscaleTimer = nil
             summaryTimer?.cancel()
+            scheduleTimer?.cancel()
+            scheduleTimer = nil
+            eventsWatch?.cancel()
+            eventsWatch = nil
             summaryTimer = nil
             systemTimer?.cancel()
             systemTimer = nil
@@ -341,7 +526,10 @@ public final class HostServer {
             listeners.removeAll()
             clients.values.forEach { $0.connection.cancel() }
             clients.removeAll()
-            sessions.values.forEach { $0.process.hangUp() }
+            sessions.values.forEach {
+                $0.endAsked = true
+                $0.process.hangUp()
+            }
             sessions.removeAll()
             commitRuns.values.forEach { $0.cancel() }
             commitRuns.removeAll()
@@ -350,6 +538,434 @@ public final class HostServer {
     }
 
     public var sessionCount: Int { queue.sync { sessions.count } }
+
+    // MARK: Parts that stopped
+
+    /// Reads what the host before this one left, reports it if it died,
+    /// and notes that this one runs. Returns how often the hosts before it
+    /// died lately when that is too often for this one to run.
+    private func noteStart(now: Date = Date()) -> Int? {
+        guard let directory = configuration.stateDirectory else { return nil }
+        failures = FailureLog.read(in: directory)
+        let file = HostMarker.file(in: directory, port: boundPort)
+        var deaths: [Date] = []
+        if let found = HostMarker.read(file), !found.marker.isRunning {
+            // It left its marker, so it did not stop as asked: it was
+            // killed or it crashed, and its sessions ended with it. Whoever
+            // started this host started it again.
+            deaths = HostMarker.recent(found.marker.deaths + [found.aliveAt], now: now)
+            // Broken means three times in sixty seconds, however the host
+            // was started again: by the app, or by launchd with the app
+            // closed. Then this one does not run.
+            let broken = deaths.count >= HostMarker.deathsThatBreak
+            failures.append(PartFailure(part: .host, at: found.aliveAt, ended: found.marker.sessions, restarted: !broken, broken: broken))
+            failures = Array(failures.suffix(FailureLog.limit))
+            FailureLog.write(failures, in: directory)
+            if broken {
+                // What is reported is kept; the deaths that were counted
+                // are not, so the next start, which only the user makes
+                // (opening the app, Try Again, logging in), runs.
+                try? FileManager.default.removeItem(at: file)
+                return deaths.count
+            }
+        }
+        let marker = HostMarker(sessions: endedSessions(), deaths: deaths)
+        marker.write(to: file)
+        self.marker = marker
+        markerFile = file
+        // A client that came in while the listener was starting.
+        if !failures.isEmpty { broadcastFailures() }
+        return nil
+    }
+
+    /// The sessions as the marker names them: what would end with this host.
+    private func endedSessions() -> [EndedSession] {
+        sessions.values.map(\.info).sorted { $0.id < $1.id }.map(EndedSession.init)
+    }
+
+    /// Writes the marker again when what would end with the host changed.
+    private func updateMarker() {
+        guard let file = markerFile, var marker else { return }
+        let now = endedSessions()
+        guard now != marker.sessions else { return }
+        marker.sessions = now
+        marker.write(to: file)
+        self.marker = marker
+    }
+
+    // MARK: Schedules (#11)
+
+    private var schedules: [Schedule] = []
+    /// Until when the schedules were looked at: a time that came between it
+    /// and now, while the Mac slept, is a run that was missed.
+    private var schedulesChecked: Date?
+    /// The last limit reset each agent's schedules ran for.
+    private var resetsRun: [String: Date] = [:]
+    /// From when each schedule is looked at: when it was saved, so that a
+    /// time of today that passed before it was made is not taken for due.
+    private var schedulesFrom: [String: Date] = [:]
+    /// Runs that came due while two others ran, oldest first.
+    private var waitingRuns: [(schedule: String, at: Date, note: String)] = []
+    /// When each run's session was first seen done, to close it a day later.
+    private var runDoneAt: [SessionID: Date] = [:]
+    private var scheduleTimer: DispatchSourceTimer?
+
+    static let maxRunsAtOnce = 2
+    static let afterLimitReset: TimeInterval = 120
+    static let keepRunFor: TimeInterval = 24 * 3600
+    static let awakeBeforeRun: TimeInterval = 10 * 60
+
+    private struct SchedulesFile: Codable {
+        var schedules: [Schedule]
+        var checked: Date?
+        var resetsRun: [String: Date]?
+        var from: [String: Date]?
+    }
+
+    private var schedulesFile: URL? { configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("schedules.json") }
+
+    private func loadSchedules() {
+        guard let file = schedulesFile, let data = FileManager.default.contents(atPath: file.path),
+            let saved = MessageCoding.decode(SchedulesFile.self, from: data)
+        else { return }
+        schedules = saved.schedules
+        schedulesChecked = saved.checked
+        resetsRun = saved.resetsRun ?? [:]
+        schedulesFrom = saved.from ?? [:]
+    }
+
+    private func saveSchedules() {
+        guard let file = schedulesFile else { return }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? MessageCoding.encode(SchedulesFile(schedules: schedules, checked: schedulesChecked, resetsRun: resetsRun, from: schedulesFrom)).write(to: file, options: .atomic)
+    }
+
+    private func broadcastSchedules() {
+        for client in clients.values where client.authenticated { send(.schedules(schedules), to: client) }
+    }
+
+    /// Adds or changes a schedule; why not, when it is refused.
+    private func save(_ wanted: Schedule) -> String? {
+        var schedule = wanted
+        guard SchedulePermissions.offered(by: schedule.agent).contains(schedule.permissions) else {
+            return "\(schedule.agent) cannot run with “\(schedule.permissions.label)”."
+        }
+        guard schedule.permissions != .skipAll || schedule.warningAccepted else {
+            return "A schedule that skips permissions cannot be saved before its warning was shown and accepted."
+        }
+        guard !schedule.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return "Write what the agent is to do." }
+        // Asked once now, while the user is here, rather than at 3 a.m.
+        do { try ScheduleRunner.trustFolder(of: schedule, home: configuration.home) } catch {
+            return "The folder could not be trusted for \(schedule.agent): \(error.localizedDescription)"
+        }
+        // What the host keeps is not the client's to set.
+        let kept = schedules.first { $0.id == schedule.id }
+        schedule.runs = kept?.runs ?? []
+        let now = configuration.now()
+        // Changed, or new: looked at from now on.
+        if kept?.when != schedule.when || kept?.enabled != schedule.enabled { schedulesFrom[schedule.id] = now }
+        if schedulesChecked == nil { schedulesChecked = now }
+        schedule.nextRun = nextRun(of: schedule, after: configuration.now())
+        if let index = schedules.firstIndex(where: { $0.id == schedule.id }) { schedules[index] = schedule } else { schedules.append(schedule) }
+        saveSchedules()
+        broadcastSchedules()
+        updateSleepGuard()
+        return nil
+    }
+
+    /// When it comes due next, after `date`.
+    private func nextRun(of schedule: Schedule, after date: Date) -> Date? {
+        guard schedule.enabled else { return nil }
+        if case .limitReset = schedule.when {
+            let done = resetsRun[schedule.agent] ?? .distantPast
+            return resets(of: schedule.agent).filter { $0 > done }.map { $0.addingTimeInterval(Self.afterLimitReset) }.filter { $0 > date }.min()
+        }
+        return schedule.when.next(after: date)
+    }
+
+    /// When the account limits of an agent start over, as its service last said.
+    private func resets(of agent: String) -> [Date] {
+        accountUsage[agent].map { $0.groups.flatMap(\.limits).compactMap(\.resetsAt) } ?? []
+    }
+
+    /// Runs what came due since the last look, at most once each however
+    /// many times it came due meanwhile; closes the sessions of runs done
+    /// for a day.
+    private func checkSchedules() {
+        let now = configuration.now()
+        let checked = schedulesChecked ?? now
+        // A look that came this late means the Mac slept in between.
+        let slept = now.timeIntervalSince(checked) > max(3 * configuration.scheduleInterval, 90)
+        var changed = false
+        for index in schedules.indices where schedules[index].enabled {
+            let schedule = schedules[index]
+            let since = max(checked, schedulesFrom[schedule.id] ?? checked)
+            let due: Date?
+            if case .limitReset = schedule.when {
+                let done = resetsRun[schedule.agent] ?? .distantPast
+                let passed = resets(of: schedule.agent).filter { $0 > done && $0.addingTimeInterval(Self.afterLimitReset) <= now }
+                due = passed.max()?.addingTimeInterval(Self.afterLimitReset)
+                if let latest = passed.max() { resetsRun[schedule.agent] = latest }
+            } else {
+                due = schedule.when.next(after: since).flatMap { $0 <= now ? $0 : nil }
+            }
+            guard let due else { continue }
+            changed = true
+            let missed = slept && now.timeIntervalSince(due) > configuration.scheduleInterval * 2
+            if missed && !schedule.catchUp {
+                record(ScheduleRun(at: due, started: false, note: "Missed while the Mac was asleep or off"), in: index)
+            } else {
+                waitingRuns.append((schedule.id, due, missed ? "Missed at \(due.formatted(date: .omitted, time: .shortened)), run when the Mac was next awake" : "Started"))
+            }
+        }
+        schedulesChecked = now
+        startWaitingRuns()
+        closeFinishedRuns(now: now)
+        for index in schedules.indices {
+            let next = nextRun(of: schedules[index], after: now)
+            if next != schedules[index].nextRun {
+                schedules[index].nextRun = next
+                changed = true
+            }
+        }
+        saveSchedules()
+        if changed { broadcastSchedules() }
+        updateSleepGuard()
+    }
+
+    /// The runs of a schedule that are still going: their session runs,
+    /// and their agent is not done.
+    private func going(_ scheduleName: String) -> [Session] {
+        sessions.values.filter { session in
+            guard session.info.schedule == scheduleName else { return false }
+            if case .done? = session.info.state { return false }
+            return true
+        }
+    }
+
+    private func startWaitingRuns() {
+        var still: [(schedule: String, at: Date, note: String)] = []
+        for run in waitingRuns {
+            guard let index = schedules.firstIndex(where: { $0.id == run.schedule }) else { continue }
+            let schedule = schedules[index]
+            if !going(schedule.name).isEmpty {
+                record(ScheduleRun(at: run.at, started: false, note: "Skipped: the run before it is still going"), in: index)
+                continue
+            }
+            let running = sessions.values.filter { session in
+                guard session.info.schedule != nil else { return false }
+                if case .done? = session.info.state { return false }
+                return true
+            }.count
+            guard running < Self.maxRunsAtOnce else {
+                still.append(run)
+                continue
+            }
+            let (command, environment) = ScheduleRunner.launch(schedule)
+            let request = CreateRequest(command: command, cwd: schedule.folder, title: schedule.name)
+            if let id = create(request, for: nil, run: schedule, environment: environment) {
+                record(ScheduleRun(at: run.at, started: true, session: id, note: run.note), in: index)
+            } else {
+                record(ScheduleRun(at: run.at, started: false, note: "The agent could not be started"), in: index)
+            }
+        }
+        waitingRuns = still
+    }
+
+    private func record(_ run: ScheduleRun, in index: Int) {
+        schedules[index].runs = Array((schedules[index].runs + [run]).suffix(Schedule.runsKept))
+        // Once is once.
+        if case .once = schedules[index].when, run.started || !schedules[index].catchUp { schedules[index].enabled = false }
+        broadcastSchedules()
+    }
+
+    /// A run's session whose agent has been done for a day is closed.
+    private func closeFinishedRuns(now: Date) {
+        for session in sessions.values where session.info.schedule != nil {
+            guard case .done? = session.info.state else {
+                runDoneAt[session.info.id] = nil
+                continue
+            }
+            let since = runDoneAt[session.info.id] ?? now
+            runDoneAt[session.info.id] = since
+            guard now.timeIntervalSince(since) >= Self.keepRunFor else { continue }
+            runDoneAt[session.info.id] = nil
+            session.endAsked = true
+            session.process.hangUp()
+        }
+    }
+
+    // MARK: Worktrees (#23, #33)
+
+    /// The command each folder runs in a new worktree before its session.
+    private var worktreeSetups: [String: String] = [:]
+    private var worktreeSetupsFile: URL? { configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("worktrees.json") }
+
+    private func loadWorktreeSetups() {
+        guard let file = worktreeSetupsFile, let data = FileManager.default.contents(atPath: file.path) else { return }
+        worktreeSetups = MessageCoding.decode([String: String].self, from: data) ?? [:]
+    }
+
+    private func saveWorktreeSetups() {
+        guard let file = worktreeSetupsFile else { return }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? MessageCoding.encode(worktreeSetups).write(to: file, options: .atomic)
+    }
+
+    /// Makes the worktree off the queue the sessions use, runs the folder's
+    /// setup command in it, then starts the session there.
+    private func createInWorktree(_ request: CreateRequest, branch: String?, for client: Client) {
+        let folder = request.cwd ?? HostEnvironment.homeDirectory
+        let agent = SessionSummaries.agent(forCommand: request.command) ?? "shell"
+        let setup = worktreeSetups[WorktreePath.project(of: folder) ?? folder]
+        let id = client.id
+        workQueue.async { [weak self] in
+            let made = Result { try GitWorktrees.create(in: folder, agent: agent, branch: branch) }
+            var problem: String?
+            if case .success(let worktree) = made, let setup {
+                // As in a terminal, with the user's PATH.
+                let ran = Subprocess.run(HostEnvironment.shell, ["-l", "-i", "-c", setup], cwd: worktree.directory, timeout: 600, mergeErrors: true)
+                if ran?.status != 0 {
+                    let said = String(decoding: ran?.output ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                    problem = "The setup command failed in the new worktree: \(setup)\n\n\(String(said.suffix(1500)))"
+                }
+            }
+            self?.queue.async {
+                guard let self, let client = self.clients[id] else { return }
+                switch made {
+                case .failure(let error):
+                    self.send(.error("The worktree could not be made: \(error.localizedDescription)"), to: client)
+                case .success(let worktree):
+                    if let problem { self.send(.error(problem), to: client) }
+                    var inWorktree = request
+                    inWorktree.cwd = worktree.directory
+                    if let created = self.create(inWorktree, for: client) {
+                        self.sessions[created]?.info.branch = worktree.branch
+                        self.broadcastSessions()
+                    }
+                    self.sendWorktrees(of: WorktreePath.project(of: folder) ?? folder, to: self.clients.values.filter(\.authenticated).map(\.id))
+                }
+            }
+        }
+    }
+
+    private func sendWorktrees(of folder: String, to ids: [ClientID]) {
+        let inUse = Set(sessions.values.map(\.info.cwd))
+        let setup = worktreeSetups[folder]
+        workQueue.async { [weak self] in
+            let list = GitWorktrees.list(folder: folder, inUse: inUse)
+            self?.queue.async {
+                guard let self else { return }
+                for id in ids { if let client = self.clients[id] { self.send(.worktrees(folder: folder, list: list, setup: setup), to: client) } }
+            }
+        }
+    }
+
+    private func finishWorktree(folder: String, path: String, finish: WorktreeFinish, deleteBranch: Bool, for client: Client) {
+        // Removing it under a running session would pull its folder away.
+        if finish != .pullRequest, sessions.values.contains(where: { $0.info.cwd == path || $0.info.cwd.hasPrefix(path + "/") }) {
+            send(.error("A session still runs in that worktree: end it first."), to: client)
+            return
+        }
+        let id = client.id
+        workQueue.async { [weak self] in
+            let result = Result { try GitWorktrees.finish(folder: folder, path: path, finish: finish, deleteBranch: deleteBranch) }
+            self?.queue.async {
+                guard let self, let client = self.clients[id] else { return }
+                switch result {
+                case .success(let said): self.send(.worktreeFinished(folder: folder, path: path, said: said), to: client)
+                case .failure(let error): self.send(.error(error.localizedDescription), to: client)
+                }
+                self.sendWorktrees(of: folder, to: self.clients.values.filter(\.authenticated).map(\.id))
+            }
+        }
+    }
+
+    // MARK: Whether someone is at the Mac (#22, #24)
+
+    /// Five minutes without a key or the pointer, and no app in front: no
+    /// one is at the Mac.
+    static let idleBeforeAway: TimeInterval = 5 * 60
+    private var macInUse = true
+    /// A device, not this Mac's own app, was the last to be used: until the
+    /// Mac app is used again, no one is at the Mac, whether its app is in
+    /// front or its keyboard was touched for something else. A phone put
+    /// away is still the one in use: what an agent says goes to it.
+    private var usedOnDevice = false
+
+    /// A client typed, took a session or said it was used.
+    private func used(by client: Client) {
+        let onDevice = client.identity != .local
+        guard onDevice != usedOnDevice else { return }
+        usedOnDevice = onDevice
+        updateMacInUse()
+    }
+
+    /// Works it out again, and tells every client when it changed.
+    private func updateMacInUse() {
+        let front = clients.values.contains { $0.authenticated && $0.inFront }
+        let idle = configuration.idleSeconds()
+        let now = !usedOnDevice && (front || idle.map { $0 < Self.idleBeforeAway } ?? true)
+        guard now != macInUse else { return }
+        macInUse = now
+        for client in clients.values where client.authenticated { send(.macInUse(now), to: client) }
+    }
+
+    private func broadcastFailures() {
+        for client in clients.values where client.authenticated { send(.failures(failures), to: client) }
+    }
+
+    /// A part stopped without being asked to: kept until someone has seen
+    /// it, and told to every client.
+    private func report(_ failure: PartFailure) {
+        failures.append(failure)
+        failures = Array(failures.suffix(FailureLog.limit))
+        saveFailures()
+        broadcastFailures()
+    }
+
+    private func saveFailures() {
+        if let directory = configuration.stateDirectory { FailureLog.write(failures, in: directory) }
+    }
+
+    /// Why a session's program ended, when it did not end by itself or as
+    /// asked: killed, or crashed. `code` is what the session reports, 128
+    /// and the signal for a program a signal ended. A signal the user sends
+    /// from the keyboard (Control C) or the host sends to close it is not
+    /// such an end.
+    static func unexpectedEnd(code: Int32) -> String? {
+        guard code > 128 else { return nil }
+        switch code - 128 {
+        case SIGKILL: return "It was killed (SIGKILL), by macOS or by another program."
+        case SIGSEGV: return "It crashed (SIGSEGV)."
+        case SIGBUS: return "It crashed (SIGBUS)."
+        case SIGILL: return "It crashed (SIGILL)."
+        case SIGABRT: return "It crashed (SIGABRT)."
+        case SIGTRAP: return "It crashed (SIGTRAP)."
+        case SIGFPE: return "It crashed (SIGFPE)."
+        default: return nil
+        }
+    }
+
+    /// Sessions of Claude Code whose usage the status line relay could not
+    /// save: reported once each, until it saves again.
+    private func checkStatusLines() {
+        for session in sessions.values where session.info.agent == "claude" {
+            guard let file = usageFile(for: session.info.id) else { continue }
+            let problem = StatusLineRelay.failureFile(for: file.path)
+            guard let said = FileManager.default.contents(atPath: problem) else {
+                session.usageFailureReported = false
+                continue
+            }
+            guard !session.usageFailureReported else { continue }
+            session.usageFailureReported = true
+            let reason = String(decoding: said, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            report(
+                PartFailure(
+                    part: .statusLine, name: session.info.displayName, at: Date(), restarted: false,
+                    reason: "Its usage band keeps the figures it had." + (reason.isEmpty ? "" : " " + reason)))
+        }
+    }
 
     private static func parameters(host: String, port: UInt16) -> NWParameters {
         let webSocket = NWProtocolWebSocket.Options()
@@ -475,6 +1091,7 @@ public final class HostServer {
     private func drop(_ client: Client) {
         guard clients.removeValue(forKey: client.id) != nil else { return }
         client.connection.cancel()
+        if client.inFront { updateMacInUse() }
         for id in client.attached {
             guard let session = sessions[id] else { continue }
             if session.arbiter.remove(client.id) { applySize(of: session) }
@@ -484,9 +1101,16 @@ public final class HostServer {
     }
 
     private func send(_ message: ServerMessage, to client: Client) {
+        let data = MessageCoding.encode(message)
+        // Larger than a frame may be: in pieces, one after the other (#21).
+        if let frames = MessageParts.frames(for: data, id: client.nextMessage) {
+            client.nextMessage &+= 1
+            for frame in frames { send(frame, to: client) }
+            return
+        }
         let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
         let context = NWConnection.ContentContext(identifier: "text", metadata: [metadata])
-        client.connection.send(content: MessageCoding.encode(message), contentContext: context, completion: .idempotent)
+        client.connection.send(content: data, contentContext: context, completion: .idempotent)
     }
 
     private func send(_ frame: DataFrame, to client: Client) {
@@ -497,6 +1121,7 @@ public final class HostServer {
 
     private func broadcastSessions() {
         updateSleepGuard()
+        updateMarker()
         let list = sessions.values.map(\.info).sorted { $0.id < $1.id }
         for client in clients.values where client.authenticated {
             send(.sessions(list), to: client)
@@ -553,12 +1178,54 @@ public final class HostServer {
             requestAgents(for: client, refresh: refresh)
         case .create(let request):
             create(request, for: client)
-        case .attach(let id, let size, let have):
+        case .agentShell(let id, let key, let request):
+            handleAgentShell(id: id, key: key, request: request, from: client)
+        case .setAgentShells(let on):
+            setAgentShells(on)
+        case .setAgentsUseShells(let on):
+            agentsUseShells = on
+            saveSettings()
+            for other in clients.values where other.authenticated { send(.agentsUseShells(on), to: other) }
+        case .answer(let id, let state, let text):
+            // Only while the agent still asks what the reply answers: one
+            // that comes later is not typed into what it asks next.
+            guard let session = sessions[id], session.info.state == state else {
+                send(.error("The agent has moved on since: the reply was not sent."), to: client)
+                return
+            }
+            session.process.write(Data(text.utf8))
+            // Return a moment later, as a person types it: an agent's
+            // prompt takes text that arrives with Return as pasted.
+            queue.asyncAfter(deadline: .now() + 0.15) { [weak session] in session?.process.write(Data("\r".utf8)) }
+        case .appInFront(let front):
+            client.inFront = front
+            updateMacInUse()
+        case .used:
+            used(by: client)
+        case .saveSchedule(let schedule):
+            if let problem = save(schedule) { send(.error(problem), to: client) }
+        case .createInWorktree(let request, let branch):
+            createInWorktree(request, branch: branch, for: client)
+        case .listWorktrees(let folder):
+            sendWorktrees(of: folder, to: [client.id])
+        case .finishWorktree(let folder, let path, let finish, let deleteBranch):
+            finishWorktree(folder: folder, path: path, finish: finish, deleteBranch: deleteBranch, for: client)
+        case .setWorktreeSetup(let folder, let command):
+            let command = command?.trimmingCharacters(in: .whitespacesAndNewlines)
+            worktreeSetups[folder] = command?.isEmpty == false ? command : nil
+            saveWorktreeSetups()
+            sendWorktrees(of: folder, to: clients.values.filter(\.authenticated).map(\.id))
+        case .removeSchedule(let id):
+            schedules.removeAll { $0.id == id }
+            schedulesFrom[id] = nil
+            saveSchedules()
+            broadcastSchedules()
+        case .attach(let id, let size, let have, let history):
             guard let session = sessions[id] else {
                 send(.error("no such session"), to: client)
                 return
             }
-            attach(client, to: session, size: size, have: have)
+            attach(client, to: session, size: size, have: have, history: history)
         case .detach(let id):
             client.attached.remove(id)
             if let session = sessions[id], session.arbiter.remove(client.id) { applySize(of: session) }
@@ -569,21 +1236,27 @@ public final class HostServer {
             guard let session = sessions[id], client.attached.contains(id) else { return }
             let changed = session.arbiter.takeControl(client.id, size: size)
             if changed { applySize(of: session) } else { announceSize(of: session) }
+            used(by: client)
         case .kill(let id):
             guard let session = sessions[id] else { return }
+            session.endAsked = true
             session.process.hangUp()
             queue.asyncAfter(deadline: .now() + 3) { [weak session] in session?.process.forceKill() }
         case .setStartAtLogin(let wanted):
             guard let item = configuration.loginItem else { return }
+            startAtLoginChosen = true
+            saveSettings()
             do {
                 if wanted { try item.turnOn() } else { try item.turnOff() }
             } catch {
                 send(.error("Could not \(wanted ? "set the host to start" : "stop the host from starting") at login: \(error.localizedDescription)"), to: client)
             }
             // To everyone, and as it is now: also when it could not be changed.
+            startAtLoginSaid = item.isOn
             for other in clients.values where other.authenticated { send(.startAtLogin(item.isOn), to: other) }
         case .setKeepAwake(let wanted):
-            guard wanted != keepAwake else { return }
+            // Nothing to change: the asker is told what is kept (as below).
+            guard wanted != keepAwake else { return send(.keepAwake(keepAwake), to: client) }
             keepAwake = wanted
             // A switch-on lasts as long as the options say.
             keepAwakeOptions.until = wanted ? keepAwakeOptions.minutes.map { Date().addingTimeInterval(TimeInterval($0) * 60) } : nil
@@ -602,7 +1275,7 @@ public final class HostServer {
             } else {
                 options.until = keepAwakeOptions.until
             }
-            guard options != keepAwakeOptions else { return }
+            guard options != keepAwakeOptions else { return send(.keepAwakeOptions(keepAwakeOptions), to: client) }
             keepAwakeOptions = options
             saveSettings()
             updateSleepGuard()
@@ -613,17 +1286,22 @@ public final class HostServer {
             if let agent = settings.agent, !AgentDetector.known.contains(where: { $0.id == agent }) { settings.agent = nil }
             if settings.model?.trimmingCharacters(in: .whitespaces).isEmpty == true { settings.model = nil }
             if settings.prompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { settings.prompt = nil }
-            guard settings != commitWriter else { return }
+            // What it asked for may be tidied into what is kept already: the
+            // asker is told what is kept, rather than left with its own copy.
+            guard settings != commitWriter else { return send(.commitWriter(commitWriter), to: client) }
             commitWriter = settings
             saveSettings()
             for other in clients.values where other.authenticated { send(.commitWriter(settings), to: other) }
         case .setDisplaySettings(let wanted):
             let settings = wanted.checked
-            guard settings != displaySettings else { return }
+            guard settings != displaySettings else {
+                if settings != wanted { send(.displaySettings(displaySettings), to: client) }
+                return
+            }
             displaySettings = settings
             saveSettings()
-            // The sender has it already.
-            for other in clients.values where other.authenticated && other !== client { send(.displaySettings(settings), to: other) }
+            // The sender has it already, unless it was tidied.
+            for other in clients.values where other.authenticated && (other !== client || settings != wanted) { send(.displaySettings(settings), to: other) }
         case .writeCommitMessage(let path):
             writeCommitMessage(in: path, for: client)
         case .cancelCommitMessage(let path):
@@ -675,12 +1353,23 @@ public final class HostServer {
             folders.removeAll { $0 == path }
             foldersChanged()
         case .diff(let path):
+            // Asked again and again while a client shows it: worked out again
+            // only when the folder's files changed since (#21).
+            if let cached = diffCache[path], diffWatches[path] != nil, !diffDirty.contains(path) {
+                send(.diff(path: path, snapshot: cached.snapshot.withoutPatches), to: client)
+                return
+            }
+            watchForDiff(path)
+            diffDirty.remove(path)
             work(for: client, { GitDiff.snapshot(directory: path) }) { server, client, snapshot in
                 server.diffCache[path] = (snapshot, Date())
                 server.send(.diff(path: path, snapshot: snapshot.withoutPatches), to: client)
             }
         case .diffFile(let path, let file, let staged):
-            if let cached = diffCache[path], Date().timeIntervalSince(cached.at) < 20 {
+            // From the last look while it is recent, as before: a diff asked for
+            // right after the list is answered in turn, a file that is not
+            // there with nothing, which can only be told apart by its order.
+            if let cached = diffCache[path], Date().timeIntervalSince(cached.at) < 20 || (diffWatches[path] != nil && !diffDirty.contains(path)) {
                 send(.diffFile(path: path, file: cached.snapshot.files.first { $0.path == file && $0.isStaged == staged }), to: client)
                 return
             }
@@ -696,11 +1385,11 @@ public final class HostServer {
             work(for: client, { FileBrowser.list(path) }) { server, client, entries in
                 server.send(.files(path: path, entries: entries), to: client)
             }
-        case .readFile(let path):
+        case .readFile(let path, let anyway):
             work(
                 for: client,
                 { () -> (FileContent, Data?) in
-                    let content = FileBrowser.read(path)
+                    let content = FileBrowser.read(path, anyway: anyway == true)
                     guard content == .image else { return (content, nil) }
                     // The client cannot read the Mac's disk, so the picture travels.
                     if let data = FileBrowser.imageData(path) { return (.image, data) }
@@ -804,6 +1493,12 @@ public final class HostServer {
                     server.send(.error("cannot open that folder"), to: client)
                 }
             }
+        case .dismissFailure(let id):
+            // Seen on one device is seen: it goes from every one.
+            guard let index = failures.firstIndex(where: { $0.id == id }) else { return }
+            failures.remove(at: index)
+            saveFailures()
+            broadcastFailures()
         }
     }
 
@@ -951,6 +1646,53 @@ public final class HostServer {
         configuration.usageDirectory?.appendingPathComponent("session-\(id).json")
     }
 
+    /// What a session's agent's hooks last said (`AgentHooks`).
+    private func eventsFile(for id: SessionID) -> URL? {
+        configuration.usageDirectory?.appendingPathComponent("session-\(id).events.json")
+    }
+
+    /// Watches the folder the hooks write in, so that a state is known when
+    /// it begins rather than at the next refresh.
+    private var eventsWatch: DispatchSourceFileSystemObject?
+
+    private func watchEvents() {
+        guard let directory = configuration.usageDirectory else { return }
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        let descriptor = open(directory.path, O_EVTONLY)
+        guard descriptor >= 0 else { return }
+        let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: descriptor, eventMask: .write, queue: queue)
+        source.setEventHandler { [weak self] in self?.readEvents() }
+        source.setCancelHandler { Darwin.close(descriptor) }
+        source.resume()
+        eventsWatch = source
+    }
+
+    /// Reads what each session's hooks said since the last look, and tells
+    /// every client of a state that changed.
+    private func readEvents() {
+        var changed = false
+        for session in sessions.values where session.hooked {
+            guard let file = eventsFile(for: session.info.id), let data = FileManager.default.contents(atPath: file.path),
+                data != session.lastEvent
+            else { continue }
+            session.lastEvent = data
+            guard let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                let agent = record["agent"] as? String, let event = record["event"] as? String
+            else { continue }
+            let at = (record["at"] as? Double).map(Date.init(timeIntervalSince1970:)) ?? Date()
+            guard case .set(var state) = AgentHooks.change(agent: agent, event: event, input: record["input"] as? [String: Any] ?? [:], now: at)
+            else { continue }
+            // Still working is working since it began.
+            if case .working = state, case .working(let since)? = session.info.state { state = .working(since: since) }
+            let note = AgentHooks.note(agent: session.info.agent, beforeAnyEvent: false)
+            guard state != session.info.state || note != session.info.stateNote else { continue }
+            session.info.state = state
+            session.info.stateNote = note
+            changed = true
+        }
+        if changed { broadcastSessions() }
+    }
+
     private func refreshSummaries() {
         refreshAccountUsage(olderThan: Self.accountInterval)
         guard !summarizing else { return }
@@ -1046,11 +1788,19 @@ public final class HostServer {
         client.identity = identity
         send(.welcome(version: configuration.protocolVersion, host: Host.current().localizedName ?? "Mac"), to: client)
         send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
+        // What stopped before this client came, until someone has seen it.
+        send(.failures(failures), to: client)
         if !accountUsage.isEmpty { send(.accountUsage(accountUsageList()), to: client) }
         send(.folders(folders), to: client)
         send(.tabLayout(tabLayout), to: client)
         send(.keepAwake(keepAwake), to: client)
         send(.keepAwakeOptions(keepAwakeOptions), to: client)
+        if let install = configuration.agentShells {
+            send(.agentShells(install.isOn), to: client)
+            send(.agentsUseShells(agentsUseShells), to: client)
+        }
+        send(.macInUse(macInUse), to: client)
+        send(.schedules(schedules), to: client)
         send(.commitWriter(commitWriter), to: client)
         if let item = configuration.loginItem { send(.startAtLogin(item.isOn), to: client) }
         // Without any yet, the client is sent none and hands over its own.
@@ -1098,12 +1848,18 @@ public final class HostServer {
             // An emulator answering the program's question, not a person
             // typing. Only the answer of the client in use is passed on, and
             // it does not move the session to that client.
-            if session.arbiter.driver == client.id { session.process.write(frame.payload) }
+            if session.arbiter.answerer == client.id { session.process.write(frame.payload) }
             return
         }
         // Typing takes control of the session's size.
         if session.arbiter.activity(client.id) { applySize(of: session) }
+        used(by: client)
         session.process.write(frame.payload)
+        // It may have stopped the turn, and not every agent says so.
+        if session.info.state?.isWorking == true, AgentHooks.mayStopATurn(frame.payload) {
+            session.info.state = nil
+            broadcastSessions()
+        }
     }
 
     private func requestAgents(for client: Client, refresh: Bool) {
@@ -1131,7 +1887,11 @@ public final class HostServer {
 
     // MARK: Sessions
 
-    private func create(_ request: CreateRequest, for client: Client, conversationID: String? = nil) {
+    @discardableResult
+    private func create(
+        _ request: CreateRequest, for client: Client?, conversationID: String? = nil, openedBy: SessionID? = nil, run: Schedule? = nil,
+        environment more: [String: String] = [:]
+    ) -> SessionID? {
         var cwd = request.cwd ?? HostEnvironment.homeDirectory
         var isDirectory: ObjCBool = false
         if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDirectory) || !isDirectory.boolValue {
@@ -1140,29 +1900,50 @@ public final class HostServer {
         let size = request.size.clamped
         let id = nextSessionID
         var command = request.command
-        // Claude Code reports its usage through its status line.
-        if SessionSummaries.agent(forCommand: command) == "claude", let tool = configuration.statusLineTool, let file = usageFile(for: id) {
-            try? FileManager.default.removeItem(at: file)
-            command = (command ?? "") + StatusLineRelay.launchArguments(tool: tool, file: file.path)
+        var environment = HostEnvironment.sessionEnvironment()
+        let agent = SessionSummaries.agent(forCommand: command)
+        var hooked = false
+        if let agent, let tool = configuration.statusLineTool, let events = eventsFile(for: id) {
+            // Claude Code reports its usage through its status line, and
+            // every agent what it is doing through its hooks.
+            let usage = agent == "claude" ? usageFile(for: id) : nil
+            for file in [usage, events].compactMap({ $0 }) { try? FileManager.default.removeItem(at: file) }
+            if let more = try? AgentHooks.launchArguments(
+                agent: agent, tool: tool, usageFile: usage?.path, directory: configuration.hooksDirectory, home: configuration.home,
+                trust: run.map { [$0.folder] } ?? [], useShells: asksToUseShells)
+            {
+                command = (command ?? "") + more
+                environment[AgentHooks.eventsVariable] = events.path
+                if let told = try? AgentHooks.instructionsEnvironment(
+                    agent: agent, directory: configuration.hooksDirectory, useShells: asksToUseShells, current: environment)
+                {
+                    environment.merge(told) { _, new in new }
+                }
+                hooked = true
+            }
         }
         if let directory = configuration.agentsDirectory, let agent = SessionSummaries.agent(forCommand: command), let text = command,
             text == agent || text.hasPrefix(agent + " ")
         {
             command = Handoff.shellQuote((directory as NSString).appendingPathComponent(agent)) + text.dropFirst(agent.count)
         }
+        environment.merge(more) { _, new in new }
+        // The agent's MCP server tells the host which session's it is.
+        let agentKey = agent.map { _ in UUID().uuidString + UUID().uuidString }
+        if let agentKey { environment[Self.agentShellsVariable] = "\(boundPort) \(agentKey)" + (asksToUseShells ? " use" : "") }
         let process: PTYProcess
         do {
             process = try PTYProcess(
                 executable: HostEnvironment.shell,
                 arguments: HostEnvironment.shellArguments(command: command),
-                environment: HostEnvironment.sessionEnvironment(),
+                environment: environment,
                 cwd: cwd,
                 size: size,
                 queue: queue
             )
         } catch {
-            send(.error("\(error)"), to: client)
-            return
+            if let client { send(.error("\(error)"), to: client) }
+            return nil
         }
 
         nextSessionID += 1
@@ -1174,9 +1955,15 @@ public final class HostServer {
             agent: SessionSummaries.agent(forCommand: request.command),
             // A session started with an agent's own resume command is that
             // conversation's, whoever typed the command.
-            conversationID: conversationID ?? SessionSummaries.resumedConversation(inCommand: request.command)
+            conversationID: conversationID ?? SessionSummaries.resumedConversation(inCommand: request.command),
+            stateNote: hooked ? AgentHooks.note(agent: agent, beforeAnyEvent: true) : nil
         )
         let session = Session(info: info, process: process, screenLines: configuration.screenLines)
+        session.hooked = hooked
+        session.agentKey = agentKey
+        session.info.openedBy = openedBy
+        session.info.schedule = run?.name
+        session.info.schedulePermissions = run?.permissions
         sessions[id] = session
 
         process.onOutput = { [weak self, weak session] data in
@@ -1187,36 +1974,156 @@ public final class HostServer {
             self?.sessionExited(id, status: status)
         }
 
-        attach(client, to: session, size: size)
+        if let client { attach(client, to: session, size: size) }
         broadcastSessions()
         // An agent that was not in use until now: ask its service right away.
         refreshAccountUsage(olderThan: Self.accountInterval)
+        return id
     }
 
-    private func attach(_ client: Client, to session: Session, size: TermSize, have: Int? = nil) {
+    // MARK: Shells an agent opens (#10)
+
+    /// The variable that gives an agent's session its port and key, for
+    /// the MCP server the agent starts.
+    public static let agentShellsVariable = "AGENTTERM_MCP"
+
+    /// Start at Login as the clients were last told.
+    private var startAtLoginSaid: Bool?
+
+    /// Start at Login turned on or off outside AgentTerm, in System Settings
+    /// or by removing the launch agent: every client is told.
+    private func checkLoginItem() {
+        guard let item = configuration.loginItem else { return }
+        let on = item.isOn
+        guard on != startAtLoginSaid else { return }
+        let first = startAtLoginSaid == nil
+        startAtLoginSaid = on
+        // The first look only notes it: each client was told at its welcome.
+        if first { return }
+        for client in clients.values where client.authenticated { send(.startAtLogin(on), to: client) }
+    }
+
+    /// Does what an agent asks of the shells agents opened, as the session
+    /// its key names, and answers the client that asked. Those shells are
+    /// every agent's, so that one agent uses a shell another opened rather
+    /// than open one more; the user's own sessions, and the agents', are
+    /// never reached.
+    private func handleAgentShell(id: Int, key: String, request: AgentShellRequest, from client: Client) {
+        func answer(_ result: AgentShellResult) { send(.agentShellResult(id: id, result: result), to: client) }
+        guard !key.isEmpty, let owner = sessions.values.first(where: { $0.agentKey == key }) else {
+            return answer(.refused("This is not the session of an agent AgentTerm started, or that session has ended."))
+        }
+        /// A shell an agent opened and that still runs.
+        func own(_ session: SessionID) -> Session? {
+            sessions[session].flatMap { $0.info.openedBy != nil ? $0 : nil }
+        }
+        let notOwn = "That is not a shell an agent opened, or it has ended. Use list_shells."
+        switch request {
+        case .open(let command, let title):
+            // Shells only: one agent starting another spends an account
+            // without anyone having asked.
+            if let command, SessionSummaries.agent(forCommand: command) != nil {
+                return answer(.refused("Starting an agent is not allowed: open a shell, with a command or without."))
+            }
+            let first = command?.split(whereSeparator: \.isWhitespace).first.map(String.init)
+            let request = CreateRequest(command: command, cwd: owner.info.cwd, title: title ?? first ?? "shell", size: owner.info.size)
+            // Not attached to the agent's server, which only asks: attached,
+            // it would be the device using the shell, and the Mac that shows
+            // it would say another device is (MCP-12).
+            guard let created = create(request, for: nil, openedBy: owner.info.id), let session = sessions[created] else {
+                return answer(.refused("The shell could not be started."))
+            }
+            answer(.opened(session.info))
+        case .list:
+            answer(.shells(sessions.values.filter { $0.info.openedBy != nil }.map(\.info).sorted { $0.id < $1.id }))
+        case .read(let session, let linesAbove):
+            guard let shell = own(session) else { return answer(.refused(notOwn)) }
+            let lines = min(linesAbove, configuration.screenLines)
+            answer(.screen(shell.mirrorQueue.sync { shell.mirror.text(linesAbove: lines) }))
+        case .send(let session, let text, let keys):
+            guard let shell = own(session) else { return answer(.refused(notOwn)) }
+            var bytes = text ?? ""
+            for key in keys {
+                guard let typed = TerminalKeys.bytes(for: key) else { return answer(.refused("There is no key called “\(key)”.")) }
+                bytes += typed
+            }
+            shell.process.write(Data(bytes.utf8))
+            answer(.done)
+        case .close(let session):
+            guard let shell = own(session) else { return answer(.refused(notOwn)) }
+            shell.endAsked = true
+            shell.process.hangUp()
+            queue.asyncAfter(deadline: .now() + 3) { [weak shell] in shell?.process.forceKill() }
+            answer(.done)
+        }
+    }
+
+    /// Installs or removes the MCP server, off the queue the sessions use,
+    /// and tells every client.
+    private func setAgentShells(_ on: Bool?) {
+        guard let install = configuration.agentShells else { return }
+        let known = agents
+        let detect = configuration.detectAgents
+        workQueue.async { [weak self] in
+            let installed = known ?? detect()
+            if let on { install.set(on: on, agents: installed) } else { install.ensure(agents: installed) }
+            let isOn = install.isOn
+            self?.queue.async {
+                guard let self else { return }
+                for client in self.clients.values where client.authenticated { self.send(.agentShells(isOn), to: client) }
+            }
+        }
+    }
+
+    private func attach(_ client: Client, to session: Session, size: TermSize, have: Int? = nil, history: Int? = nil) {
         client.attached.insert(session.info.id)
         // Watching is not using: this only sets the size if nobody else is attached.
         let changed = session.arbiter.update(client.id, size: size)
         if changed {
             session.info.size = session.arbiter.currentSize
             session.process.resize(session.info.size)
-            session.mirror.resize(session.info.size)
+            let size = session.info.size, mirror = session.mirror
+            session.mirrorQueue.async { mirror.resize(size) }
         }
         send(.attached(session.info), to: client)
-        let replay: Data
+        let id = session.info.id
         if let have, have <= session.written, session.written - have <= session.scrollback.count {
             // A client that was here before, a phone after its network
             // changed: its terminal has all up to `have`, so only what came
             // since is sent, not a screen it would only draw again.
-            replay = session.scrollback.suffix(session.written - have)
-        } else {
-            // Anyone else gets the screen as it is now, with the lines
-            // above it, written out for the size the session has. To the
-            // client it is output like any other, and it counts on from the
-            // end of it as it would after the session's own.
-            replay = session.mirror.snapshot()
+            client.awaitingScreen[id] = nil
+            sendReplay(session.scrollback.suffix(session.written - have), of: session, from: have, above: nil, to: client)
+            return
         }
-        send(.replaying(session: session.info.id, from: session.written - replay.count), to: client)
+        // Anyone else gets the screen as it is now, with the lines above it,
+        // written out for the size the session has, on the session's own
+        // queue. To the client it is output like any other, and it counts on
+        // from the end of it as it would after the session's own; what the
+        // session writes meanwhile follows it.
+        attachments += 1
+        let attachment = attachments
+        client.awaitingScreen[id] = (attachment, [])
+        let written = session.written
+        let mirror = session.mirror
+        session.mirrorQueue.async { [weak self] in
+            let replay = mirror.snapshot(linesAbove: history)
+            let above = mirror.linesAbove
+            self?.queue.async {
+                guard let self, let session = self.sessions[id], let waiting = client.awaitingScreen[id], waiting.attach == attachment,
+                    client.attached.contains(id)
+                else { return }
+                client.awaitingScreen[id] = nil
+                self.sendReplay(replay, of: session, from: written - replay.count, above: above, to: client)
+                for frame in waiting.output { self.send(frame, to: client) }
+            }
+        }
+    }
+
+    /// Counts attaches, to tell a screen still on its way from a newer one.
+    private var attachments = 0
+
+    private func sendReplay(_ replay: Data, of session: Session, from: Int, above: Int?, to client: Client) {
+        send(.replaying(session: session.info.id, from: from, above: above), to: client)
         // In pieces: the whole of it may be larger than one message may be.
         var start = replay.startIndex
         while start < replay.endIndex {
@@ -1237,7 +2144,8 @@ public final class HostServer {
     private static let replayPiece = 256 * 1024
 
     private func record(_ data: Data, in session: Session) {
-        session.mirror.feed(data)
+        let mirror = session.mirror
+        session.mirrorQueue.async { mirror.feed(data) }
         session.scrollback.append(data)
         session.written += data.count
         // Cut back to the limit only once it is well past it: cutting
@@ -1249,7 +2157,13 @@ public final class HostServer {
         }
         let frame = DataFrame(kind: .output, session: session.info.id, payload: data)
         for id in session.arbiter.clients {
-            if let client = clients[id] { send(frame, to: client) }
+            guard let client = clients[id] else { continue }
+            // After its screen, which is still being written out.
+            if client.awaitingScreen[session.info.id] != nil {
+                client.awaitingScreen[session.info.id]?.output.append(frame)
+            } else {
+                send(frame, to: client)
+            }
         }
     }
 
@@ -1257,7 +2171,8 @@ public final class HostServer {
     private func applySize(of session: Session) {
         session.info.size = session.arbiter.currentSize
         session.process.resize(session.info.size)
-        session.mirror.resize(session.info.size)
+        let size = session.info.size, mirror = session.mirror
+        session.mirrorQueue.async { mirror.resize(size) }
         announceSize(of: session)
     }
 
@@ -1270,7 +2185,17 @@ public final class HostServer {
 
     private func sessionExited(_ id: SessionID, status: Int32) {
         guard let session = sessions.removeValue(forKey: id) else { return }
-        if let file = usageFile(for: id) { try? FileManager.default.removeItem(at: file) }
+        if let file = usageFile(for: id) {
+            try? FileManager.default.removeItem(at: file)
+            try? FileManager.default.removeItem(atPath: StatusLineRelay.failureFile(for: file.path))
+        }
+        if let file = eventsFile(for: id) { try? FileManager.default.removeItem(at: file) }
+        if !session.endAsked, let reason = Self.unexpectedEnd(code: status) {
+            report(
+                PartFailure(
+                    part: .session, name: session.info.displayName, at: Date(), ended: [EndedSession(session.info)], restarted: false,
+                    reason: reason))
+        }
         for clientID in session.arbiter.clients {
             guard let client = clients[clientID] else { continue }
             client.attached.remove(id)

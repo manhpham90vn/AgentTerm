@@ -17,7 +17,10 @@ targets:
     platform: iOS
     sources:
       - AgentTerm
+      - Shared
     dependencies:
+      # The Live Activity (#24), embedded in the app.
+      - target: AgentTermLiveActivity
       - package: AgentTerm
         product: AgentTermProtocol
       - package: AgentTerm
@@ -73,10 +76,46 @@ targets:
         NSCameraUsageDescription: AgentTerm uses the camera to scan the pairing code shown on your Mac.
         NSLocalNetworkUsageDescription: AgentTerm connects to the AgentTerm host running on your Mac.
         ITSAppUsesNonExemptEncryption: false
+        NSSupportsLiveActivities: true
         CFBundleURLTypes:
           - CFBundleURLName: com.manhpham.agentterm.pair
             CFBundleURLSchemes:
               - $(APP_LINK_SCHEME)
+  # The Live Activity of the agents on a Mac (#24): a widget extension, with
+  # an identifier of its own under the app's.
+  AgentTermLiveActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - AgentTermLiveActivity
+      - Shared
+    configFiles:
+      Debug: Version.xcconfig
+      Release: Version.xcconfig
+    settings:
+      base:
+        PRODUCT_NAME: AgentTermLiveActivity
+        CURRENT_PROJECT_VERSION: 1
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: com.manhpham.agentterm.dev.LiveActivity
+          APP_LINK_SCHEME: agentterm-dev
+        Release:
+          PRODUCT_BUNDLE_IDENTIFIER: com.manhpham.agentterm.LiveActivity
+          APP_LINK_SCHEME: agentterm
+    info:
+      path: AgentTermLiveActivity/Info.plist
+      properties:
+        CFBundleDisplayName: AgentTerm
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        AppLinkScheme: $(APP_LINK_SCHEME)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
   AgentTermUITests:
     type: bundle.ui-testing
     platform: iOS

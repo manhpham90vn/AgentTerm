@@ -54,7 +54,7 @@ for agent in claude codex; do
     chmod +x "$AGENTS/$agent"
 done
 
-AGENTTERM_STATE_DIR="$STATE" "$BIN/agenttermd" --port "$PORT" --local-only --no-account-usage --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" CFFIXED_USER_HOME="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" "$BIN/agenttermd" --port "$PORT" --local-only --no-account-usage --home "$FAKE_HOME" --agents "$AGENTS" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
 MAC=""
 cleanup() {
@@ -83,7 +83,7 @@ fi
 # an AgentTerm run from this build folder, and starting from none.
 [ -e "$BIN/$APP_NAME" ] || ln -s "$BIN/AgentTermMac" "$BIN/$APP_NAME"
 defaults delete "$APP_NAME" >/dev/null 2>&1 || true
-AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" "$BIN/$APP_NAME" > "$STATE/mac.log" 2>&1 &
+HOME="$FAKE_HOME" ZDOTDIR="$FAKE_HOME" AGENTTERM_STATE_DIR="$STATE" AGENTTERM_PORT="$PORT" CFFIXED_USER_HOME="$FAKE_HOME" "$BIN/$APP_NAME" > "$STATE/mac.log" 2>&1 &
 MAC=$!
 
 export AGENTTERM_CROSS_PID="$MAC" AGENTTERM_CROSS_PROJECT="$PROJECT"
