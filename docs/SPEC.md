@@ -303,7 +303,7 @@ holds the hold on sleep, so it works with the window closed, and lets go
 when the last session ends. Closing the lid still puts the Mac to sleep.
 Off by default.
 
-Three options go with it, in the same places, and like the switch they are
+Four options go with it, in the same places, and like the switch they are
 the host's, so both apps show the same:
 
 - **Turn off by itself** after 1, 2, 4 or 8 hours, counted from when it is
@@ -312,6 +312,10 @@ the host's, so both apps show the same:
 - **Keep the display on too.** Without it the display may turn off.
 - **Only while the Mac is plugged in.** On battery the Mac sleeps as usual,
   and is kept awake again once power is back.
+- **Only while an agent is working.** The Mac is kept awake while at least
+  one agent is working (see "What the agent is doing"), and let go when
+  none is: an agent that waits for the user, or is done, and a shell, hold
+  nothing. Off by default; off, any open session keeps the Mac awake.
 
 ### Menu bar (Mac)
 

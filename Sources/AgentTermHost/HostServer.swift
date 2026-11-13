@@ -291,7 +291,9 @@ public final class HostServer {
             broadcastKeepAwake()
         }
         let powered = !keepAwakeOptions.onlyOnPower || configuration.isOnPower()
-        let wanted = keepAwake && !sessions.isEmpty && powered
+        // Any session holds the Mac awake, or only an agent at work.
+        let running = keepAwakeOptions.onlyWhileWorking ? sessions.values.contains { $0.info.state?.isWorking == true } : !sessions.isEmpty
+        let wanted = keepAwake && running && powered
         let held =
             configuration.holdAwake.map { $0(wanted, keepAwakeOptions.display) }
             ?? sleepGuard.set(held: wanted, display: keepAwakeOptions.display)

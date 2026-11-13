@@ -340,6 +340,10 @@ private struct KeepAwakeOptionsView: View {
             Toggle(isOn: binding(\.onlyOnPower)) {
                 Text("Only while the Mac is plugged in").font(.system(size: 12.5))
             }
+            Toggle(isOn: binding(\.onlyWhileWorking)) {
+                Text("Only while an agent is working").font(.system(size: 12.5))
+            }
+            .help("An agent that waits for you, is done, or a shell, does not keep the Mac awake")
         }
         .toggleStyle(.checkbox)
     }

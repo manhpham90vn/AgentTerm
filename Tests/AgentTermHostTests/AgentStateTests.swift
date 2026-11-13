@@ -190,6 +190,14 @@ final class AgentStateHostTests: XCTestCase {
     private var server: HostServer!
     private var port: UInt16 = 0
     private let token = "test-token-0123456789abcdef0123456789"
+    /// Whether the host holds the Mac awake now, through the stand-in hold.
+    private var held = false
+    private let holdLock = NSLock()
+    private var isHeld: Bool {
+        holdLock.lock()
+        defer { holdLock.unlock() }
+        return held
+    }
     private var tool: URL { Bundle(for: AgentStateHostTests.self).bundleURL.deletingLastPathComponent().appendingPathComponent("agenttermd") }
 
     override func setUpWithError() throws {
@@ -201,6 +209,13 @@ final class AgentStateHostTests: XCTestCase {
             usageDirectory: root.appendingPathComponent("usage"))
         configuration.hooksDirectory = root.appendingPathComponent("hooks")
         configuration.home = root.path
+        configuration.holdAwake = { [weak self] held, _ in
+            self?.holdLock.lock()
+            self?.held = held
+            self?.holdLock.unlock()
+            return true
+        }
+        configuration.isOnPower = { true }
         server = HostServer(configuration: configuration)
         port = try server.start()
     }
@@ -298,5 +313,46 @@ final class AgentStateHostTests: XCTestCase {
         waitUntil("both sessions") { client.sessions.count == 2 }
         XCTAssertEqual(client.sessions.first { $0.title == "codex" }?.stateNote?.contains("Trust all and continue"), true)
         XCTAssertEqual(client.sessions.first { $0.title == "agy" }?.stateNote?.contains("does not say when it waits for permission"), true)
+    }
+
+    /// AWAKE-5: with "only while an agent is working", the Mac is held
+    /// awake while an agent works and let go when none does; a shell and a
+    /// waiting agent hold nothing. With it off, a shell holds the Mac as before.
+    func testOnlyAnAgentAtWorkKeepsTheMacAwakeWhenAsked() throws {
+        let script = try standIn()
+        let mac = Client(port: port, token: token, name: "mac")
+        waitUntil("connected") { !mac.messages.isEmpty }
+        mac.connection.send(.setKeepAwakeOptions(KeepAwakeOptions(onlyWhileWorking: true)))
+        mac.connection.send(.setKeepAwake(true))
+        mac.connection.send(.create(CreateRequest(command: "exec sleep 600", cwd: root.path, title: "shell")))
+        mac.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: "agent")))
+        waitUntil("both sessions") { mac.sessions.count == 2 }
+        let agent = try XCTUnwrap(mac.sessions.first { $0.title == "agent" })
+        mac.connection.send(.attach(session: agent.id, size: TermSize(cols: 80, rows: 24)))
+        RunLoop.main.run(until: Date().addingTimeInterval(0.5))
+        XCTAssertFalse(isHeld, "a shell and an agent that said nothing hold nothing")
+
+        func next(_ name: String) {
+            mac.connection.sendInput(Data("\n".utf8), to: agent.id)
+            waitUntil(name) { mac.sessions.first { $0.id == agent.id }?.state?.name == name }
+        }
+        next("working")
+        waitUntil("the hold to be taken") { self.isHeld }
+        next("waiting for permission")
+        waitUntil("the hold to be let go while it waits") { !self.isHeld }
+        next("working")
+        waitUntil("taken again") { self.isHeld }
+        next("done")
+        waitUntil("let go when it is done") { !self.isHeld }
+
+        // Off: any session holds the Mac awake, as before.
+        mac.connection.send(.setKeepAwakeOptions(KeepAwakeOptions(onlyWhileWorking: false)))
+        waitUntil("held for the sessions") { self.isHeld }
+    }
+
+    /// Settings saved before the option was added read with it off.
+    func testOptionsSavedBeforeReadWithTheNewOneOff() throws {
+        let old = try XCTUnwrap(MessageCoding.decode(KeepAwakeOptions.self, from: Data(#"{"display":true,"onlyOnPower":false}"#.utf8)))
+        XCTAssertEqual(old, KeepAwakeOptions(display: true))
     }
 }

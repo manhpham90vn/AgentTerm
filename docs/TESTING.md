@@ -291,6 +291,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | AWAKE-2 | Keep awake off on both devices | Switch it on on the Mac; switch it off, or an option on, on a second device | Each device shows what the other set | H, P, M, X |
 | AWAKE-3 | Keep awake on with "after 1 hour" | The hour passes | The switch goes off on both devices | H |
 | AWAKE-4 | Keep awake on, a session running, macOS refusing the hold | Refreshes go by; then macOS gives the hold | It is reported once, that the Mac could not be kept awake; once held, the report says it is kept awake again | H |
+| AWAKE-5 | Keep awake on with "only while an agent is working", a shell and an agent | The agent works, waits for permission, works, is done; then the option is turned off | Held while it works, let go while it waits and when it is done; the shell holds nothing. Off, the sessions hold the Mac awake as before. Options saved before the option existed read with it off | H |
 | LOGIN-1 | A host that can be started at login | A client switches Start at Login on, then off | A launch agent naming this host's program is written, then removed; every client is told | H |
 | LOGIN-2 | A host with a state folder of its own | Connect | No client shows the switch | H |
 | LOGIN-3 | Start at Login on | Log out and in again | The host is running without the app having been opened | hand |

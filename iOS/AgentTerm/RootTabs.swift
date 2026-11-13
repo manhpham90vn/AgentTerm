@@ -83,6 +83,7 @@ private struct SettingsTab: View {
                         }
                         Toggle("Keep the display on too", isOn: option(\.display))
                         Toggle("Only while plugged in", isOn: option(\.onlyOnPower))
+                        Toggle("Only while an agent is working", isOn: option(\.onlyWhileWorking))
                     }
                     if let startAtLogin = model.startAtLogin {
                         Toggle("Start at Login", isOn: Binding(get: { startAtLogin }, set: { model.setStartAtLogin($0) }))

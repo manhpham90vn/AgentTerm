@@ -407,8 +407,10 @@ its own reading of the configuration, never a command.
 
 `SleepGuard` holds an IOKit power assertion: `PreventUserIdleSystemSleep`,
 or `PreventUserIdleDisplaySleep` when the display is to stay on. The host
-holds it while the switch is on, a session exists, and, with "only on
-power", `IOPSGetProvidingPowerSourceType` does not say battery; it looks
+holds it while the switch is on, a session exists (with "only while an
+agent is working", a session whose agent is working: the host looks again
+whenever a state changes), and, with "only on power",
+`IOPSGetProvidingPowerSourceType` does not say battery; it looks
 again on its timer, so plugging in or pulling the cable is followed within
 seconds. A hold given a length carries the time it ends in the options;
 when that passes the host switches it off and tells the clients. The
