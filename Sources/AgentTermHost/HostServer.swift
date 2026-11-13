@@ -130,6 +130,9 @@ public final class HostServer {
         let isLocal: Bool
         var identity: DeviceRegistry.Identity?
         var attached: Set<SessionID> = []
+        /// Sessions whose screen is being written out for this client, with
+        /// the output that came since, sent once the screen is.
+        var awaitingScreen: [SessionID: (attach: Int, output: [DataFrame])] = [:]
         /// A Mac app that says it is in front: someone is at the Mac.
         var inFront = false
         /// Numbers the large messages sent in pieces.
@@ -150,8 +153,12 @@ public final class HostServer {
         var info: SessionInfo
         let process: PTYProcess
         var arbiter: SizeArbiter
-        /// The session's screen, which a client that attaches is sent.
+        /// The session's screen, which a client that attaches is sent. Only
+        /// used on `mirrorQueue`: writing it out for a client that attaches
+        /// takes tens of milliseconds for a long session, which the queue
+        /// every session's output goes through must not wait for (#21).
         let mirror: ScreenMirror
+        let mirrorQueue: DispatchQueue
         /// The last of the raw output, for a client that was here before.
         var scrollback = Data()
         /// Where the end of `scrollback` is in all the session ever wrote.
@@ -177,6 +184,7 @@ public final class HostServer {
             self.info = info
             self.process = process
             self.mirror = ScreenMirror(size: info.size, scrollback: screenLines)
+            self.mirrorQueue = DispatchQueue(label: "agentterm.screen.\(info.id)")
             self.arbiter = SizeArbiter(fallback: info.size)
         }
     }
@@ -2022,7 +2030,8 @@ public final class HostServer {
             answer(.shells(sessions.values.filter { $0.info.openedBy != nil }.map(\.info).sorted { $0.id < $1.id }))
         case .read(let session, let linesAbove):
             guard let shell = own(session) else { return answer(.refused(notOwn)) }
-            answer(.screen(shell.mirror.text(linesAbove: min(linesAbove, configuration.screenLines))))
+            let lines = min(linesAbove, configuration.screenLines)
+            answer(.screen(shell.mirrorQueue.sync { shell.mirror.text(linesAbove: lines) }))
         case .send(let session, let text, let keys):
             guard let shell = own(session) else { return answer(.refused(notOwn)) }
             var bytes = text ?? ""
@@ -2065,23 +2074,48 @@ public final class HostServer {
         if changed {
             session.info.size = session.arbiter.currentSize
             session.process.resize(session.info.size)
-            session.mirror.resize(session.info.size)
+            let size = session.info.size, mirror = session.mirror
+            session.mirrorQueue.async { mirror.resize(size) }
         }
         send(.attached(session.info), to: client)
-        let replay: Data
+        let id = session.info.id
         if let have, have <= session.written, session.written - have <= session.scrollback.count {
             // A client that was here before, a phone after its network
             // changed: its terminal has all up to `have`, so only what came
             // since is sent, not a screen it would only draw again.
-            replay = session.scrollback.suffix(session.written - have)
-        } else {
-            // Anyone else gets the screen as it is now, with the lines
-            // above it, written out for the size the session has. To the
-            // client it is output like any other, and it counts on from the
-            // end of it as it would after the session's own.
-            replay = session.mirror.snapshot(linesAbove: history)
+            client.awaitingScreen[id] = nil
+            sendReplay(session.scrollback.suffix(session.written - have), of: session, from: have, above: nil, to: client)
+            return
         }
-        send(.replaying(session: session.info.id, from: session.written - replay.count, above: session.mirror.linesAbove), to: client)
+        // Anyone else gets the screen as it is now, with the lines above it,
+        // written out for the size the session has, on the session's own
+        // queue. To the client it is output like any other, and it counts on
+        // from the end of it as it would after the session's own; what the
+        // session writes meanwhile follows it.
+        attachments += 1
+        let attachment = attachments
+        client.awaitingScreen[id] = (attachment, [])
+        let written = session.written
+        let mirror = session.mirror
+        session.mirrorQueue.async { [weak self] in
+            let replay = mirror.snapshot(linesAbove: history)
+            let above = mirror.linesAbove
+            self?.queue.async {
+                guard let self, let session = self.sessions[id], let waiting = client.awaitingScreen[id], waiting.attach == attachment,
+                    client.attached.contains(id)
+                else { return }
+                client.awaitingScreen[id] = nil
+                self.sendReplay(replay, of: session, from: written - replay.count, above: above, to: client)
+                for frame in waiting.output { self.send(frame, to: client) }
+            }
+        }
+    }
+
+    /// Counts attaches, to tell a screen still on its way from a newer one.
+    private var attachments = 0
+
+    private func sendReplay(_ replay: Data, of session: Session, from: Int, above: Int?, to client: Client) {
+        send(.replaying(session: session.info.id, from: from, above: above), to: client)
         // In pieces: the whole of it may be larger than one message may be.
         var start = replay.startIndex
         while start < replay.endIndex {
@@ -2102,7 +2136,8 @@ public final class HostServer {
     private static let replayPiece = 256 * 1024
 
     private func record(_ data: Data, in session: Session) {
-        session.mirror.feed(data)
+        let mirror = session.mirror
+        session.mirrorQueue.async { mirror.feed(data) }
         session.scrollback.append(data)
         session.written += data.count
         // Cut back to the limit only once it is well past it: cutting
@@ -2114,7 +2149,13 @@ public final class HostServer {
         }
         let frame = DataFrame(kind: .output, session: session.info.id, payload: data)
         for id in session.arbiter.clients {
-            if let client = clients[id] { send(frame, to: client) }
+            guard let client = clients[id] else { continue }
+            // After its screen, which is still being written out.
+            if client.awaitingScreen[session.info.id] != nil {
+                client.awaitingScreen[session.info.id]?.output.append(frame)
+            } else {
+                send(frame, to: client)
+            }
         }
     }
 
@@ -2122,7 +2163,8 @@ public final class HostServer {
     private func applySize(of session: Session) {
         session.info.size = session.arbiter.currentSize
         session.process.resize(session.info.size)
-        session.mirror.resize(session.info.size)
+        let size = session.info.size, mirror = session.mirror
+        session.mirrorQueue.async { mirror.resize(size) }
         announceSize(of: session)
     }
 

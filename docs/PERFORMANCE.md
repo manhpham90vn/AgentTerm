@@ -77,7 +77,7 @@ since Foundation's `Process` took some 70 ms to start one and see it end
 | A diff of 20,000 lines worked out | 638 ms | 105 ms | met |
 | A folder of 20,000 entries, as sent | one message of 3.6 MB | pieces of at most 256 KB | met |
 | The host after 100 sessions opened and ended | +61% | +47% | **over** (10%) |
-| Attaching to a session with 10,000 lines | 81 ms on the queue the sessions use | 81 ms | **over** (16 ms) |
+| Attaching to a session with 10,000 lines: another client waits | 89 ms, its screen written out on the queue every session uses | 0 ms: written out on the session's own queue (82 ms there) | met |
 | A text file over 2 MB | cannot be opened | cannot be opened | **over** |
 
 ## Scrolling on the iPhone

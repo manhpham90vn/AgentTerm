@@ -203,6 +203,32 @@ final class EndToEndTests: XCTestCase {
         mac.connection.send(.kill(session: id))
     }
 
+    /// PERF-7: a long session's screen is written out on the session's own
+    /// queue, not on the one every session's output goes through; what the
+    /// session writes meanwhile reaches the client after the screen.
+    func testWhatASessionWritesWhileItsScreenIsWrittenOutFollowsIt() {
+        let mac = connect("mac")
+        let size = TermSize(cols: 120, rows: 40)
+        mac.connection.send(.create(CreateRequest(command: "seq 1 15000; exec cat", cwd: NSTemporaryDirectory(), title: "long", size: size)))
+        waitUntil("the session") { mac.attached != nil }
+        let id = mac.attached!.id
+        waitUntil("its output", timeout: 20) { mac.text(id).contains("15000") }
+
+        let phone = connect("phone")
+        phone.connection.send(.attach(session: id, size: size))
+        // Written right away, while the screen is being written out.
+        mac.type("written meanwhile\r", in: id)
+        waitUntil("the screen and what came after it", timeout: 20) { phone.text(id).contains("written meanwhile") }
+        let text = phone.text(id)
+        let screen = try? XCTUnwrap(text.range(of: "15000", options: .backwards))
+        let after = try? XCTUnwrap(text.range(of: "written meanwhile"))
+        if let screen, let after { XCTAssertLessThan(screen.lowerBound, after.lowerBound, "what the session wrote came before its screen") }
+        // Where the phone's terminal is counts all of it, as the host does.
+        let from = phone.messages.compactMap { if case .replaying(id, let from, _) = $0 { return from } else { return nil } }.last
+        XCTAssertNotNil(from)
+        mac.connection.send(.kill(session: id))
+    }
+
     func testAnEmulatorAnsweringDoesNotTakeTheSessionAway() {
         // `cat -v` shows what reaches the program, with ESC as "^[".
         let phone = connect("phone")

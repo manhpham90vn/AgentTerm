@@ -74,58 +74,106 @@ final class ScreenMirror: TerminalDelegate {
     ///   session with a few hundred, and asks for more as it scrolls up.
     func snapshot(linesAbove: Int? = nil) -> Data {
         if linesAbove == nil, let written { return written }
-        let escape = "\u{1b}["
-        // An emulator that was used before starts empty too.
-        var out = "\(escape)?1049l\(escape)r\(escape)H\(escape)2J\(escape)3J"
-
-        let normal = terminal.contentSnapshot(region: linesAbove.map { .history(maximumScrollbackRows: max(0, $0)) } ?? .all, buffer: .normal)
-        let state = normal.inputState
-        out += written(normal)
-        out += cursorPosition(in: normal)
-        if state.isAlternateBuffer {
-            // Entering the other screen saves the cursor just placed, as the
-            // program's own entering did, for when it leaves.
-            let alternate = terminal.contentSnapshot(region: .history(maximumScrollbackRows: 0), buffer: .alt)
-            out += "\(escape)?1049h\(escape)H"
-            out += written(alternate)
-            let margins = scrollRegion()
-            out += margins
-            out += cursorPosition(in: alternate)
-        } else {
-            // Setting the margins moves the cursor, so they go first.
-            let margins = scrollRegion()
-            if !margins.isEmpty { out += margins + cursorPosition(in: normal) }
-        }
-
-        if state.applicationCursor { out += "\(escape)?1h" }
-        if state.applicationKeypad { out += "\u{1b}=" }
-        if state.bracketedPasteMode { out += "\(escape)?2004h" }
-        if state.focusReportingEnabled { out += "\(escape)?1004h" }
-        switch state.mouseMode {
-        case .off: break
-        case .x10: out += "\(escape)?9h"
-        case .vt200: out += "\(escape)?1000h"
-        case .buttonEventTracking: out += "\(escape)?1002h"
-        case .anyEvent: out += "\(escape)?1003h"
-        }
-        // How the mouse is reported, which the emulator does not say.
-        for mode in [1005, 1006, 1015, 1016] where tracker.modes[mode] == true {
-            out += "\(escape)?\(mode)h"
-        }
-        if state.keyboardEnhancementFlags.rawValue != 0 {
-            // Pushed, as the program did: it pops them when it ends.
-            out += "\(escape)>\(state.keyboardEnhancementFlags.rawValue)u"
-        }
-        if tracker.modes[7] == false { out += "\(escape)?7l" }
-        if tracker.modes[25] == false { out += "\(escape)?25l" }
-        if let style = tracker.cursorStyle { out += "\(escape)\(style) q" }
-        for parameters in tracker.pen { out += "\(escape)\(parameters)m" }
-
-        var data = Data(out.utf8)
-        // The beginning of what the live output is in the middle of.
-        data.append(tracker.pending)
+        let data = capture(linesAbove: linesAbove).written()
         if linesAbove == nil { written = data }
         return data
+    }
+
+    /// What `snapshot` writes out, taken as it is now: the rows and the
+    /// state. Taking it is quick and has to be done where the output is
+    /// fed; writing it out is most of the work and can be done anywhere.
+    func capture(linesAbove: Int? = nil) -> Capture {
+        let region: TerminalContentRegion = linesAbove.map { .history(maximumScrollbackRows: max(0, $0)) } ?? .all
+        let normal = terminal.contentSnapshot(region: region, buffer: .normal)
+        let alternate =
+            normal.inputState.isAlternateBuffer ? terminal.contentSnapshot(region: .history(maximumScrollbackRows: 0), buffer: .alt) : nil
+        return Capture(
+            normal: normal, alternate: alternate, margins: scrollRegion(), modes: tracker.modes, cursorStyle: tracker.cursorStyle, pen: tracker.pen,
+            pending: tracker.pending, cached: linesAbove == nil ? written : nil)
+    }
+
+    /// A session's screen and state as they were, to be written out.
+    struct Capture: Sendable {
+        let normal: TerminalContentSnapshot
+        let alternate: TerminalContentSnapshot?
+        let margins: String
+        let modes: [Int: Bool]
+        let cursorStyle: String?
+        let pen: [String]
+        let pending: Data
+        /// What was written out of the same, nothing having changed since.
+        let cached: Data?
+
+        func written() -> Data {
+            if let cached { return cached }
+            let escape = "\u{1b}["
+            // An emulator that was used before starts empty too.
+            var out = "\(escape)?1049l\(escape)r\(escape)H\(escape)2J\(escape)3J"
+            let state = normal.inputState
+            out += Self.written(normal)
+            out += Self.cursorPosition(in: normal)
+            if let alternate {
+                // Entering the other screen saves the cursor just placed, as the
+                // program's own entering did, for when it leaves.
+                out += "\(escape)?1049h\(escape)H"
+                out += Self.written(alternate)
+                out += margins
+                out += Self.cursorPosition(in: alternate)
+            } else if !margins.isEmpty {
+                // Setting the margins moves the cursor, so they go first.
+                out += margins + Self.cursorPosition(in: normal)
+            }
+
+            if state.applicationCursor { out += "\(escape)?1h" }
+            if state.applicationKeypad { out += "\u{1b}=" }
+            if state.bracketedPasteMode { out += "\(escape)?2004h" }
+            if state.focusReportingEnabled { out += "\(escape)?1004h" }
+            switch state.mouseMode {
+            case .off: break
+            case .x10: out += "\(escape)?9h"
+            case .vt200: out += "\(escape)?1000h"
+            case .buttonEventTracking: out += "\(escape)?1002h"
+            case .anyEvent: out += "\(escape)?1003h"
+            }
+            // How the mouse is reported, which the emulator does not say.
+            for mode in [1005, 1006, 1015, 1016] where modes[mode] == true {
+                out += "\(escape)?\(mode)h"
+            }
+            if state.keyboardEnhancementFlags.rawValue != 0 {
+                // Pushed, as the program did: it pops them when it ends.
+                out += "\(escape)>\(state.keyboardEnhancementFlags.rawValue)u"
+            }
+            if modes[7] == false { out += "\(escape)?7l" }
+            if modes[25] == false { out += "\(escape)?25l" }
+            if let cursorStyle { out += "\(escape)\(cursorStyle) q" }
+            for parameters in pen { out += "\(escape)\(parameters)m" }
+
+            var data = Data(out.utf8)
+            // The beginning of what the live output is in the middle of.
+            data.append(pending)
+            return data
+        }
+
+        /// The rows of a buffer as terminal output. Without the colors of this
+        /// emulator: a client has its own, and these are nobody's choice.
+        private static func written(_ content: TerminalContentSnapshot) -> String {
+            TerminalContentSnapshot(
+                inputState: content.inputState,
+                bufferKind: content.bufferKind,
+                dimensions: content.dimensions,
+                capturedRange: content.capturedRange,
+                liveTopRow: content.liveTopRow,
+                rows: content.rows,
+                cursorRow: content.cursorRow,
+                cursorColumn: content.cursorColumn
+            ).ansiRepresentation()
+        }
+
+        private static func cursorPosition(in content: TerminalContentSnapshot) -> String {
+            let row = min(max(content.cursorRow - content.liveTopRow, 0), max(content.dimensions.rows - 1, 0))
+            let column = min(max(content.cursorColumn, 0), max(content.dimensions.cols - 1, 0))
+            return "\u{1b}[\(row + 1);\(column + 1)H"
+        }
     }
 
     /// How many lines are kept above the screen of the session's own
@@ -135,27 +183,6 @@ final class ScreenMirror: TerminalDelegate {
             return max(0, terminal.contentSnapshot(region: .all, buffer: .normal).rows.count - terminal.rows)
         }
         return terminal.getTopVisibleRow()
-    }
-
-    /// The rows of a buffer as terminal output. Without the colors of this
-    /// emulator: a client has its own, and these are nobody's choice.
-    private func written(_ content: TerminalContentSnapshot) -> String {
-        TerminalContentSnapshot(
-            inputState: content.inputState,
-            bufferKind: content.bufferKind,
-            dimensions: content.dimensions,
-            capturedRange: content.capturedRange,
-            liveTopRow: content.liveTopRow,
-            rows: content.rows,
-            cursorRow: content.cursorRow,
-            cursorColumn: content.cursorColumn
-        ).ansiRepresentation()
-    }
-
-    private func cursorPosition(in content: TerminalContentSnapshot) -> String {
-        let row = min(max(content.cursorRow - content.liveTopRow, 0), max(content.dimensions.rows - 1, 0))
-        let column = min(max(content.cursorColumn, 0), max(content.dimensions.cols - 1, 0))
-        return "\u{1b}[\(row + 1);\(column + 1)H"
     }
 
     /// The margins of the screen in front, when the program set any.

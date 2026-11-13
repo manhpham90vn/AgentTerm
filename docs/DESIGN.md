@@ -134,6 +134,17 @@ Keeping the Mac's own, larger grid and letting the narrower output flow into
 it was tried and dropped: it reads well for programs that draw relative to
 the cursor, but the picture on the Mac is then not the picture on the phone.
 
+### Writing a screen out off the sessions' queue
+
+Each session's `ScreenMirror` is used only on a queue of its own
+(`mirrorQueue`): its output is fed there, it is resized there, and a client
+that attaches gets the screen written out there, 82 ms for 10,000 lines,
+while the queue every session's output and every request go through goes
+on (PERF-7). The client is sent `attached` at once; what the session writes
+until the screen is ready is kept for it (`awaitingScreen`) and sent after
+the screen, so it counts on from the end of it. A newer attach of the same
+client drops a screen still on its way.
+
 ### Earlier lines a page at a time
 
 `attach` takes `history`: how many lines above the screen to write out,

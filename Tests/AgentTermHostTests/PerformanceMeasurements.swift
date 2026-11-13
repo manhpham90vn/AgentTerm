@@ -134,6 +134,47 @@ final class PerformanceMeasurements: XCTestCase {
 
     // MARK: Sessions
 
+    /// PERF-7: how long another client waits for an answer while a session
+    /// of 10,000 lines is attached to: the queue every session's output and
+    /// every request go through is not held up by its screen being written.
+    func testTheHostAnswersWhileALongScreenIsWrittenOut() throws {
+        let token = "measure-token-0123456789abcdef0123"
+        let server = HostServer(configuration: .init(port: 0, token: token, listenOnTailscale: false, detectAgents: { [] }))
+        let port = try server.start()
+        defer { server.stop() }
+        var messages: [ServerMessage] = [], output = 0
+        let mac = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "mac")
+        mac.onMessage = { messages.append($0) }
+        mac.onOutput = { _, data in output += data.count }
+        mac.connect()
+        let size = TermSize(cols: 120, rows: 40)
+        mac.send(.create(CreateRequest(command: "seq -f 'line %g of a long session, to be scrolled back through' 1 12000; exec sleep 600", cwd: NSTemporaryDirectory(), title: "long", size: size)))
+        func wait(_ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(30)
+            while !condition() && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.005)) }
+        }
+        wait { output > 600_000 }
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        guard let id = messages.compactMap({ if case .attached(let info) = $0 { return info.id } else { return nil } }).first else { return XCTFail("no session") }
+
+        var asked: [ServerMessage] = []
+        let other = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "other")
+        other.onMessage = { asked.append($0) }
+        other.connect()
+        wait { asked.contains { if case .welcome = $0 { return true } else { return false } } }
+        func answers() -> Int { asked.filter { if case .commitWriter = $0 { return true } else { return false } }.count }
+        let before = answers()
+        let phone = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "phone")
+        phone.connect()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        phone.send(.attach(session: id, size: size))
+        let start = Date()
+        // Answered on the host's queue, as soon as it gets to it.
+        other.send(.setCommitWriter(CommitWriterSettings()))
+        wait { answers() > before }
+        report("another client answered while a session of 10,000 lines is attached to, in", ms(Date().timeIntervalSince(start) * 1000))
+    }
+
     func testALongSession() {
         let mirror = ScreenMirror(size: TermSize(cols: 120, rows: 40), scrollback: 10_000)
         var piece = ""
@@ -146,7 +187,13 @@ final class PerformanceMeasurements: XCTestCase {
             mirror.feed(Data())
             written = mirror.snapshot()
         }
-        report("attaching to a session with 10,000 lines: its screen written out in", "\(ms(writing)), \(written.count / 1024) KB sent, on the queue all the host's work goes through")
+        report("attaching to a session with 10,000 lines: its screen written out in", "\(ms(writing)), \(written.count / 1024) KB sent")
+        // Of which only taking the rows is done on the queue the sessions use.
+        mirror.feed(Data())
+        var capture: ScreenMirror.Capture?
+        let taking = time { capture = mirror.capture() }
+        report("  of which taken on the sessions' queue", ms(taking))
+        report("  and written out on a queue of its own", ms(time { _ = capture?.written() }))
     }
 
     // MARK: History
