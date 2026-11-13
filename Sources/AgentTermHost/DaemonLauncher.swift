@@ -36,9 +36,10 @@ public enum DaemonLauncher {
         kill(pid, SIGTERM)
     }
 
-    /// Spawns the daemon in its own session with output going to the log file.
+    /// Spawns the daemon in its own session with output going to the log
+    /// file. Returns its process, or nil when it could not be run.
     @discardableResult
-    public static func launch(executable: String, arguments: [String] = []) -> Bool {
+    public static func launch(executable: String, arguments: [String] = []) -> pid_t? {
         try? FileManager.default.createDirectory(at: HostEnvironment.supportDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
 
         var actions: posix_spawn_file_actions_t?
@@ -60,7 +61,54 @@ public enum DaemonLauncher {
             envp.forEach { free($0) }
         }
         var pid: pid_t = 0
-        return posix_spawn(&pid, executable, &actions, &attributes, argv, envp) == 0
+        return posix_spawn(&pid, executable, &actions, &attributes, argv, envp) == 0 ? pid : nil
+    }
+
+    /// Waits for a host this app started to end, and hands over how it
+    /// ended (as `waitpid` says it) on the main queue. Waiting also takes
+    /// the ended process off the system's books.
+    public static func watch(_ pid: pid_t, onExit: @escaping @Sendable (Int32) -> Void) {
+        Thread.detachNewThread {
+            var status: Int32 = 0
+            var result: pid_t
+            repeat { result = waitpid(pid, &status, 0) } while result == -1 && errno == EINTR
+            guard result == pid else { return }
+            DispatchQueue.main.async { onExit(status) }
+        }
+    }
+
+    /// How a host ended, in words that finish "The last time, …": from the
+    /// status `waitpid` gave, and for one that exited on its own, what it
+    /// last wrote to its log about why.
+    public static func describe(exitStatus status: Int32, log: URL? = nil) -> String {
+        let signal = status & 0x7f
+        if signal == 0 {
+            let code = (status >> 8) & 0xff
+            let said = lastProblem(in: log ?? logFile)
+            return "it exited with status \(code)" + (said.map { ": \($0)" } ?? "")
+        }
+        let names: [Int32: String] = [
+            SIGKILL: "SIGKILL", SIGSEGV: "SIGSEGV", SIGBUS: "SIGBUS", SIGILL: "SIGILL", SIGABRT: "SIGABRT", SIGTRAP: "SIGTRAP", SIGFPE: "SIGFPE",
+            SIGHUP: "SIGHUP", SIGINT: "SIGINT", SIGTERM: "SIGTERM", SIGQUIT: "SIGQUIT",
+        ]
+        let name = names[signal] ?? "signal \(signal)"
+        switch signal {
+        case SIGKILL: return "it was killed (\(name)), by macOS or by another program"
+        case SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGTRAP, SIGFPE: return "it crashed (\(name))"
+        default: return "it was stopped by \(name)"
+        }
+    }
+
+    /// The last line of a host's log that says what went wrong: the host
+    /// writes "agenttermd: <problem>" before it gives up.
+    static func lastProblem(in log: URL) -> String? {
+        guard let handle = try? FileHandle(forReadingFrom: log) else { return nil }
+        defer { try? handle.close() }
+        let size = (try? handle.seekToEnd()) ?? 0
+        try? handle.seek(toOffset: size > 4096 ? size - 4096 : 0)
+        let text = String(decoding: (try? handle.readToEnd()) ?? Data(), as: UTF8.self)
+        guard let line = text.split(whereSeparator: \.isNewline).last(where: { $0.hasPrefix("agenttermd: ") }) else { return nil }
+        return String(line.dropFirst("agenttermd: ".count))
     }
 }
 #endif

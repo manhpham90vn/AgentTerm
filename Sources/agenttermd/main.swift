@@ -147,6 +147,8 @@ do {
         port: port, token: token, listenOnTailscale: listenOnTailscale, foldersFile: HostEnvironment.foldersFile, devicesFile: HostEnvironment.devicesFile, home: home,
         statusLineTool: Bundle.main.executablePath, usageDirectory: HostEnvironment.usageDirectory, fetchAccountUsage: askServices ? { AccountUsageFetcher.fetch(agent: $0) } : nil)
     configuration.protocolVersion = protocolVersion
+    // Notes that it runs, so the next host knows whether this one died.
+    configuration.stateDirectory = HostEnvironment.supportDirectory
     if let agentsDirectory {
         configuration.detectAgents = { AgentDetector.detect(in: agentsDirectory) }
         configuration.agentsDirectory = agentsDirectory

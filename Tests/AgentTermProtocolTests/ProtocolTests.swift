@@ -52,6 +52,7 @@ final class ProtocolTests: XCTestCase {
             .listDirectory(path: nil),
             .addFolder(path: "/Users/me/dự án"),
             .removeFolder(path: "/Users/me/dự án"),
+            .dismissFailure(id: "f-1"),
         ]
         for message in messages {
             let decoded = MessageCoding.decode(ClientMessage.self, from: MessageCoding.encode(message))
@@ -97,6 +98,15 @@ final class ProtocolTests: XCTestCase {
             .handoffPlan(id: "p-1", prompt: "You are taking over…"),
             .directory(DirectoryListing(path: "/Users/me", parent: "/Users", folders: ["Dev", "Tài liệu"], isHome: true)),
             .devices([DeviceInfo(id: "d-1", name: "iPhone", pairedAt: Date(timeIntervalSince1970: 1_800_000_000), lastSeenAt: nil, isConnected: true)]),
+            .failures([]),
+            .failures([
+                PartFailure(
+                    id: "f-1", part: .host, at: Date(timeIntervalSince1970: 1_800_000_000),
+                    ended: [EndedSession(name: "Sửa lỗi đăng nhập", cwd: "/Users/me/app", agent: "claude"), EndedSession(name: "zsh", cwd: "/Users/me")], restarted: true),
+                PartFailure(
+                    id: "f-2", part: PartFailure.Part(rawValue: "statusLineRelay"), at: Date(timeIntervalSince1970: 1_800_000_060), restarted: false, broken: true,
+                    reason: "It stopped three times in a minute."),
+            ]),
         ]
         for message in messages {
             let decoded = MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))
@@ -147,5 +157,34 @@ final class ProtocolTests: XCTestCase {
     func testSizeIsClamped() {
         XCTAssertEqual(TermSize(cols: 0, rows: -3).clamped, TermSize(cols: 2, rows: 2))
         XCTAssertEqual(TermSize(cols: 5000, rows: 30).clamped, TermSize(cols: 1000, rows: 30))
+    }
+
+    /// A part added to the protocol later still reads, by its name.
+    func testAFailureOfAPartNotKnownYetStillReads() {
+        let json = #"{"failures":{"_0":[{"id":"f","part":"sessionProgram","name":"build","at":1800000000,"ended":[],"restarted":false,"broken":false}]}}"#
+        guard case .failures(let list)? = MessageCoding.decode(ServerMessage.self, from: Data(json.utf8)) else { return XCTFail("did not decode") }
+        XCTAssertEqual(list.first?.part.rawValue, "sessionProgram")
+        XCTAssertEqual(list.first?.name, "build")
+    }
+
+    /// HOST-3, HOST-8: what both apps say of a host that died.
+    func testAFailureInWords() {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        var failure = PartFailure(part: .host, at: at, ended: [EndedSession(name: "build", cwd: "/p"), EndedSession(name: "tests", cwd: "/p")], restarted: true)
+        let headline = failure.headline(on: "First Mac", now: at)
+        XCTAssertTrue(headline.hasPrefix("The host on First Mac stopped unexpectedly at "), headline)
+        XCTAssertTrue(headline.hasSuffix(" and was started again."), headline)
+        XCTAssertTrue(failure.headline(now: at).hasPrefix("The AgentTerm host stopped unexpectedly"))
+        XCTAssertEqual(failure.details, "Its 2 sessions ended: build, tests.")
+        failure.ended = [EndedSession(name: "build", cwd: "/p")]
+        XCTAssertEqual(failure.details, "Its session ended: build.")
+        failure.ended = []
+        failure.reason = "It was killed."
+        XCTAssertEqual(failure.details, "No session was running in it. It was killed.")
+        failure.restarted = false
+        failure.broken = true
+        XCTAssertTrue(failure.headline(now: at).hasSuffix("and keeps stopping, so it is not started again by itself."))
+        // Another day says which.
+        XCTAssertTrue(failure.headline(now: at.addingTimeInterval(3 * 86400)).contains("stopped unexpectedly on "))
     }
 }

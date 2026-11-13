@@ -64,6 +64,42 @@ final class AppModel: ObservableObject {
     /// the old version's.
     @Published private(set) var hostMatch = ProtocolMatch.same
 
+    /// Parts of AgentTerm on the Mac on screen that stopped without being
+    /// asked to, as its host reports them, until they are dismissed.
+    @Published private(set) var failures: [PartFailure] = []
+
+    /// The user has seen it: it goes here and on every other device.
+    func dismiss(_ failure: PartFailure) {
+        failures.removeAll { $0.id == failure.id }
+        connection?.send(.dismissFailure(id: failure.id))
+    }
+
+    /// When this Mac's host died lately, as the app saw it go. A host that
+    /// dies this often within a minute is not started again by itself.
+    private var hostDeaths: [Date] = []
+    static let deathsThatBreak = 3
+    static let deathWindow: TimeInterval = 60
+    /// True when the host died too often to be started again by itself.
+    @Published private(set) var hostBroken = false
+    /// How often it died within the minute, for saying so.
+    @Published private(set) var recentDeaths = 0
+    /// How the last host this app started ended, in words, once it has.
+    @Published private(set) var lastHostExit: String?
+    /// The host this app started last, and whether it ever answered.
+    private var launchedHost: pid_t?
+    private var launchedHostAnswered = false
+    /// Why the host this app started could not be started: it ended
+    /// before it ever answered.
+    private var launchFailure: String?
+
+    /// What the launch screen says when the host keeps dying.
+    var brokenReason: String {
+        var text = "It stopped unexpectedly \(recentDeaths) times within a minute, so it is not started again by itself."
+        if let lastHostExit { text += " The last time, \(lastHostExit)." }
+        text += " Try Again starts it; its log is \((DaemonLauncher.logFile.path as NSString).abbreviatingWithTildeInPath)."
+        return text
+    }
+
     /// Stops the host that is running and starts this app's own in its
     /// place. Its sessions end with it.
     func restartHost() {
@@ -444,8 +480,32 @@ final class AppModel: ObservableObject {
         guard let executable = DaemonLauncher.bundledExecutable else { return }
         let port = port
         DispatchQueue.global(qos: .utility).async {
-            guard DaemonLauncher.listener(onPort: port) == nil else { return }
-            DaemonLauncher.launch(executable: executable, arguments: ["--port", String(port)])
+            guard DaemonLauncher.listener(onPort: port) == nil, let pid = DaemonLauncher.launch(executable: executable, arguments: ["--port", String(port)]) else { return }
+            // Only to take it off the system's books when it ends.
+            DaemonLauncher.watch(pid) { _ in }
+        }
+    }
+
+    /// Starts this Mac's host, and watches it: how it ends is what the app
+    /// says when it cannot be started, or keeps stopping.
+    private func launchHost(_ executable: String) {
+        launchFailure = nil
+        launchedHostAnswered = false
+        guard let pid = DaemonLauncher.launch(executable: executable, arguments: ["--port", String(port)]) else {
+            launchedHost = nil
+            launchFailure = "\(executable) could not be run."
+            return
+        }
+        launchedHost = pid
+        DaemonLauncher.watch(pid) { [weak self] status in
+            MainActor.assumeIsolated {
+                guard let self, self.launchedHost == pid else { return }
+                let how = DaemonLauncher.describe(exitStatus: status)
+                self.lastHostExit = how
+                // One that ended before it ever answered could not be
+                // started: that is said at once, with its reason.
+                if !self.launchedHostAnswered { self.launchFailure = how }
+            }
         }
     }
 
@@ -638,6 +698,7 @@ final class AppModel: ObservableObject {
         writingCommitMessage = []
         syncing = [:]
         hostMatch = .same
+        failures = []
         diffAnswersDue = [:]
         if pendingCommit != nil {
             // Whether git took it went with the connection. The message stays.
@@ -662,9 +723,14 @@ final class AppModel: ObservableObject {
             if !isRemote { checkWhoseHost() }
         case .closed(let reason):
             // The host went away under a working connection, and not because
-            // the user asked for it to be restarted: worth a report. Another
-            // Mac going out of reach is not that.
-            if wasConnected, !stoppingHost, !isRemote { Telemetry.shared.recordProblem(.hostExitedUnexpectedly) }
+            // anyone asked it to stop: a host that stops as asked removes
+            // its marker first, one that was killed or crashed cannot.
+            // Another Mac going out of reach is not that.
+            if wasConnected, !stoppingHost, !isRemote, HostMarker.exists(in: HostEnvironment.supportDirectory, port: port) {
+                Telemetry.shared.recordProblem(.hostExitedUnexpectedly)
+                let now = Date()
+                hostDeaths = hostDeaths.filter { now.timeIntervalSince($0) < Self.deathWindow } + [now]
+            }
             wasConnected = false
             stoppingHost = false
             connection = nil
@@ -693,13 +759,29 @@ final class AppModel: ObservableObject {
             }
             return
         }
+        // Broken means three times in sixty seconds: then it is not started
+        // again by itself, and the user is told why, with Try Again.
+        if hostDeaths.count >= Self.deathsThatBreak {
+            recentDeaths = hostDeaths.count
+            hostBroken = true
+            status = .failed(brokenReason)
+            return
+        }
         if !launchedDaemon, let executable = DaemonLauncher.bundledExecutable {
             launchedDaemon = true
-            DaemonLauncher.launch(executable: executable, arguments: ["--port", String(port)])
+            launchHost(executable)
+        }
+        if let launchFailure {
+            // It ended before it ever answered: waiting longer will not help.
+            status = .failed("The AgentTerm host could not be started: \(launchFailure).")
+            return
         }
         connectAttempts += 1
         guard connectAttempts <= 20 else {
-            status = .failed(reason ?? "The AgentTerm host is not running.")
+            status = .failed(
+                DaemonLauncher.bundledExecutable == nil
+                    ? "This copy of AgentTerm has no host program (agenttermd) next to it to start."
+                    : "The AgentTerm host does not answer on port \(port)\(reason.map { ": \($0)" } ?? ".")")
             return
         }
         status = .connecting
@@ -712,6 +794,10 @@ final class AppModel: ObservableObject {
     func reconnect() {
         connectAttempts = 0
         launchedDaemon = false
+        // The user asked: whatever happened before starts over.
+        hostDeaths = []
+        hostBroken = false
+        launchFailure = nil
         status = .connecting
         connect()
     }
@@ -724,6 +810,12 @@ final class AppModel: ObservableObject {
             hostMatch = ProtocolMatch(host: version)
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             wasConnected = true
+            hostBroken = false
+            // The host the app started is the one that answers.
+            if launchedHost != nil { launchedHostAnswered = true }
+            // A host that is lost later is started again: until 0.6.0 this
+            // stayed set, and only the first host that was lost ever was.
+            launchedDaemon = false
         case .sessions(let list):
             sessionsKnown = true
             sessions = list
@@ -890,6 +982,8 @@ final class AppModel: ObservableObject {
             remoteHandoffPlan = RemoteHandoffPlan(id: id, prompt: prompt)
         case .files, .file, .fileCreated, .fileSaved:
             files.handle(message)
+        case .failures(let list):
+            failures = list
         case .paired, .replaying:
             break
         }

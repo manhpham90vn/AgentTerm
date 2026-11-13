@@ -53,6 +53,11 @@ public final class HostServer {
         /// How often sessions are named and measured, in seconds. Tests
         /// shorten it.
         public var refreshInterval: TimeInterval = 6
+        /// Where the host notes that it is running (`HostMarker`), so the
+        /// host after it can tell that it died, and keeps the reports of
+        /// parts that stopped until someone has seen them (`FailureLog`).
+        /// Nil does neither.
+        public var stateDirectory: URL?
 
         public init(
             port: UInt16 = agenttermDefaultPort,
@@ -166,6 +171,12 @@ public final class HostServer {
     private var boundPort: UInt16 = 0
     private var folders: [String] = []
     private let registry: DeviceRegistry
+    /// Parts that stopped without being asked to, until the user has seen
+    /// them on one of the clients.
+    private var failures: [PartFailure] = []
+    /// What this host notes about itself in the state folder while it runs.
+    private var marker: HostMarker?
+    private var markerFile: URL?
 
     public init(configuration: Configuration) {
         self.configuration = configuration
@@ -296,13 +307,21 @@ public final class HostServer {
     @discardableResult
     public func start() throws -> UInt16 {
         let port = try listen(on: "127.0.0.1", port: configuration.port)
-        queue.sync { boundPort = port }
+        queue.sync {
+            boundPort = port
+            // Only once the port is this host's: a host that cannot listen
+            // there leaves the one that can to find out what happened.
+            noteStart()
+        }
 
         // Names sessions after the conversations their agents are having.
         let summaries = DispatchSource.makeTimerSource(queue: queue)
         summaries.schedule(deadline: .now() + min(3, configuration.refreshInterval), repeating: configuration.refreshInterval)
         summaries.setEventHandler { [weak self] in
             guard let self else { return }
+            // Still alive: what the next host takes for the time this one
+            // died, should it die.
+            if let file = self.markerFile { HostMarker.touch(file) }
             // Power may have been plugged in or pulled since the last look.
             self.updateSleepGuard()
             self.refreshSummaries()
@@ -331,6 +350,12 @@ public final class HostServer {
 
     public func stop() {
         queue.sync {
+            // A stop that was asked for, so it is not a death. Before the
+            // clients are let go: an app that sees its connection close
+            // looks for the marker to know which of the two it was.
+            if let file = markerFile { try? FileManager.default.removeItem(at: file) }
+            markerFile = nil
+            marker = nil
             tailscaleTimer?.cancel()
             tailscaleTimer = nil
             summaryTimer?.cancel()
@@ -350,6 +375,49 @@ public final class HostServer {
     }
 
     public var sessionCount: Int { queue.sync { sessions.count } }
+
+    // MARK: Parts that stopped
+
+    /// Reads what the host before this one left, reports it if it died,
+    /// and notes that this one runs.
+    private func noteStart() {
+        guard let directory = configuration.stateDirectory else { return }
+        failures = FailureLog.read(in: directory)
+        let file = HostMarker.file(in: directory, port: boundPort)
+        if let found = HostMarker.read(file), !found.marker.isRunning {
+            // It left its marker, so it did not stop as asked: it was
+            // killed or it crashed, and its sessions ended with it. Whoever
+            // started this host started it again.
+            failures.append(PartFailure(part: .host, at: found.aliveAt, ended: found.marker.sessions, restarted: true))
+            failures = Array(failures.suffix(FailureLog.limit))
+            FailureLog.write(failures, in: directory)
+        }
+        let marker = HostMarker(sessions: endedSessions())
+        marker.write(to: file)
+        self.marker = marker
+        markerFile = file
+        // A client that came in while the listener was starting.
+        if !failures.isEmpty { broadcastFailures() }
+    }
+
+    /// The sessions as the marker names them: what would end with this host.
+    private func endedSessions() -> [EndedSession] {
+        sessions.values.map(\.info).sorted { $0.id < $1.id }.map(EndedSession.init)
+    }
+
+    /// Writes the marker again when what would end with the host changed.
+    private func updateMarker() {
+        guard let file = markerFile, var marker else { return }
+        let now = endedSessions()
+        guard now != marker.sessions else { return }
+        marker.sessions = now
+        marker.write(to: file)
+        self.marker = marker
+    }
+
+    private func broadcastFailures() {
+        for client in clients.values where client.authenticated { send(.failures(failures), to: client) }
+    }
 
     private static func parameters(host: String, port: UInt16) -> NWParameters {
         let webSocket = NWProtocolWebSocket.Options()
@@ -497,6 +565,7 @@ public final class HostServer {
 
     private func broadcastSessions() {
         updateSleepGuard()
+        updateMarker()
         let list = sessions.values.map(\.info).sorted { $0.id < $1.id }
         for client in clients.values where client.authenticated {
             send(.sessions(list), to: client)
@@ -804,6 +873,12 @@ public final class HostServer {
                     server.send(.error("cannot open that folder"), to: client)
                 }
             }
+        case .dismissFailure(let id):
+            // Seen on one device is seen: it goes from every one.
+            guard let index = failures.firstIndex(where: { $0.id == id }) else { return }
+            failures.remove(at: index)
+            if let directory = configuration.stateDirectory { FailureLog.write(failures, in: directory) }
+            broadcastFailures()
         }
     }
 
@@ -1046,6 +1121,8 @@ public final class HostServer {
         client.identity = identity
         send(.welcome(version: configuration.protocolVersion, host: Host.current().localizedName ?? "Mac"), to: client)
         send(.sessions(sessions.values.map(\.info).sorted { $0.id < $1.id }), to: client)
+        // What stopped before this client came, until someone has seen it.
+        send(.failures(failures), to: client)
         if !accountUsage.isEmpty { send(.accountUsage(accountUsageList()), to: client) }
         send(.folders(folders), to: client)
         send(.tabLayout(tabLayout), to: client)

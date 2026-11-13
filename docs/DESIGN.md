@@ -189,16 +189,19 @@ Client to host:
 | `files(path)` / `readFile(path)` / `writeFile(path, text)` | A folder's files, what a file holds, and saving it. |
 | `createFile(directory, name, isDirectory)` / `renameFile(path, name)` / `trashFile(path)` | Change the files. Answered with the folder's listing. |
 | `listDirectory(path)` | The folders inside a folder, or inside home. |
+| `dismissFailure(id)` | The user has seen the report of a part that stopped: it is dropped for every client. |
 
 Host to client: `welcome`, `sessions`, `agents`, `folders`, `attached`,
 `resized`, `exited`, `error`, `diff`, `diffFile`, `history`, `directory`,
-`commitMessage`, `sshHosts`, and for pairing `paired`, `pairingCode`,
-`devices`. The session list, the folder list and the host's settings
+`commitMessage`, `sshHosts`, `failures`, and for pairing `paired`,
+`pairingCode`, `devices`. The session list, the folder list and the host's settings
 (`tabLayout`, `keepAwake`, `keepAwakeOptions`, `commitWriter`) are pushed to
 every client when they change.
 
-The protocol version is 6 since 0.4.0, which added the messages for push
-and pull, commit messages, keep awake options and SSH hosts.
+The protocol version is 7 since 0.6.0, which added `failures` and
+`dismissFailure` (see "A part that stopped"). It was 6 from 0.4.0, which
+added the messages for push and pull, commit messages, keep awake options
+and SSH hosts.
 
 The folder list is host state, saved in `folders.json`, so the Mac and the
 iPhone show the same projects and the phone can start an agent in any of them.
@@ -660,6 +663,64 @@ the same folder can therefore be mixed up; the History tab is exact.
 - If the app cannot connect, it starts the `agenttermd` that sits next to its
   own executable, in a new session so it outlives the app, and retries.
 
+## A part that stopped
+
+A part of AgentTerm that stops without being asked to is reported to every
+client in a message of its own, `failures([PartFailure])`, rather than left
+for the clients to work out from a list that emptied. Today the part is the
+host; the status line relay, the keep-awake hold and a session's program
+are to use the same message. A `PartFailure` says:
+
+| Field | Means |
+|---|---|
+| `id` | Names the report, for `dismissFailure` |
+| `part` | Which part: `host` today. Text, not a closed list, so a client reads a part added after it was built |
+| `name` | Which one, for a part there are several of (a session); nil for the host |
+| `at` | When it stopped, as near as is known |
+| `ended` | The sessions that ended with it: name, folder, agent |
+| `restarted` | Whether it was started again by itself |
+| `broken` | It stopped too often (three times in sixty seconds) and is not started again by itself |
+| `reason` | Why it stopped, or why starting it again failed, when that is known |
+
+The host sends the list of reports nobody has seen on connecting and
+whenever it changes. A client that dismisses one (`dismissFailure`) drops
+it for all of them. The list is kept in `failures.json` in the state
+folder, at most twenty, so a host that is restarted, or dies itself, still
+has it. Both apps word a report the same way (`PartFailure.headline`,
+`details`).
+
+**How a death is told from a stop.** A running host keeps a marker,
+`host-<port>.json` in its state folder (`HostMarker`): its process, and its
+sessions by name, written again when they change. It touches the file
+every few seconds, so its modification time is when the host was last
+known to be alive. A stop that was asked for (SIGTERM, SIGINT: Restart
+Host, replacing another copy's host, logging out) removes the marker before
+the clients' connections close. A host that is killed or crashes cannot.
+So a host that starts, once its port is its own, and finds a marker whose
+process no longer runs as a host knows the one before it died: it adds a
+report of the host, with that marker's sessions and time, and writes its
+own marker.
+
+**The host watched by the Mac app.** When the app's connection to its own
+host closes, the app looks for the marker: there, the host died; gone, it
+was stopped. A death is counted. The app starts the host again by itself
+(`DaemonLauncher.launch`), and the new host reports what ended. After
+three deaths within sixty seconds the app does not start it again: the
+launch screen says that the host keeps stopping, how often, and how the
+last one ended, with Try Again, which starts over. The app knows how a
+host it started ended because it is that host's parent: it waits for it
+(`DaemonLauncher.watch`), which also keeps ended hosts off the system's
+books, and puts the status in words (`describe(exitStatus:)`: killed,
+crashed, or exited, with the last "agenttermd: …" line of its log). A host
+it started that ends before it ever answered could not be started, and the
+app says so at once with that reason, instead of trying twenty times. A
+host started by someone else, launchd or a test, gives the app no status:
+the report then says only that it stopped.
+
+Until 0.6.0 the app started its host again only the first time it was
+lost: the flag that says it has started one was never reset after a host
+answered.
+
 ## Another Mac
 
 The Mac app can show another Mac instead of the one it runs on
@@ -757,5 +818,6 @@ toolbar, before the agents, switches between this Mac and the paired ones.
 - A terminal wider than the Mac window (a phone in landscape next to a narrow
   window) is clipped rather than scaled.
 - The host does not apply backpressure to a slow client.
-- The daemon is started by the app, not as a login item, so after a reboot
-  nothing runs until the app is opened.
+- The daemon is started by the app, or at login when the user asks for
+  that. With the app closed nothing watches it: a host that dies then is
+  reported only when the next one starts.

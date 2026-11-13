@@ -275,4 +275,24 @@ final class RemoteMacTests: MacUITestCase {
         wait("the other Mac after reopening", timeout: 20) { self.app.first(.id("mac-switcher"))?.value == "Other Mac" }
         wait("this Mac's host to be started", timeout: 15) { self.listens(on: self.port) }
     }
+
+    /// REMOTE-19: the other Mac's host dies and is started again there.
+    /// This Mac says so in words, rather than showing an empty list.
+    func testWhenTheOtherMacsHostDiesThisMacSaysWhatEnded() throws {
+        try startOtherMac()
+        let otherDevice = try device("observer", state: otherState, port: otherPort)
+        otherDevice.send(.create(CreateRequest(command: "sleep 600", cwd: otherProject.path, title: "deploy")))
+        pair()
+        app.wait(for: .containing("deploy"), timeout: 15)
+
+        // Killed there, and started again there, as its own app would.
+        killHost(on: otherPort)
+        try startHost(state: otherState, home: otherHome, port: otherPort)
+        app.wait(for: .containing("The host on Other Mac stopped unexpectedly"), timeout: 30)
+        app.wait(for: .containing("and was started again"))
+        app.wait(for: .containing("Its session ended: deploy"))
+        shot("banner")
+        app.press(.button("Dismiss"))
+        app.waitGone(.containing("host on Other Mac stopped unexpectedly"))
+    }
 }

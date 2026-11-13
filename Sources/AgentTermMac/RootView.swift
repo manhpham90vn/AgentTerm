@@ -47,6 +47,10 @@ struct RootView: View {
                 } else if model.hostMatch != .same {
                     HostVersionBanner(match: model.hostMatch)
                 }
+                // What stopped without being asked to, until it is dismissed.
+                ForEach(model.failures) { failure in
+                    FailureBanner(failure: failure)
+                }
                 CenterView()
             }
             .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
@@ -330,6 +334,34 @@ private struct HostVersionBanner: View {
     }
 }
 
+/// A part of AgentTerm that stopped without being asked to: which part,
+/// what ended with it, and whether it was started again.
+private struct FailureBanner: View {
+    @EnvironmentObject private var model: AppModel
+    let failure: PartFailure
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(failure.headline(on: model.remote?.name))
+                    .font(.system(size: 12, weight: .medium))
+                Text(failure.details)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            Button("Dismiss") { model.dismiss(failure) }
+                .controlSize(.small)
+                .help("Seen: no longer shown here or on the other devices")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.orange.opacity(0.12))
+    }
+}
+
 private struct OtherHostBanner: View {
     @EnvironmentObject private var model: AppModel
     let path: String
@@ -383,8 +415,12 @@ struct CenterView: View {
             case .failed(let reason):
                 VStack(spacing: 12) {
                     Image(systemName: "bolt.horizontal.circle").font(.system(size: 34)).foregroundStyle(.secondary)
-                    Text(model.remote.map { "Can't reach \($0.name)" } ?? "Can't reach the AgentTerm host").font(.headline)
-                    Text(reason).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Text(model.remote.map { "Can't reach \($0.name)" } ?? (model.hostBroken ? "The AgentTerm host keeps stopping" : "Can't reach the AgentTerm host"))
+                        .font(.headline)
+                    // How the last one ended may be known only after it was said that it keeps stopping.
+                    Text(model.hostBroken && !model.isRemote ? model.brokenReason : reason)
+                        .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                        .frame(maxWidth: 520)
                     Button("Try Again") { model.reconnect() }
                     if model.isRemote { Button("Use This Mac") { model.switchTo(nil) } }
                 }

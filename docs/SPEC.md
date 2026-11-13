@@ -351,6 +351,28 @@ ships with, a banner says so, with the other host's path, and offers **Use
 This App's Host…**: the other host is stopped, after asking since its
 sessions end with it, and the app's own is started.
 
+### A host that stopped
+
+A host that stops without being asked to (killed, by macOS or by another
+program, or crashed) takes its sessions with it. When the next host
+starts, every app is told so, also one that connects later, until the user
+has dismissed it on one device:
+
+- The Mac app starts its host again by itself, and a banner says that the
+  host stopped unexpectedly, when, which sessions ended with it, and that
+  it was started again.
+- On the iPhone, and on a Mac showing another Mac, the same in words: "The
+  host on <Mac> stopped unexpectedly … and was started again", with the
+  sessions that ended, rather than a list that emptied.
+- A host that dies three times within sixty seconds is not started again
+  by itself: the Mac app says that it keeps stopping, how the last one
+  ended when it knows, and offers Try Again.
+- A host the app starts that cannot start (its port is taken, for one)
+  is said so at once, with the host's own words why, and Try Again.
+
+A stop that was asked for (Restart Host, replacing another copy's host,
+logging out) is not reported.
+
 ### What the two apps share
 
 The Mac and the iPhone offer the same things wherever the device allows:

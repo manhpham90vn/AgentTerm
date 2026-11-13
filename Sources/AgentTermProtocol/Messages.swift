@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 6
+public let agenttermProtocolVersion = 7
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -249,6 +249,9 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case handoff(agent: String, sessionID: String, cwd: String, target: String, plan: String?, prompt: String?, note: String, size: TermSize, folder: String?)
     /// Asks which folders are inside a folder, or inside home when `path` is nil.
     case listDirectory(path: String?)
+    /// The user has seen the report of a part that stopped: it is no longer
+    /// sent, to this client or any other. Answered with `failures` to all.
+    case dismissFailure(id: String)
 }
 
 /// JSON text frames sent by the host.
@@ -324,6 +327,10 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case file(path: String, content: FileContent, data: Data?)
     case fileSaved(path: String)
     case fileCreated(path: String, isDirectory: Bool)
+    /// The parts of AgentTerm that stopped without being asked to and that
+    /// the user has not seen yet, oldest first. Sent on connecting and
+    /// whenever the list changes.
+    case failures([PartFailure])
 }
 
 public enum MessageCoding {

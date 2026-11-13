@@ -98,6 +98,19 @@ final class FlowTests: XCTestCase {
         // Connected: the Mac's folders and launch buttons show up.
         let start = app.buttons[launchButton].firstMatch
         XCTAssertTrue(start.waitForExistence(timeout: 15), "not connected to the host")
+        // HOST-8: the host on the Mac died before this one, and the phone
+        // is told so in words rather than shown an empty list.
+        if environment["AGENTTERM_EXPECT_HOST_DIED"] != nil {
+            let card = app.descendants(matching: .any)["failure-card"].firstMatch
+            XCTAssertTrue(card.waitForExistence(timeout: 10), "the phone did not say that the Mac's host had stopped")
+            XCTAssertTrue(card.label.contains("The host on First Mac stopped unexpectedly"), card.label)
+            XCTAssertTrue(card.label.contains("was started again"), card.label)
+            XCTAssertTrue(card.label.contains("Its 2 sessions ended: build, tests"), card.label)
+            capture("2a-host-died")
+            // Seen once, it goes.
+            app.buttons["failure-dismiss"].firstMatch.tap()
+            XCTAssertTrue(card.waitForNonExistence(timeout: 10), "the report stayed after it was dismissed")
+        }
         capture("2-sessions")
         // The Mac's figures arrive a moment after the list and push it
         // down: a tap aimed at where the button was would land beside it.

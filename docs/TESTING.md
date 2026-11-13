@@ -117,6 +117,7 @@ taken on the iPhone Air, whose screen is the size the App Store asks for.
 | What the host answers, what a client is sent | `Tests/AgentTermHostTests/EndToEndTests.swift` | a test there that connects a client |
 | What a client is sent on attach | `Tests/AgentTermHostTests/ScreenMirrorTests.swift` | `session(_:)` and `attach(to:)`, which give the session's own terminal and a client's to compare |
 | The connection itself | `Tests/AgentTermHostTests/SlowLinkTests.swift` | a host on a port of its own and a real `AgentTermConnection` |
+| What one host leaves for the next: a host that died | `Tests/AgentTermHostTests/HostDeathTests.swift` | `startHost()`, which runs the real `agenttermd` on the test's own state folder and port, and `kill` |
 | The Mac app | a class under `Tests/AgentTermMacUITests` | `MacUITestCase`: `app.press`, `app.write`, `app.menu`, `app.wait(for:)`, and `device()` for a second device |
 | The Mac app on another Mac | `RemoteMacTests` | `startOtherMac()` and `pair()` |
 | The iPhone app | `iOS/AgentTermUITests` | the test `scripts/test-ios.sh` runs |
@@ -138,7 +139,8 @@ stays. What makes each kind of bug show:
   SES-9), output cut where the bug needs it cut (SES-16, SES-19).
 - Something that fails on the other side: make it fail there. A folder
   nothing can be written in (REMOTE-15), a host that is stopped
-  (REMOTE-18), a device that is removed (REMOTE-8).
+  (REMOTE-18) or killed (`killHost(on:)`, HOST-5, REMOTE-19), a port held
+  by something else (HOST-7), a device that is removed (REMOTE-8).
 - Something one device does to another: a second client on the same host
   (`device()`), which also remembers everything the host told it
   (REMOTE-16).
@@ -290,7 +292,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | LOGIN-4 | Start at Login on, and the app moved since: the launch agent names its host where it was | The app's host starts from where the app is now | The launch agent names this host's program | H |
 | LOGIN-5 | Start at Login on for the installed app | A build that is not part of an app starts its host, or the installed host is started by hand with other arguments | The launch agent is left as it was | H |
 
-### Menu bar, permissions, another copy's host
+### Menu bar, permissions, the host
 
 | ID | Input | Action or event | Expected response | Checked by |
 |---|---|---|---|---|
@@ -299,6 +301,12 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | PERM-1 | The app running | Open Settings > Permissions | Each permission is listed with whether it is allowed | M |
 | HOST-1 | A host from another copy of the app on the app's port | Open the app | A banner names the other host's path and offers this app's own | M |
 | HOST-2 | A host of another protocol version | Connect | Both apps say the versions differ | H, P |
+| HOST-3 | A host with two sessions, `build` and `tests` | The host is killed (SIGKILL), and another is started on its state folder and port | Every client is told that the host stopped, about when, that `build` and `tests` ended with it, and that it was started again; so is a client that connects later, also after the host is restarted on purpose. Dismissed on one client, it is gone from all and not sent again | H |
+| HOST-4 | A host with two sessions | It is stopped as asked for (SIGTERM: Restart Host, replacing another copy's host, logging out), and started again | Nothing is reported | H |
+| HOST-5 | The Mac app on its host, a session `build` running | The host is killed | The app starts its host again by itself and shows a banner: the host stopped unexpectedly, was started again, and `build` ended with it. Dismiss takes it away here and on the host | M |
+| HOST-6 | The Mac app on its host | The host is killed three times within sixty seconds | After the third the app does not start it again: it says the host keeps stopping, how often, why the last one stopped (it was killed), and offers Try Again, which starts it; the new host then reports the three | M |
+| HOST-7 | The app's port held by something that is not a host | Open the app | The host it starts cannot listen there; the app says it could not be started, with the host's own words why, and offers Try Again | M |
+| HOST-8 | The host on the Mac died with two sessions before this one started | The iPhone connects | A card says "The host on <Mac> stopped unexpectedly … and was started again", names the two sessions that ended, and goes once dismissed | P |
 
 ### Files
 
@@ -348,6 +356,7 @@ A second host stands in for the other Mac, with a project of its own.
 | REMOTE-16 | A session on this Mac, so its host has a tab to arrange | Pair with the other Mac, start a session there, come back | The other Mac's host was never told of this Mac's tab, and this Mac's arrangement is as it was | M |
 | REMOTE-17 | A file of the other Mac open with unsaved changes | Choose Forget for the Mac on screen, confirm | Refused, with a message to save or discard first; the other Mac stays on screen and in the menu | M |
 | REMOTE-18 | The app last on the other Mac, and this Mac's host not running, as after a restart | Open the app | It comes back to the other Mac, and this Mac's host is started all the same | M |
+| REMOTE-19 | The other Mac on screen, a session `deploy` running there | The other Mac's host is killed and started again there | A banner says that the host on the other Mac stopped unexpectedly and was started again, and that `deploy` ended with it, rather than an empty list | M |
 
 ### iPhone only
 
@@ -417,6 +426,16 @@ a test that failed, and fixed:
   the host closed the connection (SES-22).
 - Each attach wrote out the whole screen again, most of a second for a
   long session, on the queue all of the host's work goes through (SES-21).
+
+Found while #20 was built (0.6.0), each shown by a test that failed first:
+
+- A host that was killed left the Mac app saying nothing: its sessions
+  were gone and the window showed none (HOST-5). A Mac showing another Mac,
+  and the iPhone, showed a list that had emptied (REMOTE-19, HOST-8).
+- The app started its host again only the first time it was lost: after
+  the second, it waited, then said the host did not answer (HOST-6).
+- A host that could not start was tried twenty times and then reported
+  with the connection's error, not the host's own reason (HOST-7).
 
 ## What stays by hand
 

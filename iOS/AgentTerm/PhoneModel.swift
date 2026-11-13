@@ -184,6 +184,16 @@ final class PhoneModel: ObservableObject {
 
     /// How the version of AgentTerm on the Mac compares with this app's.
     @Published private(set) var hostMatch = ProtocolMatch.same
+    /// Parts of AgentTerm on the Mac that stopped without being asked to:
+    /// the host above all, whose sessions ended with it. Kept by the Mac
+    /// until the user has seen them here or on another device.
+    @Published private(set) var failures: [PartFailure] = []
+
+    /// The user has seen it: it goes here and on every other device.
+    func dismiss(_ failure: PartFailure) {
+        failures.removeAll { $0.id == failure.id }
+        connection?.send(.dismissFailure(id: failure.id))
+    }
     /// The session being dragged in the list, from when it is picked up.
     var draggedSession: String?
     /// The folder being dragged in the list.
@@ -524,6 +534,7 @@ final class PhoneModel: ObservableObject {
         system.stats = nil
         hostVersion = 0
         hostMatch = .same
+        failures = []
         sessions = []
         folders = []
         agents = []
@@ -846,6 +857,8 @@ final class PhoneModel: ObservableObject {
             savingText = nil
         case .fileCreated(let path, let isDirectory):
             if !isDirectory { createdFile = path }
+        case .failures(let list):
+            failures = list
         case .pairingCode, .devices:
             break
         }

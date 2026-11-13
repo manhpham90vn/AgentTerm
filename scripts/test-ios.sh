@@ -73,6 +73,16 @@ git init -q -b main "$PROJECT/web"
 printf 'web\n' >> "$PROJECT/.git/info/exclude"
 printf '["%s"]' "$PROJECT" > "$STATE/folders.json"
 
+# A host that died on the first Mac before the one started here, with two
+# sessions: the first host has to tell the phone (HOST-8). What a host
+# leaves behind while it runs is a marker that names its process and its
+# sessions; a process that is gone stands for the one that died.
+sh -c 'exit 0' &
+DEAD=$!
+wait "$DEAD" || true
+printf '{"pid":%s,"startedAt":%s,"sessions":[{"name":"build","cwd":"%s"},{"name":"tests","cwd":"%s"}]}' \
+    "$DEAD" "$(date +%s)" "$PROJECT" "$PROJECT" > "$STATE/host-$PORT.json"
+
 # Two hosts with their own state, standing in for two Macs.
 AGENTTERM_STATE_DIR="$STATE" "$AGENTTERMD" --port "$PORT" --local-only --home "$FAKE_HOME" > "$STATE/daemon.log" 2>&1 &
 DAEMON=$!
@@ -104,6 +114,7 @@ export TEST_RUNNER_AGENTTERM_PAIR_URL="$(AGENTTERM_STATE_DIR="$STATE" "$AGENTTER
 export TEST_RUNNER_AGENTTERM_SECOND_PAIR_URL="$(AGENTTERM_STATE_DIR="$SECOND_STATE" "$AGENTTERMD" pairing-link --port "$SECOND_PORT" --host 127.0.0.1 --name "Second Mac")"
 export TEST_RUNNER_AGENTTERM_LAUNCH="${AGENTTERM_LAUNCH:-Start Shell}"
 export TEST_RUNNER_AGENTTERM_TEST_PROJECT=1
+export TEST_RUNNER_AGENTTERM_EXPECT_HOST_DIED=1
 if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export TEST_RUNNER_AGENTTERM_SHOT_DIR="$SHOTS"; fi
 # LANDSCAPE=only looks at the app with the phone on its side and nothing else.
 if [ "${LANDSCAPE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_LANDSCAPE=1; fi

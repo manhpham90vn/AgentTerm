@@ -18,6 +18,14 @@ struct SessionsView: View {
                         VersionCard(match: model.hostMatch)
                     }
                     if model.status == .connected {
+                        // Said in words, rather than shown as a list that
+                        // emptied: the host on the Mac stopped, and its
+                        // sessions ended with it.
+                        ForEach(model.failures) { failure in
+                            FailureCard(failure: failure)
+                        }
+                    }
+                    if model.status == .connected {
                         // How the Mac is doing: the Mac this phone is
                         // connected to, not the phone itself.
                         SystemStatsPanel(store: model.system, large: true) { figures in
@@ -131,6 +139,35 @@ private struct VersionCard: View {
         .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.yellow.opacity(0.12)))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("version-card")
+    }
+}
+
+/// A part of AgentTerm on the Mac that stopped without being asked to.
+private struct FailureCard: View {
+    @EnvironmentObject private var model: PhoneModel
+    let failure: PartFailure
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "exclamationmark.octagon.fill").foregroundStyle(.orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(failure.headline(on: model.pairing?.name ?? "the Mac"))
+                    .font(.subheadline.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(failure.details)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("failure-card")
+            Spacer(minLength: 0)
+            Button("Dismiss") { model.dismiss(failure) }
+                .font(.footnote.weight(.semibold))
+                .accessibilityIdentifier("failure-dismiss")
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color.orange.opacity(0.12)))
     }
 }
 
