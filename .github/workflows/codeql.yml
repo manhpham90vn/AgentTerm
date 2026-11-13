@@ -1,0 +1,70 @@
+name: CodeQL
+
+# Static analysis of this repository's code, in place of GitHub's "default
+# setup". That one builds everything while it watches the compiler, the
+# dependencies too, which takes a quarter of an hour or more for every push.
+# Here the dependencies are built first, unwatched and from a cache, and
+# only this repository's own code is compiled again under CodeQL.
+#
+# A trial: it runs for pushes to this branch only and uploads nothing, so
+# it can run next to the default setup until it is known to work.
+
+on:
+  push:
+    branches: [ci/codeql-trial]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  swift:
+    name: swift
+    # The runner the default setup analyzes Swift on. On xcode-27, with
+    # Xcode 27, SwiftPM could not start the package manifest under CodeQL's
+    # tracer ("Bad CPU type in executable").
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Say which tools these are
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+          uname -m
+
+      - name: Restore what was built of the dependencies
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: codeql-spm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Package.resolved') }}
+
+      # Unwatched: the dependencies are other projects' code, and compiling
+      # them under the tracer is what takes the time.
+      - name: Build everything once, unwatched
+        run: swift build
+
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: swift
+          build-mode: manual
+          config-file: .github/codeql/codeql-config.yml
+
+      # Only this repository's sources are newer than what was built, so
+      # only they are compiled again, this time with CodeQL watching.
+      - name: Build this repository's code again, watched
+        run: |
+          find Sources -type f \( -name '*.swift' -o -name '*.c' -o -name '*.h' \) -exec touch {} +
+          swift build
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:swift
+          upload: never

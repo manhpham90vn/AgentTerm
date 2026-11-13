@@ -1,0 +1,9 @@
+name: AgentTerm
+
+# Only this repository's own code is reported on. The dependencies SwiftPM
+# checks out are other projects' code, some of it build tooling that never
+# ships in the app; findings there are theirs to act on.
+paths-ignore:
+  - .build
+  - iOS/build
+  - "**/Resources/mermaid.min.js"
