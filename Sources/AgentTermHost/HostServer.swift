@@ -179,6 +179,10 @@ public final class HostServer {
         /// What its agent's MCP server names it by, to open and reach the
         /// shells it opens (#10). Agents' sessions only.
         var agentKey: String?
+        /// When a schedule's run last wrote anything, by the host's clock:
+        /// one whose agent's state is not known is taken to be done once it
+        /// has been quiet for a while.
+        var lastOutputAt = Date.distantPast
 
         init(info: SessionInfo, process: PTYProcess, screenLines: Int) {
             self.info = info
@@ -611,6 +615,9 @@ public final class HostServer {
     private var scheduleTimer: DispatchSourceTimer?
 
     static let maxRunsAtOnce = 2
+    /// How long a run whose agent's state is not known may write nothing
+    /// before it is taken to be done.
+    static let quietRunIsDone: TimeInterval = 3600
     static let afterLimitReset: TimeInterval = 120
     static let keepRunFor: TimeInterval = 24 * 3600
     static let awakeBeforeRun: TimeInterval = 10 * 60
@@ -737,30 +744,34 @@ public final class HostServer {
         updateSleepGuard()
     }
 
-    /// The runs of a schedule that are still going: their session runs,
-    /// and their agent is not done.
-    private func going(_ scheduleName: String) -> [Session] {
-        sessions.values.filter { session in
-            guard session.info.schedule == scheduleName else { return false }
-            if case .done? = session.info.state { return false }
-            return true
+    /// Whether a run's agent is still at it: working, or waiting for the
+    /// user. One whose state is not known (its hooks never ran, or it was
+    /// interrupted) is taken to be done once it has been quiet for an hour.
+    private func isGoing(_ session: Session, now: Date) -> Bool {
+        switch session.info.state {
+        case .done?: return false
+        case nil: return now.timeIntervalSince(session.lastOutputAt) < Self.quietRunIsDone
+        default: return true
         }
     }
 
+    /// The runs of a schedule that are still going: their session runs,
+    /// and their agent is not done.
+    private func going(_ scheduleName: String, now: Date) -> [Session] {
+        sessions.values.filter { $0.info.schedule == scheduleName && isGoing($0, now: now) }
+    }
+
     private func startWaitingRuns() {
+        let now = configuration.now()
         var still: [(schedule: String, at: Date, note: String)] = []
         for run in waitingRuns {
             guard let index = schedules.firstIndex(where: { $0.id == run.schedule }) else { continue }
             let schedule = schedules[index]
-            if !going(schedule.name).isEmpty {
+            if !going(schedule.name, now: now).isEmpty {
                 record(ScheduleRun(at: run.at, started: false, note: "Skipped: the run before it is still going"), in: index)
                 continue
             }
-            let running = sessions.values.filter { session in
-                guard session.info.schedule != nil else { return false }
-                if case .done? = session.info.state { return false }
-                return true
-            }.count
+            let running = sessions.values.filter { $0.info.schedule != nil && isGoing($0, now: now) }.count
             guard running < Self.maxRunsAtOnce else {
                 still.append(run)
                 continue
@@ -786,7 +797,7 @@ public final class HostServer {
     /// A run's session whose agent has been done for a day is closed.
     private func closeFinishedRuns(now: Date) {
         for session in sessions.values where session.info.schedule != nil {
-            guard case .done? = session.info.state else {
+            guard !isGoing(session, now: now) else {
                 runDoneAt[session.info.id] = nil
                 continue
             }
@@ -1968,6 +1979,7 @@ public final class HostServer {
         session.info.openedBy = openedBy
         session.info.schedule = run?.name
         session.info.schedulePermissions = run?.permissions
+        if run != nil { session.lastOutputAt = configuration.now() }
         sessions[id] = session
 
         process.onOutput = { [weak self, weak session] data in
@@ -2152,6 +2164,7 @@ public final class HostServer {
         session.mirrorQueue.async { mirror.feed(data) }
         session.scrollback.append(data)
         session.written += data.count
+        if session.info.schedule != nil { session.lastOutputAt = configuration.now() }
         // Cut back to the limit only once it is well past it: cutting
         // copies what is kept, and doing that for every piece of output of
         // a busy program would copy megabytes many times a second.

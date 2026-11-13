@@ -445,7 +445,7 @@ A second host stands in for the other Mac, with a project of its own.
 | SCHED-3 | Claude Code's and Copilot CLI's settings with other things in them | A schedule is saved | Its folder is trusted in them; the rest is as it was | H |
 | SCHED-4 | A schedule that skips permissions | Saved without its warning accepted; with it; Codex with "accept edits" | Refused; saved, every client told with when it runs next; refused | H |
 | SCHED-5 | Every day at nine, the clock at 8:59 | Nine comes | One session of its agent in its folder, named after it, marked as its run, started with the mode's switch and the prompt; recorded as started; once | H |
-| SCHED-6 | The first run still going | The next day's time comes | Skipped, and said to be | H |
+| SCHED-6 | The first run's agent at work | The next day's time comes | Skipped, and said to be | H |
 | SCHED-7 | Three schedules: one that catches up, one that does not, one off | Three days pass at once | The first runs once, said to be missed; the second is recorded as missed; the third does not run | H |
 | SCHED-8 | A schedule a minute away; then hours away | It is saved | The Mac is held awake; then let go | H |
 | SCHED-9 | Copilot CLI skipping all | It runs | Started with `COPILOT_ALLOW_ALL=true` | H |
@@ -455,6 +455,8 @@ A second host stands in for the other Mac, with a project of its own.
 | SCHED-13 | The Mac's Schedules with a schedule half made | Sessions is picked, then Schedules again | The schedule is dropped; the middle asks for one | M |
 | SCHED-14 | A daily schedule and a schedule a moment away | Its time comes; its run is picked; the run's session ends; the daily one is picked | Both under Scheduled, none running; then the run under Running, opening its session; then under Past Runs as started; the daily one in the middle to change, with no runs. The iPhone shows the same three groups | H, M, P |
 | SCHED-15 | Two schedules of Claude Code for when its limit starts over | The limit starts over | Both run two minutes later, once each | H |
+| SCHED-16 | A run of Codex, whose hooks are not trusted, that has written nothing since it started | The next day's time comes; a day later | The next run starts, not skipped; the first is closed, the second kept | H |
+| SCHED-17 | Two such runs, and a third schedule due half an hour after them | Its time comes; an hour after they started | It waits; then it runs | H |
 
 ### When an agent is done or needs you
 

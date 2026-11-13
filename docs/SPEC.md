@@ -143,7 +143,8 @@ itself.
   the schedule and marked as its run, and stays open when the agent is done,
   for a day, so what it did can be read. A run whose turn before it is
   still going is skipped and said to be. At most two run at the same
-  moment; a third waits for its turn. A run missed while the Mac slept or
+  moment; a third waits for its turn. A run whose agent never says what it
+  is doing counts as done once it has shown nothing new for an hour. A run missed while the Mac slept or
   was off runs once when it is next awake, or is skipped, as the schedule
   says; never more than once for all the times missed. A schedule made
   after its time today first runs at its next time.

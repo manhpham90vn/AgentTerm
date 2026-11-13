@@ -709,6 +709,9 @@ as missed as the schedule says. `limitReset` is due two minutes after the
 latest `resetsAt` of the agent's account limits that it has not run for.
 A due run of a schedule whose last run is still going (its session runs
 and its agent is not done) is skipped; with two runs going, it waits. A
+run whose agent's state is not known (its hooks never ran, as Codex's
+before they are trusted, or it was interrupted) is going until it has
+written nothing for an hour (`quietRunIsDone`), then counts as done. A
 run is `ScheduleRunner.launch`: the agent's command with its switch
 (`claude --permission-mode bypassPermissions|acceptEdits`, `codex
 --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust`,
@@ -716,7 +719,7 @@ run is `ScheduleRunner.launch`: the agent's command with its switch
 --dangerously-skip-permissions` or `--mode accept-edits`) and the prompt,
 started as a session with no client attached, `SessionInfo.schedule` and
 `schedulePermissions` set; Antigravity gets the folder among those it
-trusts for the session. A run's session done for 24 hours is closed. The
+trusts for the session. A run's session that has counted as done for 24 hours is closed. The
 hold on sleep is also taken while a schedule's next run is ten minutes or
 less away.
 

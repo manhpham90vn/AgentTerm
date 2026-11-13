@@ -116,17 +116,33 @@ final class SchedulerHostTests: XCTestCase {
         let agents = root.appendingPathComponent("agents")
         try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
-        // Writes down its arguments, its folder and its permission variable, then waits.
+        // Writes down its arguments, its folder and its permission variable,
+        // says it is at work on its prompt as its hooks would save it, then
+        // waits. Codex says nothing, as it does while its hooks are not
+        // trusted.
         try """
         #!/bin/sh
         printf '%s|%s|%s\\n' "$*" "$PWD" "$COPILOT_ALLOW_ALL" >> '\(started.path)'
+        agent=$(basename "$0")
+        case "$agent" in
+        claude) event=UserPromptSubmit ;;
+        copilot) event=userPromptSubmitted ;;
+        *) event= ;;
+        esac
+        if [ -n "$event" ] && [ -n "$AGENTTERM_EVENTS" ]; then
+            printf '{"agent":"%s","event":"%s","at":%s,"input":{}}' "$agent" "$event" "$(date +%s)" > "$AGENTTERM_EVENTS"
+        fi
         exec sleep 600
         """.write(to: agents.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agents.appendingPathComponent("claude").path)
         try FileManager.default.copyItem(at: agents.appendingPathComponent("claude"), to: agents.appendingPathComponent("copilot"))
+        try FileManager.default.copyItem(at: agents.appendingPathComponent("claude"), to: agents.appendingPathComponent("codex"))
 
         var configuration = HostServer.Configuration(
-            port: 0, token: token, listenOnTailscale: false, detectAgents: { AgentDetector.detect(in: agents.path) })
+            port: 0, token: token, listenOnTailscale: false, detectAgents: { AgentDetector.detect(in: agents.path) },
+            // The agents are given hooks; the stand-ins run none of them.
+            statusLineTool: "/usr/bin/true", usageDirectory: root.appendingPathComponent("state/usage"))
+        configuration.hooksDirectory = root.appendingPathComponent("state/hooks")
         configuration.foldersFile = root.appendingPathComponent("state/folders.json")
         configuration.agentsDirectory = agents.path
         configuration.home = root.path
@@ -238,6 +254,7 @@ final class SchedulerHostTests: XCTestCase {
         waitUntil("saved") { self.client.schedules.count == 1 }
         set(nine.addingTimeInterval(5))
         waitUntil("the first run") { self.client.sessions.count == 1 }
+        waitUntil("its agent at work") { self.client.sessions.first?.state?.isWorking == true }
         // The next day, the stand-in still working on the first.
         set(nine.addingTimeInterval(24 * 3600 + 5))
         waitUntil("the second to be skipped") { self.client.schedules.first?.runs.last?.note == "Skipped: the run before it is still going" }
@@ -320,6 +337,69 @@ final class SchedulerHostTests: XCTestCase {
         pause()
         XCTAssertEqual(client.schedules.map { $0.runs.map(\.note) }, [["Started"], ["Started"]], "once each")
         XCTAssertEqual(client.schedules.map(\.nextRun), [nil, nil], "nothing more until the service names another reset")
+    }
+
+    /// A schedule of Codex, which asks for permission: its stand-in never
+    /// says what it is doing.
+    private func codex(_ name: String, hour: Int = 9, minute: Int = 0) -> Schedule {
+        Schedule(
+            id: name, name: name, agent: "codex", folder: project.path, prompt: "Look at the logs", when: .daily(hour: hour, minute: minute),
+            permissions: .ask)
+    }
+
+    private func runs(of name: String) -> [SessionInfo] { client.sessions.filter { $0.schedule == name } }
+
+    /// SCHED-16: a run whose agent never says what it is doing, and that
+    /// has written nothing for an hour, is taken to be done: the next day's
+    /// run starts, and it is closed a day after.
+    func testARunNotKnownToBeGoingIsTakenForDoneOnceQuietForAnHour() throws {
+        let nine = ScheduleTime.daily(hour: 9, minute: 0).next(after: clock)!
+        client.connection.send(.saveSchedule(codex("Logs")))
+        waitUntil("saved") { self.client.schedules.count == 1 }
+        set(nine.addingTimeInterval(5))
+        waitUntil("the first run") { self.runs(of: "Logs").count == 1 }
+        let first = try XCTUnwrap(runs(of: "Logs").first)
+        pause()
+        XCTAssertNil(runs(of: "Logs").first?.state, "its agent says nothing")
+
+        // The next day, a minute at a time around nine, so that the Mac is
+        // not taken to have slept through it.
+        set(nine.addingTimeInterval(24 * 3600 - 30))
+        pause(0.3)
+        set(nine.addingTimeInterval(24 * 3600 + 5))
+        waitUntil("the second run") { self.runs(of: "Logs").count == 2 && self.client.schedules.first?.runs.count == 2 }
+        XCTAssertEqual(client.schedules.first?.runs.map(\.note), ["Started", "Started"])
+
+        // A day after it was first seen quiet for an hour, the first is closed.
+        set(nine.addingTimeInterval(2 * 24 * 3600 - 29))
+        waitUntil("the first run closed") { !self.client.sessions.contains { $0.id == first.id } }
+        XCTAssertEqual(runs(of: "Logs").count, 1, "the second is still there")
+    }
+
+    /// SCHED-17: two runs whose agents never say what they are doing hold
+    /// a third schedule back only until they have written nothing for an hour.
+    func testRunsNotKnownToBeGoingHoldOthersBackOnlyForAnHour() throws {
+        let nine = ScheduleTime.daily(hour: 9, minute: 0).next(after: clock)!
+        client.connection.send(.saveSchedule(codex("A")))
+        client.connection.send(.saveSchedule(codex("B")))
+        var third = morning()
+        third.when = .daily(hour: 9, minute: 30)
+        client.connection.send(.saveSchedule(third))
+        waitUntil("saved") { self.client.schedules.count == 3 }
+        set(nine.addingTimeInterval(5))
+        waitUntil("the two runs") { self.runs(of: "A").count == 1 && self.runs(of: "B").count == 1 }
+
+        // Half an hour later: two runs at once already, the third waits.
+        set(nine.addingTimeInterval(29 * 60 + 30))
+        pause(0.3)
+        set(nine.addingTimeInterval(30 * 60 + 5))
+        pause()
+        XCTAssertEqual(runs(of: third.name), [], "waits while the two may still be going")
+
+        // An hour after they last wrote anything, it runs.
+        set(nine.addingTimeInterval(60 * 60 + 10))
+        waitUntil("the third run") { self.runs(of: third.name).count == 1 && self.client.schedules.first { $0.name == third.name }?.runs.count == 1 }
+        XCTAssertEqual(client.schedules.first { $0.name == third.name }?.runs.map(\.note), ["Started"])
     }
 
     /// SCHED-9: Copilot CLI asked to skip all is told so through its variable.
