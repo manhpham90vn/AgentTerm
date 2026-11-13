@@ -294,6 +294,8 @@ private struct FolderSection: View {
     @State private var dropTarget: String?
     @State private var renaming: TabGroup?
     @State private var newName = ""
+    /// Ending a session asks first, as everywhere else.
+    @State private var ending: SessionInfo?
 
     @ViewBuilder
     private func arrangeMenu(_ session: SessionInfo) -> some View {
@@ -479,9 +481,9 @@ private struct FolderSection: View {
                                 }
                             }
                             Button(role: .destructive) {
-                                model.end(session.id)
+                                ending = session
                             } label: {
-                                Label("End Session", systemImage: "xmark.circle")
+                                Label("End Session…", systemImage: "xmark.circle")
                             }
                         }
                         Palette.hairline.frame(height: 1).padding(.leading, 38)
@@ -498,6 +500,14 @@ private struct FolderSection: View {
                 TextField("Name", text: $newName)
                 Button("Rename") { if let renaming { model.sessionLayout.rename(renaming.id, to: newName) } }
                 Button("Cancel", role: .cancel) {}
+            }
+            .confirmationDialog(
+                "End \(ending?.title ?? "this session")?", isPresented: Binding(get: { ending != nil }, set: { if !$0 { ending = nil } }),
+                titleVisibility: .visible, presenting: ending
+            ) { session in
+                Button("End Session", role: .destructive) { model.end(session.id) }
+            } message: { _ in
+                Text("The program running in it is stopped.")
             }
         }
     }

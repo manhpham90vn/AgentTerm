@@ -236,6 +236,7 @@ private struct ScheduleEditor: View {
     @State private var time = Date()
     @State private var weekdays: Set<Int> = [2, 3, 4, 5, 6]
     @State private var warning = false
+    @State private var browsing = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -265,9 +266,8 @@ private struct ScheduleEditor: View {
                         }
                         .labelsHidden()
                         .help(schedule.folder)
-                        if !model.isRemote {
-                            Button("Choose…") { chooseFolder() }
-                        }
+                        // Another Mac's folders through its host.
+                        Button("Choose…") { if model.isRemote { browsing = true } else { chooseFolder() } }
                     }
                 }
                 GridRow(alignment: .top) {
@@ -345,6 +345,9 @@ private struct ScheduleEditor: View {
         }
         .padding(20)
         .onAppear(perform: read)
+        .sheet(isPresented: $browsing) {
+            BrowseFoldersSheet(onPick: { schedule.folder = $0 }, start: schedule.folder.isEmpty ? nil : schedule.folder, pickTitle: "Run Here")
+        }
         // Said plainly before a schedule may run without asking (#11).
         .alert("Run without asking for permission?", isPresented: $warning) {
             Button("Run Without Asking", role: .destructive) {

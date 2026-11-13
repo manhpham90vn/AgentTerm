@@ -282,6 +282,8 @@ final class AppModel: ObservableObject {
     func open(_ notice: AgentNotice) {
         agentNotice = nil
         guard let session = sessions.first(where: { $0.id == notice.session }) else { return }
+        // The session is in Sessions, wherever the window was.
+        show(.sessions, toggling: false)
         select(session: session)
     }
 
@@ -941,6 +943,12 @@ final class AppModel: ObservableObject {
         startAtLogin = nil
         agentShells = nil
         agentsUseShells = nil
+        // The next host says its own; until then none of this one's shows.
+        keepAwakeOptions = KeepAwakeOptions()
+        commitWriter = CommitWriterSettings()
+        schedules = []
+        worktrees = [:]
+        worktreeSetups = [:]
         hostVersion = 0
         system.stats = nil
         sshHosts = []
@@ -1261,6 +1269,9 @@ final class AppModel: ObservableObject {
         case .handoffPlan(let id, let prompt):
             remoteHandoffPlan = RemoteHandoffPlan(id: id, prompt: prompt)
         case .files, .file, .fileCreated, .fileSaved:
+            if case .files(let path, let entries) = message, repositoriesAsked.remove(path) != nil {
+                repositories[path] = entries.filter { $0.isDirectory && $0.isRepository == true }.map(\.path).sorted()
+            }
             files.handle(message)
         case .failures(let list):
             failures = list
@@ -1616,6 +1627,18 @@ final class AppModel: ObservableObject {
 
     func browse(_ path: String?) {
         connection?.send(.listDirectory(path: path))
+    }
+
+    /// The repositories directly inside a folder of the other Mac, as the
+    /// handoff offers to continue in, by folder. This Mac's are looked for
+    /// on its own disk.
+    @Published private(set) var repositories: [String: [String]] = [:]
+    private var repositoriesAsked: Set<String> = []
+
+    func askRepositories(in folder: String) {
+        guard isRemote else { return }
+        repositoriesAsked.insert(folder)
+        connection?.send(.files(path: folder))
     }
 
     func addRemoteFolder(_ path: String) {

@@ -106,6 +106,7 @@ private struct MenuBarMenu: View {
             ForEach(model.sessions) { session in
                 Button(session.displayName) {
                     showWindow()
+                    model.show(.sessions, toggling: false)
                     model.select(session: session)
                 }
             }

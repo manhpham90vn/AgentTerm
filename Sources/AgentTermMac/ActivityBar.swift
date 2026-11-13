@@ -235,6 +235,7 @@ struct ConversationCard: View {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(conversation.resumeCommand, forType: .string)
                     copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
                 } label: {
                     Label(copied ? "Copied" : "Copy Resume Command", systemImage: copied ? "checkmark" : "doc.on.doc")
                 }

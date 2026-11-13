@@ -13,14 +13,6 @@ struct RootTabs: View {
             SessionsView()
                 .tabItem { Label("Sessions", systemImage: "terminal") }
                 .tag("sessions")
-                // An agent of another session finished, or needs you.
-                .overlay(alignment: .top) {
-                    if let notice = model.agentNotice, notice.session != model.openSessionID {
-                        AgentNoticeBanner(notice: notice)
-                            .padding(.horizontal, 12)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-                }
             NavigationStack {
                 HistoryList(folder: nil)
                     .background(Palette.canvas.ignoresSafeArea())
@@ -31,6 +23,15 @@ struct RootTabs: View {
             SettingsTab()
                 .tabItem { Label("Settings", systemImage: "gearshape") }
                 .tag("settings")
+        }
+        // An agent of another session finished, or needs you: over every
+        // tab, as the Mac shows it over every place.
+        .overlay(alignment: .top) {
+            if let notice = model.agentNotice, notice.session != model.openSessionID {
+                AgentNoticeBanner(notice: notice)
+                    .padding(.horizontal, 12)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+            }
         }
         // On the tabs, not on one of them: what the Mac answers to
         // something asked in History or Settings has to be shown there too,
@@ -64,6 +65,9 @@ private struct SettingsTab: View {
     @State private var confirmingForget = false
 
     private var macName: String { model.pairing?.name ?? "the Mac" }
+    /// The Mac's own settings are changed only while it can be told: one
+    /// changed while it cannot would be put back when it is reached again.
+    private var online: Bool { model.status == .connected }
 
     /// One of the keep awake options, changed on the Mac as it is changed here.
     private func option<Value>(_ keyPath: WritableKeyPath<KeepAwakeOptions, Value>) -> Binding<Value> {
@@ -81,41 +85,45 @@ private struct SettingsTab: View {
             Form {
                 // General, as on the Mac: keeping awake, then the temperature.
                 Section {
-                    if let keepAwake = model.keepAwake {
-                        Toggle("Keep Mac Awake", isOn: Binding(get: { keepAwake }, set: { model.setKeepAwake($0) }))
-                            .accessibilityIdentifier("keep-awake")
-                        Picker("Turn off by itself", selection: option(\.minutes)) {
-                            ForEach(KeepAwakeOptions.durations, id: \.self) { minutes in
-                                Text(minutes == nil ? "Never" : "After \(KeepAwakeOptions.label(minutes: minutes))").tag(minutes)
+                    Group {
+                        if let keepAwake = model.keepAwake {
+                            Toggle("Keep Mac Awake", isOn: Binding(get: { keepAwake }, set: { model.setKeepAwake($0) }))
+                                .accessibilityIdentifier("keep-awake")
+                            Picker("Turn off by itself", selection: option(\.minutes)) {
+                                ForEach(KeepAwakeOptions.durations, id: \.self) { minutes in
+                                    Text(minutes == nil ? "Never" : "After \(KeepAwakeOptions.label(minutes: minutes))").tag(minutes)
+                                }
+                            }
+                            Toggle("Keep the display on too", isOn: option(\.display))
+                            Toggle("Only while plugged in", isOn: option(\.onlyOnPower))
+                            Toggle("Only while an agent is working", isOn: option(\.onlyWhileWorking))
+                        }
+                        if let startAtLogin = model.startAtLogin {
+                            Toggle("Start at Login", isOn: Binding(get: { startAtLogin }, set: { model.setStartAtLogin($0) }))
+                                .accessibilityIdentifier("start-at-login")
+                        }
+                        if let agentShells = model.agentShells {
+                            Toggle("Agents can open shells you see", isOn: Binding(get: { agentShells }, set: { model.setAgentShells($0) }))
+                                .accessibilityIdentifier("agent-shells")
+                            if let useShells = model.agentsUseShells {
+                                Toggle("Agents run their commands there", isOn: Binding(get: { useShells }, set: { model.setAgentsUseShells($0) }))
+                                    .disabled(!agentShells)
+                                    .accessibilityIdentifier("agents-use-shells")
                             }
                         }
-                        Toggle("Keep the display on too", isOn: option(\.display))
-                        Toggle("Only while plugged in", isOn: option(\.onlyOnPower))
-                        Toggle("Only while an agent is working", isOn: option(\.onlyWhileWorking))
-                    }
-                    if let startAtLogin = model.startAtLogin {
-                        Toggle("Start at Login", isOn: Binding(get: { startAtLogin }, set: { model.setStartAtLogin($0) }))
-                            .accessibilityIdentifier("start-at-login")
-                    }
-                    if let agentShells = model.agentShells {
-                        Toggle("Agents can open shells you see", isOn: Binding(get: { agentShells }, set: { model.setAgentShells($0) }))
-                            .accessibilityIdentifier("agent-shells")
-                        if let useShells = model.agentsUseShells {
-                            Toggle("Agents run their commands there", isOn: Binding(get: { useShells }, set: { model.setAgentsUseShells($0) }))
-                                .disabled(!agentShells)
-                                .accessibilityIdentifier("agents-use-shells")
+                        Picker("Temperature", selection: Binding(get: { temperatureUnit }, set: { unit in model.setDisplay { $0.temperatureUnit = unit } })) {
+                            Text("Celsius (°C)").tag(SystemStats.celsius)
+                            Text("Fahrenheit (°F)").tag(SystemStats.fahrenheit)
                         }
+                        .accessibilityIdentifier("temperature-unit")
                     }
-                    Picker("Temperature", selection: Binding(get: { temperatureUnit }, set: { unit in model.setDisplay { $0.temperatureUnit = unit } })) {
-                        Text("Celsius (°C)").tag(SystemStats.celsius)
-                        Text("Fahrenheit (°F)").tag(SystemStats.fahrenheit)
-                    }
-                    .accessibilityIdentifier("temperature-unit")
+                    .disabled(!online)
                 } header: {
                     Text("General")
                 } footer: {
                     Text(
-                        (model.keepAwake == true ? model.keepAwakeOptions.until.map { "Awake until \($0.formatted(date: .omitted, time: .shortened)). " } ?? "" : "")
+                        (online ? "" : "Not connected to \(macName): these are as it last said, and can be changed once it is reached. ")
+                            + (model.keepAwake == true ? model.keepAwakeOptions.until.map { "Awake until \($0.formatted(date: .omitted, time: .shortened)). " } ?? "" : "")
                             + "While a session is open \(macName) does not go to sleep by itself, so agents keep working and this iPhone can still reach them. Closing its lid still puts it to sleep."
                             + (model.startAtLogin == nil ? "" : " With Start at Login, \(macName) can be reached after it restarts without AgentTerm being opened there first.")
                     )
@@ -154,18 +162,23 @@ private struct SettingsTab: View {
                     }
                     .foregroundStyle(.primary)
                     .disabled(model.status != .connected)
-                    Picker("Show diffs as", selection: Binding(get: { diffLayout }, set: { layout in model.setDisplay { $0.diffLayout = layout } })) {
-                        Text("One panel").tag("unified")
-                        Text("Two panels").tag("split")
+                    Group {
+                        Picker("Show diffs as", selection: Binding(get: { diffLayout }, set: { layout in model.setDisplay { $0.diffLayout = layout } })) {
+                            Text("One panel").tag("unified")
+                            Text("Two panels").tag("split")
+                        }
+                        Picker("Show changes as", selection: Binding(get: { changesView }, set: { view in model.setDisplay { $0.changesView = view } })) {
+                            Text("Flat list").tag("list")
+                            Text("By folder").tag("tree")
+                        }
                     }
-                    Picker("Show changes as", selection: Binding(get: { changesView }, set: { view in model.setDisplay { $0.changesView = view } })) {
-                        Text("Flat list").tag("list")
-                        Text("By folder").tag("tree")
-                    }
+                    .disabled(!online)
                 } header: {
                     Text("Git")
                 } footer: {
-                    Text("Which agent writes a commit message, on which model, and what it is told. These, like the settings above, are shared with the Mac.")
+                    Text(
+                        "Which agent writes a commit message, on which model, and what it is told. These, and the settings of \(macName) above, are shared with it; the notifications, the Live Activity and Privacy are this iPhone's own."
+                    )
                 }
 
                 Section {
@@ -288,16 +301,31 @@ private struct SchedulesScreen: View {
             }
             Section("Scheduled") {
                 ForEach(overview.scheduled) { schedule in
-                    NavigationLink {
-                        ScheduleForm(schedule: schedule, isNew: false)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(schedule.name)
-                            Text("\(Self.name(of: schedule.agent, in: model.agents)) · \(schedule.when.label())").font(.footnote).foregroundStyle(.secondary)
-                            Text(Self.status(schedule)).font(.footnote).foregroundStyle(.secondary)
+                    HStack(spacing: 12) {
+                        // On or off from the list, as on the Mac.
+                        Toggle(
+                            "\(schedule.name) on",
+                            isOn: Binding(
+                                get: { schedule.enabled },
+                                set: { on in
+                                    var changed = schedule
+                                    changed.enabled = on
+                                    model.save(changed)
+                                })
+                        )
+                        .labelsHidden()
+                        .accessibilityIdentifier("schedule-on-\(schedule.id)")
+                        NavigationLink {
+                            ScheduleForm(schedule: schedule, isNew: false)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(schedule.name)
+                                Text("\(Self.name(of: schedule.agent, in: model.agents)) · \(schedule.when.label())").font(.footnote).foregroundStyle(.secondary)
+                                Text(Self.status(schedule)).font(.footnote).foregroundStyle(.secondary)
+                            }
                         }
+                        .accessibilityIdentifier("schedule-\(schedule.id)")
                     }
-                    .accessibilityIdentifier("schedule-\(schedule.id)")
                 }
                 if let first = model.agents.first(where: { $0.path != nil }), let folder = model.folders.first {
                     NavigationLink("New Schedule") {
@@ -362,6 +390,11 @@ private struct ScheduleForm: View {
     @State private var time = Date()
     @State private var weekdays: Set<Int> = [2, 3, 4, 5, 6]
     @State private var warning = false
+    /// Any folder of the Mac, not only those in the list, as on the Mac.
+    @State private var choosingFolder = false
+
+    /// Every run the host kept, newest first, as they are now.
+    private var runs: [ScheduleRun] { (model.schedules.first { $0.id == schedule.id }?.runs ?? schedule.runs).reversed() }
 
     var body: some View {
         Form {
@@ -372,7 +405,13 @@ private struct ScheduleForm: View {
                 }
                 Picker("Folder", selection: $schedule.folder) {
                     ForEach(model.folders, id: \.self) { Text(($0 as NSString).lastPathComponent).tag($0) }
+                    // One chosen that is not in the list.
+                    if !schedule.folder.isEmpty && !model.folders.contains(schedule.folder) {
+                        Text((schedule.folder as NSString).lastPathComponent).tag(schedule.folder)
+                    }
                 }
+                Button("Choose Another Folder…") { choosingFolder = true }
+                    .accessibilityIdentifier("schedule-choose-folder")
                 TextField("Prompt", text: $schedule.prompt, axis: .vertical).lineLimit(3...8)
             }
             Section {
@@ -397,10 +436,21 @@ private struct ScheduleForm: View {
                 Toggle("Run once after a missed time", isOn: $schedule.catchUp)
                 Toggle("On", isOn: $schedule.enabled)
             }
-            if !schedule.runs.isEmpty {
-                Section("Last runs") {
-                    ForEach(Array(schedule.runs.suffix(5).reversed().enumerated()), id: \.offset) { _, run in
-                        Text("\(run.at.formatted(date: .abbreviated, time: .shortened)): \(run.note)").font(.footnote)
+            if !runs.isEmpty {
+                Section("Runs") {
+                    ForEach(Array(runs.enumerated()), id: \.offset) { _, run in
+                        let live = run.session.map { id in model.sessions.contains { $0.id == id } } == true
+                        if live, let id = run.session {
+                            // One going on opens its session.
+                            Button {
+                                model.tab = "sessions"
+                                model.path = [.session(id)]
+                            } label: {
+                                RunLabel(run: ScheduleOverview.Run(schedule: schedule, run: run), live: true)
+                            }
+                        } else {
+                            RunLabel(run: ScheduleOverview.Run(schedule: schedule, run: run), live: false)
+                        }
                     }
                 }
             }
@@ -416,7 +466,10 @@ private struct ScheduleForm: View {
         .navigationTitle(isNew ? "New Schedule" : schedule.name)
         .toolbar {
             Button("Save") { save() }
-                .disabled(schedule.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || schedule.name.isEmpty)
+                .disabled(schedule.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || schedule.name.isEmpty || (kind == 2 && weekdays.isEmpty))
+        }
+        .sheet(isPresented: $choosingFolder) {
+            BrowseSheet(start: schedule.folder.isEmpty ? nil : schedule.folder, pickTitle: "Run Here") { schedule.folder = $0 }
         }
         .onAppear(perform: read)
         .onChange(of: schedule.agent) { _, agent in

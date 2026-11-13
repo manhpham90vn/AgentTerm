@@ -457,6 +457,7 @@ public final class HostServer {
             // Power may have been plugged in or pulled since the last look.
             self.updateSleepGuard()
             self.updateMacInUse()
+            self.checkLoginItem()
             self.checkStatusLines()
             // In case the folder's watch missed one.
             self.readEvents()
@@ -1227,9 +1228,11 @@ public final class HostServer {
                 send(.error("Could not \(wanted ? "set the host to start" : "stop the host from starting") at login: \(error.localizedDescription)"), to: client)
             }
             // To everyone, and as it is now: also when it could not be changed.
+            startAtLoginSaid = item.isOn
             for other in clients.values where other.authenticated { send(.startAtLogin(item.isOn), to: other) }
         case .setKeepAwake(let wanted):
-            guard wanted != keepAwake else { return }
+            // Nothing to change: the asker is told what is kept (as below).
+            guard wanted != keepAwake else { return send(.keepAwake(keepAwake), to: client) }
             keepAwake = wanted
             // A switch-on lasts as long as the options say.
             keepAwakeOptions.until = wanted ? keepAwakeOptions.minutes.map { Date().addingTimeInterval(TimeInterval($0) * 60) } : nil
@@ -1248,7 +1251,7 @@ public final class HostServer {
             } else {
                 options.until = keepAwakeOptions.until
             }
-            guard options != keepAwakeOptions else { return }
+            guard options != keepAwakeOptions else { return send(.keepAwakeOptions(keepAwakeOptions), to: client) }
             keepAwakeOptions = options
             saveSettings()
             updateSleepGuard()
@@ -1259,17 +1262,22 @@ public final class HostServer {
             if let agent = settings.agent, !AgentDetector.known.contains(where: { $0.id == agent }) { settings.agent = nil }
             if settings.model?.trimmingCharacters(in: .whitespaces).isEmpty == true { settings.model = nil }
             if settings.prompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == true { settings.prompt = nil }
-            guard settings != commitWriter else { return }
+            // What it asked for may be tidied into what is kept already: the
+            // asker is told what is kept, rather than left with its own copy.
+            guard settings != commitWriter else { return send(.commitWriter(commitWriter), to: client) }
             commitWriter = settings
             saveSettings()
             for other in clients.values where other.authenticated { send(.commitWriter(settings), to: other) }
         case .setDisplaySettings(let wanted):
             let settings = wanted.checked
-            guard settings != displaySettings else { return }
+            guard settings != displaySettings else {
+                if settings != wanted { send(.displaySettings(displaySettings), to: client) }
+                return
+            }
             displaySettings = settings
             saveSettings()
-            // The sender has it already.
-            for other in clients.values where other.authenticated && other !== client { send(.displaySettings(settings), to: other) }
+            // The sender has it already, unless it was tidied.
+            for other in clients.values where other.authenticated && (other !== client || settings != wanted) { send(.displaySettings(settings), to: other) }
         case .writeCommitMessage(let path):
             writeCommitMessage(in: path, for: client)
         case .cancelCommitMessage(let path):
@@ -1948,6 +1956,22 @@ public final class HostServer {
     /// The variable that gives an agent's session its port and key, for
     /// the MCP server the agent starts.
     public static let agentShellsVariable = "AGENTTERM_MCP"
+
+    /// Start at Login as the clients were last told.
+    private var startAtLoginSaid: Bool?
+
+    /// Start at Login turned on or off outside AgentTerm, in System Settings
+    /// or by removing the launch agent: every client is told.
+    private func checkLoginItem() {
+        guard let item = configuration.loginItem else { return }
+        let on = item.isOn
+        guard on != startAtLoginSaid else { return }
+        let first = startAtLoginSaid == nil
+        startAtLoginSaid = on
+        // The first look only notes it: each client was told at its welcome.
+        if first { return }
+        for client in clients.values where client.authenticated { send(.startAtLogin(on), to: client) }
+    }
 
     /// Does what an agent asks of the shells agents opened, as the session
     /// its key names, and answers the client that asked. Those shells are

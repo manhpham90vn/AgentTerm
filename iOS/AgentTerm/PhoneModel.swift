@@ -691,6 +691,9 @@ final class PhoneModel: ObservableObject {
         agentsUseShells = nil
         keepAwakeOptions = KeepAwakeOptions()
         commitWriter = CommitWriterSettings()
+        schedules = []
+        worktrees = [:]
+        worktreeSetups = [:]
         writingCommitMessage = []
         syncing = [:]
         sshHosts = []

@@ -37,12 +37,15 @@ struct HandoffSheet: View {
     @State private var nested: [String] = []
     /// A folder picked with "Choose…".
     @State private var chosen: String?
+    /// The other Mac's folders, picked from its listing.
+    @State private var browsing = false
 
     /// The conversation's own folder first, then the repositories inside it,
     /// the other listed folders, and one picked by hand.
     private var folderChoices: [String] {
         var paths = [conversation.cwd]
-        for path in nested + model.folders.map(\.path) + [chosen].compactMap({ $0 }) where !paths.contains(path) { paths.append(path) }
+        let inside = model.isRemote ? model.repositories[conversation.cwd] ?? [] : nested
+        for path in inside + model.folders.map(\.path) + [chosen].compactMap({ $0 }) where !paths.contains(path) { paths.append(path) }
         return paths
     }
 
@@ -109,12 +112,11 @@ struct HandoffSheet: View {
                     .labelsHidden()
                     .fixedSize()
                     .help("The folder the receiving agent starts in")
-                    if !model.isRemote {
-                        // An open panel shows this Mac's disk.
-                        Button("Choose…") { chooseFolder() }
-                            .controlSize(.small)
-                            .help("Start it in any other folder")
-                    }
+                    // An open panel shows this Mac's disk; another Mac's is
+                    // browsed through its host.
+                    Button("Choose…") { if model.isRemote { browsing = true } else { chooseFolder() } }
+                        .controlSize(.small)
+                        .help("Start it in any other folder")
                 }
                 if destination != conversation.cwd {
                     Text("The agent starts in \((destination as NSString).abbreviatingWithTildeInPath), with the conversation so far. The folder is added to the list.")
@@ -203,12 +205,20 @@ struct HandoffSheet: View {
             if model.isRemote {
                 // The folders and the handoff file are on the other Mac.
                 model.requestRemoteHandoffPlan(for: conversation)
+                model.askRepositories(in: conversation.cwd)
                 return
             }
             nested = Self.repositories(in: conversation.cwd)
             let made = Handoff.plan(for: conversation)
             plan = made
             prompt = made.prompt
+        }
+        .sheet(isPresented: $browsing) {
+            BrowseFoldersSheet(
+                onPick: { path in
+                    chosen = path == conversation.cwd ? nil : path
+                    folder = path == conversation.cwd ? "" : path
+                }, start: destination, pickTitle: "Continue Here")
         }
         .onChange(of: model.remoteHandoffPlan) { _, made in
             guard model.isRemote, let made, plan == nil else { return }

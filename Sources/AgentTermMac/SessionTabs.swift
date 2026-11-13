@@ -113,7 +113,7 @@ private struct SessionTab: View {
             }
             // The close button takes the shortcut's place under the pointer,
             // so the tab does not change width.
-            TabTrailing(id: TabID.session(session), number: number, hovering: hovering, closeHelp: "End this session") { model.close(session.id) }
+            TabTrailing(id: TabID.session(session), number: number, hovering: hovering, closeHelp: "End this session") { model.requestEnd(session.id) }
         }
         .padding(.leading, 10)
         .padding(.trailing, 6)

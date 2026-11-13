@@ -359,7 +359,8 @@ struct SessionRow: View {
             }
             if hovering {
                 Button {
-                    model.close(session.id)
+                    // Asks first, as everything that ends a session does.
+                    model.requestEnd(session.id)
                 } label: {
                     Image(systemName: "xmark").font(.system(size: 9, weight: .bold))
                 }

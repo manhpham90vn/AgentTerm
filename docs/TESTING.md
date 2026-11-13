@@ -176,6 +176,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | SES-8 | A client that was attached and got N bytes | It attaches again naming how far it is | Only what the session wrote since is sent; a place that is not this session's gets all of it again, and is told so | H |
 | SES-9 | A link that carries 100 KB a second; a link that carries nothing | A replay of 300 KB is sent; nothing is sent | The slow connection stays open and gets all of it; the silent one is closed as lost | H |
 | SES-10 | A session in front on the Mac; a session open on the iPhone | Choose End Session | The app asks first, nothing ends before the answer, and after it the session is gone from every device | P, M |
+| SES-25 | A session on the Mac and on the iPhone | End it from the × of its row or its tab on the Mac, from its row's menu on the iPhone | Each asks first, as End Session does | hand |
 | SES-11 | A client that is not attached to a session | It sends input for that session | The input does not reach the program | H |
 | SES-12 | Text written for a session and not sent | Leave the terminal, or close the app, and come back | iPhone: the text is in the message field again. Mac: it is still at the program's prompt | P; M as far as the host goes: the session is there and replays what was typed. What the Mac's terminal draws cannot be read through accessibility |
 | SES-13 | A replay holding a question the program once asked its terminal | The replay is fed slowly, longer than five seconds in all | The emulator's answer does not reach the program; a question asked after the replay is answered | H |
@@ -372,6 +373,7 @@ A second host stands in for the other Mac, with a project of its own.
 | REMOTE-11 | A file staged on the other Mac, a stand-in agent there | Press Write, then Commit | The other Mac's agent writes the message into the field, and its git has the commit | M |
 | REMOTE-12 | That commit, which the other Mac's remote does not have | Press Push | The other Mac's remote has the commit | M |
 | REMOTE-13 | A conversation an agent had on the other Mac | Choose Hand Off on it, press Hand Off | The prompt comes from the other Mac's host; the receiving agent starts there and the handoff file is on its disk | M |
+| REMOTE-20 | Another Mac on screen | Choose Hand Off on a conversation, or make a schedule, and press Choose… | The other Mac's folders are browsed through its host and the one chosen is used; the repositories inside the conversation's folder are offered | M |
 | REMOTE-14 | A file staged on the other Mac, whose git has a hook that takes six seconds and then refuses | Write a message, press Commit | What the hook said is shown, and the message is still in the field | M |
 | REMOTE-15 | A file of the other Mac open, in a folder nothing can be written in | Change it, save, press Refresh in the Files tab | It is said that the file could not be saved; the changes are still in the editor, still count as not saved, and the other Mac's disk is as it was | M |
 | REMOTE-16 | A session on this Mac, so its host has a tab to arrange | Pair with the other Mac, start a session there, come back | The other Mac's host was never told of this Mac's tab, and this Mac's arrangement is as it was | M |
@@ -452,7 +454,7 @@ A second host stands in for the other Mac, with a project of its own.
 | NOTE-1 | Sessions whose agents wait, work, are done | Their states change | Told once when done or waiting, again when asked something else, not while it keeps waiting; what waits is told on connecting; an ended session is forgotten | P |
 | NOTE-2 | An agent waiting for permission | A reply to what it asked before; then one to what it asks now | The first is dropped and the device is told the agent moved on; the second is typed, then Return | H |
 | NOTE-3 | The Mac left alone for six minutes | Its app comes to the front and goes behind; a key is pressed | Every client is told in use, not in use, in use | H |
-| NOTE-4 | The Mac app with a shell in front, an agent in another session | The agent comes to wait for permission | A banner names the session and what it asks; Open selects it | M |
+| NOTE-4 | The Mac app with a shell in front and History shown, an agent in another session | The agent comes to wait for permission | A banner names the session and what it asks; Open selects it | M |
 | NOTE-5 | The iPhone in the sessions list, an agent in a session | The agent finishes | A banner over the list, which opens the session | hand, until the iPhone tests cover it |
 | NOTE-6 | The iPhone just left, an agent asks a question | The notification is answered with a reply | The reply is typed into the session after unlocking | hand: needs a real phone |
 
@@ -493,6 +495,10 @@ A second host stands in for the other Mac, with a project of its own.
 |---|---|---|---|---|
 | TEST-1 | A host and an app started by a test or a test script | A session starts through the login shell | Its `HOME` is the test's home folder: none of the startup files of the person running the tests is read. The hosts and apps get the test's home as `HOME`, `ZDOTDIR` and `CFFIXED_USER_HOME` | M |
 | SET-1 | The Mac app's Settings left on Privacy | Left for Sessions, opened again with ⌘, | It opens on General | M |
+| SET-2 | A setting the host tidies (a blank model, an unknown agent; keep awake options; the display) | A client asks for what, once tidied, the host keeps already | The asker is told what the host keeps | H |
+| SET-3 | Start at Login on | The launch agent is removed outside AgentTerm | Every client is told it is off, without asking | H |
+| SET-4 | The iPhone, its Mac out of reach | Look at Settings | The Mac's settings are shown as it last said and cannot be changed, and it says so; reached again, they can | hand |
+| SET-5 | The Mac or the iPhone, after another Mac | Switched to a Mac | None of the other Mac's keep awake options, commit message settings, schedules or worktrees show | hand |
 
 ## What the tests found
 

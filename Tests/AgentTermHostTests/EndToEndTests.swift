@@ -854,6 +854,7 @@ final class EndToEndTests: XCTestCase {
 
         var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, detectAgents: { [] })
         configuration.loginItem = item
+        configuration.refreshInterval = 0.3
         let host = HostServer(configuration: configuration)
         let hostPort = try host.start()
         defer { host.stop() }
@@ -869,6 +870,13 @@ final class EndToEndTests: XCTestCase {
         mac.connection.send(.setStartAtLogin(false))
         waitUntil("off, for both") { latest(mac) == false && latest(phone) == false }
         XCTAssertFalse(item.isOn)
+
+        // SET-3: turned on or off outside AgentTerm, as by removing the
+        // launch agent, both are told without asking.
+        phone.connection.send(.setStartAtLogin(true))
+        waitUntil("on again") { latest(mac) == true && latest(phone) == true }
+        try FileManager.default.removeItem(at: item.file)
+        waitUntil("told it is off, from outside") { latest(mac) == false && latest(phone) == false }
     }
 
     func testTheEndOfAPushIsSaidApartFromTheChanges() throws {
@@ -975,6 +983,15 @@ final class EndToEndTests: XCTestCase {
             }
             mac.connection.send(.setCommitWriter(wanted))
             waitUntil("set again") { settings(phone) == wanted }
+
+            // SET-2: asked for what the host keeps already once it is
+            // tidied, the asker is told what the host keeps, rather than
+            // left with its untidy copy.
+            func told(_ client: TestClient) -> Int { client.messages.filter { if case .commitWriter = $0 { return true } else { return false } }.count }
+            let before = told(mac)
+            mac.connection.send(.setCommitWriter(CommitWriterSettings(agent: "codex", model: "  ", prompt: "Viết bằng tiếng Việt.")))
+            waitUntil("the asker told") { told(mac) > before }
+            XCTAssertEqual(settings(mac), wanted)
         }
         let again = HostServer(configuration: configuration)
         let againPort = try again.start()

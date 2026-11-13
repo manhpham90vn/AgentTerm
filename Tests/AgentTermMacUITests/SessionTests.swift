@@ -73,8 +73,11 @@ final class SessionTests: MacUITestCase {
         phone.send(.create(CreateRequest(command: script.path, cwd: project.path, title: "deploy")))
         wait("the agent's session") { phone.sessions.count == 2 }
         let agent = try XCTUnwrap(phone.sessions.first { $0.id != shell }?.id)
-        // The shell is the one in front.
+        // The shell is the one in front, and the window on History: the
+        // banner shows over every place, and Open goes to Sessions.
         app.press(.id("session-\(shell)"))
+        app.press(.id("place-history"))
+        app.wait(for: .text("HISTORY"))
 
         // Named after the conversation the stand-in folder's history gives it.
         app.wait(for: .containing("needs permission"), timeout: 15)
@@ -82,6 +85,7 @@ final class SessionTests: MacUITestCase {
         shot("notice")
         app.press(.button("Open"))
         app.waitGone(.containing("needs permission"))
+        app.wait(for: .text("FOLDERS"))
         app.wait(for: .id("session-\(agent)"))
     }
 

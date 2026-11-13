@@ -108,6 +108,8 @@ final class RemoteMacTests: MacUITestCase {
         app.press(.id("place-history"))
         app.perform("Hand Off", on: .id("conversation-c-9"), timeout: 15)
         app.wait(for: .text("Hand Off"), timeout: 15)
+        // REMOTE-20: the other Mac's folders can be chosen, through its host.
+        app.wait(for: .button("Choose…"))
         wait("the prompt, from the other Mac's host", timeout: 15) {
             self.app.all(.role(kAXTextAreaRole as String)).contains { $0.value.contains(".agentterm/handoffs/") }
         }
