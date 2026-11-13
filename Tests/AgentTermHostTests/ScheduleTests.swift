@@ -144,11 +144,20 @@ final class SchedulerHostTests: XCTestCase {
             return true
         }
         configuration.isOnPower = { true }
+        // Claude Code's limit starts over at nine, as its service says.
+        configuration.fetchAccountUsage = { [weak self] agent in
+            guard let self, agent == "claude" else { return nil }
+            let limit = AccountLimit(id: "5h", title: "5h limit", shortTitle: "5h", usedPercent: 100, resetsAt: self.reset)
+            return AccountUsage(agent: agent, groups: [AccountUsageGroup(limits: [limit])])
+        }
         server = HostServer(configuration: configuration)
         let port = try server.start()
         client = Client(port: port, token: token)
         waitUntil("connected") { !self.client.messages.isEmpty }
     }
+
+    /// When Claude Code's limit starts over, as its stand-in service says.
+    private var reset: Date { ScheduleTime.daily(hour: 9, minute: 0).next(after: ISO8601DateFormatter().date(from: "2026-11-16T00:00:00Z")!)! }
 
     override func tearDown() {
         server?.stop()
@@ -282,6 +291,35 @@ final class SchedulerHostTests: XCTestCase {
         pause()
         XCTAssertEqual(startedLines, [])
         XCTAssertEqual(client.schedules.first?.runs.count, 0)
+    }
+
+    /// SCHED-15: two schedules of one agent for when its limit starts over
+    /// both run when it does, each once.
+    func testEveryScheduleOfAnAgentRunsWhenItsLimitStartsOver() throws {
+        // A session of Claude Code, so that its service is asked.
+        client.connection.send(.create(CreateRequest(command: "claude", cwd: project.path, title: "by hand")))
+        waitUntil("the account's limits") { self.client.messages.contains { if case .accountUsage(let list) = $0 { return !list.isEmpty } else { return false } } }
+        for name in ["First", "Second"] {
+            var schedule = morning()
+            schedule.id = name
+            schedule.name = name
+            schedule.when = .limitReset
+            client.connection.send(.saveSchedule(schedule))
+        }
+        waitUntil("both due two minutes after the reset") {
+            self.client.schedules.count == 2 && self.client.schedules.allSatisfy { $0.nextRun == self.reset.addingTimeInterval(120) }
+        }
+
+        // A minute at a time, so that the Mac is not taken to have slept.
+        for seconds in [0.0, 60, 125] {
+            set(reset.addingTimeInterval(seconds))
+            pause(0.3)
+        }
+        waitUntil("both runs") { self.client.sessions.filter { $0.schedule != nil }.count == 2 }
+        XCTAssertEqual(Set(client.sessions.compactMap(\.schedule)), ["First", "Second"])
+        pause()
+        XCTAssertEqual(client.schedules.map { $0.runs.map(\.note) }, [["Started"], ["Started"]], "once each")
+        XCTAssertEqual(client.schedules.map(\.nextRun), [nil, nil], "nothing more until the service names another reset")
     }
 
     /// SCHED-9: Copilot CLI asked to skip all is told so through its variable.

@@ -454,6 +454,7 @@ A second host stands in for the other Mac, with a project of its own.
 | SCHED-12 | A schedule for when the limit resets | The account's limit starts over | It runs two minutes later | hand: needs an account whose limit resets |
 | SCHED-13 | The Mac's Schedules with a schedule half made | Sessions is picked, then Schedules again | The schedule is dropped; the middle asks for one | M |
 | SCHED-14 | A daily schedule and a schedule a moment away | Its time comes; its run is picked; the run's session ends; the daily one is picked | Both under Scheduled, none running; then the run under Running, opening its session; then under Past Runs as started; the daily one in the middle to change, with no runs. The iPhone shows the same three groups | H, M, P |
+| SCHED-15 | Two schedules of Claude Code for when its limit starts over | The limit starts over | Both run two minutes later, once each | H |
 
 ### When an agent is done or needs you
 

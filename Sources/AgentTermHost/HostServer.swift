@@ -697,6 +697,9 @@ public final class HostServer {
         // A look that came this late means the Mac slept in between.
         let slept = now.timeIntervalSince(checked) > max(3 * configuration.scheduleInterval, 90)
         var changed = false
+        // Noted once every schedule was looked at: each of an agent's
+        // schedules runs for the same reset, not only the first.
+        var ranFor: [String: Date] = [:]
         for index in schedules.indices where schedules[index].enabled {
             let schedule = schedules[index]
             let since = max(checked, schedulesFrom[schedule.id] ?? checked)
@@ -705,7 +708,7 @@ public final class HostServer {
                 let done = resetsRun[schedule.agent] ?? .distantPast
                 let passed = resets(of: schedule.agent).filter { $0 > done && $0.addingTimeInterval(Self.afterLimitReset) <= now }
                 due = passed.max()?.addingTimeInterval(Self.afterLimitReset)
-                if let latest = passed.max() { resetsRun[schedule.agent] = latest }
+                if let latest = passed.max() { ranFor[schedule.agent] = max(latest, ranFor[schedule.agent] ?? latest) }
             } else {
                 due = schedule.when.next(after: since).flatMap { $0 <= now ? $0 : nil }
             }
@@ -718,6 +721,7 @@ public final class HostServer {
                 waitingRuns.append((schedule.id, due, missed ? "Missed at \(due.formatted(date: .omitted, time: .shortened)), run when the Mac was next awake" : "Started"))
             }
         }
+        resetsRun.merge(ranFor) { _, new in new }
         schedulesChecked = now
         startWaitingRuns()
         closeFinishedRuns(now: now)
