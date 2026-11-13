@@ -25,13 +25,25 @@ public enum StatusLineRelay {
         let object = (try? JSONSerialization.jsonObject(with: input)) as? [String: Any]
         if object != nil {
             let url = URL(fileURLWithPath: file)
-            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try? input.write(to: url, options: .atomic)
+            let problem = failureFile(for: file)
+            do {
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                try input.write(to: url, options: .atomic)
+                try? FileManager.default.removeItem(atPath: problem)
+            } catch {
+                // For the host, which reports it: nobody sees what a status
+                // line command says when it fails.
+                try? Data(error.localizedDescription.utf8).write(to: URL(fileURLWithPath: problem), options: .atomic)
+            }
         }
         let project = (object?["workspace"] as? [String: Any])?["project_dir"] as? String ?? object?["cwd"] as? String
         guard let command = userCommand(project: project, home: home, environment: environment) else { return Data() }
         return pipe(input, through: command)
     }
+
+    /// Where the relay says why it could not save what it was given, next
+    /// to the file it saves it in. Removed once it saves again.
+    public static func failureFile(for file: String) -> String { file + ".failed" }
 
     /// The status line the user set up, looked for where Claude Code looks:
     /// the project's settings first, then their own.

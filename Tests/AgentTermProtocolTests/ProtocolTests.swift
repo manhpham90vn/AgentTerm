@@ -187,4 +187,24 @@ final class ProtocolTests: XCTestCase {
         // Another day says which.
         XCTAssertTrue(failure.headline(now: at.addingTimeInterval(3 * 86400)).contains("stopped unexpectedly on "))
     }
+
+    /// SES-23, AWAKE-4, USE-5: the other parts, in words.
+    func testTheOtherPartsInWords() {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        let killed = PartFailure(
+            part: .session, name: "build", at: at, ended: [EndedSession(name: "build", cwd: "/p")], restarted: false, reason: "It was killed (SIGKILL).")
+        XCTAssertTrue(killed.headline(on: "First Mac", now: at).hasPrefix("The program of “build” on First Mac stopped unexpectedly at "))
+        XCTAssertEqual(killed.details, "Its session ended. It was killed (SIGKILL).")
+
+        var awake = PartFailure(part: .keepAwake, at: at, restarted: false, reason: "macOS would not hold it.")
+        XCTAssertTrue(awake.headline(now: at).hasPrefix("The Mac could not be kept awake at "))
+        XCTAssertTrue(awake.headline(now: at).hasSuffix("."))
+        XCTAssertEqual(awake.details, "macOS would not hold it.", "nothing ends with the hold")
+        awake.restarted = true
+        XCTAssertTrue(awake.headline(now: at).hasSuffix(", and is kept awake again."))
+
+        let usage = PartFailure(part: .statusLine, name: "review", at: at, restarted: false)
+        XCTAssertTrue(usage.headline(now: at).hasPrefix("The usage of “review” could not be saved at "))
+        XCTAssertEqual(usage.details, "")
+    }
 }

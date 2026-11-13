@@ -47,6 +47,10 @@ public final class HostServer {
         public var fetchAccountUsage: ((String) -> AccountUsage?)?
         /// Whether the Mac is plugged in. Tests say so themselves.
         public var isOnPower: () -> Bool = { PowerSource.isOnPower }
+        /// Takes or lets go of the hold that keeps the Mac awake (whether to
+        /// hold, whether the display too) and says whether it is held. Nil
+        /// for macOS's own; a test stands in one that refuses.
+        public var holdAwake: ((_ held: Bool, _ display: Bool) -> Bool)?
         /// Home folder whose SSH configuration names the hosts to offer.
         /// Nil reads the one of `home`.
         public var sshHome: String?
@@ -138,6 +142,11 @@ public final class HostServer {
         /// back with a place in a session of before must not be taken to
         /// have a place in this one.
         var written = Int.random(in: 0..<(1 << 40))
+        /// Its program was asked to end (the tab closed, the host stopping):
+        /// a signal it then dies of is not reported.
+        var endAsked = false
+        /// What the status line relay could not save was reported.
+        var usageFailureReported = false
 
         init(info: SessionInfo, process: PTYProcess, screenLines: Int) {
             self.info = info
@@ -274,7 +283,35 @@ public final class HostServer {
             broadcastKeepAwake()
         }
         let powered = !keepAwakeOptions.onlyOnPower || configuration.isOnPower()
-        sleepGuard.set(held: keepAwake && !sessions.isEmpty && powered, display: keepAwakeOptions.display)
+        let wanted = keepAwake && !sessions.isEmpty && powered
+        let held =
+            configuration.holdAwake.map { $0(wanted, keepAwakeOptions.display) }
+            ?? sleepGuard.set(held: wanted, display: keepAwakeOptions.display)
+        noteSleepHold(wanted: wanted, held: held)
+    }
+
+    /// The report of a hold macOS refused, while it is refused.
+    private var refusedHold: String?
+
+    /// A hold that is wanted and refused is reported once; it is asked for
+    /// again on every refresh, and the report says so once it is held.
+    private func noteSleepHold(wanted: Bool, held: Bool) {
+        if wanted && !held {
+            guard refusedHold == nil else { return }
+            let failure = PartFailure(
+                part: .keepAwake, at: Date(), restarted: false,
+                reason: "macOS would not hold it, so the Mac may sleep while sessions run. AgentTerm asks again every few seconds.")
+            refusedHold = failure.id
+            report(failure)
+        } else if let id = refusedHold {
+            refusedHold = nil
+            // Held again: said in the report that is still there. One that
+            // is no longer wanted is left as it was.
+            guard wanted, let index = failures.firstIndex(where: { $0.id == id }) else { return }
+            failures[index].restarted = true
+            saveFailures()
+            broadcastFailures()
+        }
     }
 
     private func broadcastKeepAwake() {
@@ -335,6 +372,7 @@ public final class HostServer {
             if let file = self.markerFile { HostMarker.touch(file) }
             // Power may have been plugged in or pulled since the last look.
             self.updateSleepGuard()
+            self.checkStatusLines()
             self.refreshSummaries()
         }
         // The Mac itself is measured more often than its sessions: a
@@ -377,7 +415,10 @@ public final class HostServer {
             listeners.removeAll()
             clients.values.forEach { $0.connection.cancel() }
             clients.removeAll()
-            sessions.values.forEach { $0.process.hangUp() }
+            sessions.values.forEach {
+                $0.endAsked = true
+                $0.process.hangUp()
+            }
             sessions.removeAll()
             commitRuns.values.forEach { $0.cancel() }
             commitRuns.removeAll()
@@ -443,6 +484,58 @@ public final class HostServer {
 
     private func broadcastFailures() {
         for client in clients.values where client.authenticated { send(.failures(failures), to: client) }
+    }
+
+    /// A part stopped without being asked to: kept until someone has seen
+    /// it, and told to every client.
+    private func report(_ failure: PartFailure) {
+        failures.append(failure)
+        failures = Array(failures.suffix(FailureLog.limit))
+        saveFailures()
+        broadcastFailures()
+    }
+
+    private func saveFailures() {
+        if let directory = configuration.stateDirectory { FailureLog.write(failures, in: directory) }
+    }
+
+    /// Why a session's program ended, when it did not end by itself or as
+    /// asked: killed, or crashed. `code` is what the session reports, 128
+    /// and the signal for a program a signal ended. A signal the user sends
+    /// from the keyboard (Control C) or the host sends to close it is not
+    /// such an end.
+    static func unexpectedEnd(code: Int32) -> String? {
+        guard code > 128 else { return nil }
+        switch code - 128 {
+        case SIGKILL: return "It was killed (SIGKILL), by macOS or by another program."
+        case SIGSEGV: return "It crashed (SIGSEGV)."
+        case SIGBUS: return "It crashed (SIGBUS)."
+        case SIGILL: return "It crashed (SIGILL)."
+        case SIGABRT: return "It crashed (SIGABRT)."
+        case SIGTRAP: return "It crashed (SIGTRAP)."
+        case SIGFPE: return "It crashed (SIGFPE)."
+        default: return nil
+        }
+    }
+
+    /// Sessions of Claude Code whose usage the status line relay could not
+    /// save: reported once each, until it saves again.
+    private func checkStatusLines() {
+        for session in sessions.values where session.info.agent == "claude" {
+            guard let file = usageFile(for: session.info.id) else { continue }
+            let problem = StatusLineRelay.failureFile(for: file.path)
+            guard let said = FileManager.default.contents(atPath: problem) else {
+                session.usageFailureReported = false
+                continue
+            }
+            guard !session.usageFailureReported else { continue }
+            session.usageFailureReported = true
+            let reason = String(decoding: said, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            report(
+                PartFailure(
+                    part: .statusLine, name: session.info.displayName, at: Date(), restarted: false,
+                    reason: "Its usage band keeps the figures it had." + (reason.isEmpty ? "" : " " + reason)))
+        }
     }
 
     private static func parameters(host: String, port: UInt16) -> NWParameters {
@@ -666,6 +759,7 @@ public final class HostServer {
             if changed { applySize(of: session) } else { announceSize(of: session) }
         case .kill(let id):
             guard let session = sessions[id] else { return }
+            session.endAsked = true
             session.process.hangUp()
             queue.asyncAfter(deadline: .now() + 3) { [weak session] in session?.process.forceKill() }
         case .setStartAtLogin(let wanted):
@@ -903,7 +997,7 @@ public final class HostServer {
             // Seen on one device is seen: it goes from every one.
             guard let index = failures.firstIndex(where: { $0.id == id }) else { return }
             failures.remove(at: index)
-            if let directory = configuration.stateDirectory { FailureLog.write(failures, in: directory) }
+            saveFailures()
             broadcastFailures()
         }
     }
@@ -1373,7 +1467,16 @@ public final class HostServer {
 
     private func sessionExited(_ id: SessionID, status: Int32) {
         guard let session = sessions.removeValue(forKey: id) else { return }
-        if let file = usageFile(for: id) { try? FileManager.default.removeItem(at: file) }
+        if let file = usageFile(for: id) {
+            try? FileManager.default.removeItem(at: file)
+            try? FileManager.default.removeItem(atPath: StatusLineRelay.failureFile(for: file.path))
+        }
+        if !session.endAsked, let reason = Self.unexpectedEnd(code: status) {
+            report(
+                PartFailure(
+                    part: .session, name: session.info.displayName, at: Date(), ended: [EndedSession(session.info)], restarted: false,
+                    reason: reason))
+        }
         for clientID in session.arbiter.clients {
             guard let client = clients[clientID] else { continue }
             client.attached.remove(id)

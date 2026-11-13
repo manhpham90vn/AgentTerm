@@ -17,6 +17,14 @@ public struct PartFailure: Codable, Equatable, Identifiable, Sendable {
 
         /// The host, `agenttermd`, which holds every session.
         public static let host = Part(rawValue: "host")
+        /// The program of a session (`name`), killed or crashed rather than
+        /// ended. It is not started again: its session ends with it.
+        public static let session = Part(rawValue: "session")
+        /// The hold that keeps the Mac awake: macOS would not give it.
+        public static let keepAwake = Part(rawValue: "keepAwake")
+        /// What Claude Code tells its status line, which the host reads for
+        /// the usage of a session (`name`): it could not be saved.
+        public static let statusLine = Part(rawValue: "statusLine")
     }
 
     /// Names this report, for `dismissFailure`.
@@ -80,10 +88,19 @@ extension PartFailure {
     /// Mac and on the iPhone. `mac` names the Mac the host is on when it is
     /// not the one the app runs on.
     public func headline(on mac: String? = nil, now: Date = Date()) -> String {
+        let when = Self.when(at, now: now)
+        let onMac = mac.map { " on \($0)" } ?? ""
+        let named = name.map { "“\($0)”" } ?? "a session"
         let what: String
         switch part {
         case .host:
             what = mac.map { "The host on \($0)" } ?? "The AgentTerm host"
+        case .session:
+            return "The program of \(named)\(onMac) stopped unexpectedly \(when)."
+        case .keepAwake:
+            return "The Mac\(onMac) could not be kept awake \(when)" + (restarted ? ", and is kept awake again." : ".")
+        case .statusLine:
+            return "The usage of \(named)\(onMac) could not be saved \(when)."
         default:
             // A part this build does not know yet.
             what = "A part of AgentTerm (\(part.rawValue)\(name.map { ", \($0)" } ?? ""))\(mac.map { " on \($0)" } ?? "")"
@@ -92,19 +109,27 @@ extension PartFailure {
             broken
             ? "and keeps stopping, so it is not started again by itself."
             : restarted ? "and was started again." : "and could not be started again."
-        return "\(what) stopped unexpectedly \(Self.when(at, now: now)) \(outcome)"
+        return "\(what) stopped unexpectedly \(when) \(outcome)"
     }
 
     /// What ended with it, and why it stopped when that is known.
     public var details: String {
-        var text: String
-        switch ended.count {
-        case 0: text = "No session was running in it."
-        case 1: text = "Its session ended: \(ended[0].name)."
-        default: text = "Its \(ended.count) sessions ended: \(ended.map(\.name).joined(separator: ", "))."
+        var parts: [String] = []
+        switch part {
+        case .keepAwake, .statusLine:
+            // Nothing ends with these: what they are for stops.
+            break
+        case .session:
+            parts.append("Its session ended.")
+        default:
+            switch ended.count {
+            case 0: parts.append("No session was running in it.")
+            case 1: parts.append("Its session ended: \(ended[0].name).")
+            default: parts.append("Its \(ended.count) sessions ended: \(ended.map(\.name).joined(separator: ", ")).")
+            }
         }
-        if let reason, !reason.isEmpty { text += " " + reason }
-        return text
+        if let reason, !reason.isEmpty { parts.append(reason) }
+        return parts.joined(separator: " ")
     }
 
     /// "at 14:02" today, "on 12 Nov at 14:02" before.

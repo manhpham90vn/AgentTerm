@@ -180,6 +180,8 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | SES-20 | An image of 1.5 MB being written, more than is kept of one sequence | A client attaches in the middle of it, and the rest is written | The client is sent a few kilobytes, misses the image and draws none of it as text; what follows the image shows | H |
 | SES-21 | A session with 10,000 lines that says nothing meanwhile | Ten clients attach one after the other | The screen is written out once: the ten take less time together than the first did. After more output it is written out anew. Writing out 10,040 lines takes less than eight times as long as writing out 2,640: in proportion to the lines, not more | H |
 | SES-22 | A client that is still connecting | It is asked to send something | That waits and follows the greeting; the host answers it instead of closing a client whose first word was not its hello | H |
+| SES-23 | A session whose program waits | Its program is killed (SIGKILL) | Every client is told that the program of that session stopped unexpectedly, that it was killed, and that its session ended; it is not started again | H |
+| SES-24 | A session whose program ignores the hang-up; another that waits | The first is closed from a device (SIGHUP, then SIGKILL); the second is stopped by Control C (SIGINT) | Nothing is reported | H |
 
 ### Session names and usage
 
@@ -192,6 +194,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | USE-2 | A sign-in for one service; one that has run out | The host asks for usage | The sign-in goes only to the service that issued it; one that ran out is not sent and never renewed | H |
 | USE-3 | An agent's session in front | Look under the terminal, press the band | The band shows model, context and limits; pressing it opens the details | hand (the band is there in M; its figures need a real account) |
 | USE-4 | A user with a status line of their own | Claude Code runs AgentTerm's status line | The user's own still runs, with the same input | H |
+| USE-5 | A Claude Code session whose usage the status line relay cannot save | The relay runs; it saves again; then it cannot again | The relay leaves why next to the file and removes it once it saves. The host reports it once for the session, with the relay's words, and again after it was saved in between | H |
 
 ### The Mac at a glance
 
@@ -287,6 +290,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | AWAKE-1 | Keep awake on | A session starts; the last session ends | The hold on sleep is taken, then let go | H |
 | AWAKE-2 | Keep awake off on both devices | Switch it on on the Mac; switch it off, or an option on, on a second device | Each device shows what the other set | H, P, M, X |
 | AWAKE-3 | Keep awake on with "after 1 hour" | The hour passes | The switch goes off on both devices | H |
+| AWAKE-4 | Keep awake on, a session running, macOS refusing the hold | Refreshes go by; then macOS gives the hold | It is reported once, that the Mac could not be kept awake; once held, the report says it is kept awake again | H |
 | LOGIN-1 | A host that can be started at login | A client switches Start at Login on, then off | A launch agent naming this host's program is written, then removed; every client is told | H |
 | LOGIN-2 | A host with a state folder of its own | Connect | No client shows the switch | H |
 | LOGIN-3 | Start at Login on | Log out and in again | The host is running without the app having been opened | hand |
@@ -450,6 +454,15 @@ Found while #20 was built (0.6.0), each shown by a test that failed first:
 - With the app closed, a host that was killed was not started again: the
   launch agent had no `KeepAlive`, and the iPhone could not reach the Mac
   until the app was opened (LOGIN-6).
+
+Found while #20 was built, the third part, each shown by a test that
+failed while the host reported nothing:
+
+- A session's program that was killed closed its tab with nothing said
+  (SES-23).
+- A hold on sleep that macOS refused was not known to anyone (AWAKE-4).
+- Usage the status line relay could not save left the usage band with
+  its old figures, without a word (USE-5).
 
 Found on CI in 0.6.0 (#32): SES-21 asked that a long session be written
 out in less than 2 seconds, which held here and failed on a slower runner

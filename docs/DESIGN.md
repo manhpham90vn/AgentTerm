@@ -667,14 +667,14 @@ the same folder can therefore be mixed up; the History tab is exact.
 
 A part of AgentTerm that stops without being asked to is reported to every
 client in a message of its own, `failures([PartFailure])`, rather than left
-for the clients to work out from a list that emptied. Today the part is the
-host; the status line relay, the keep-awake hold and a session's program
-are to use the same message. A `PartFailure` says:
+for the clients to work out from a list that emptied. The parts are the
+host, a session's program, the hold that keeps the Mac awake, and the
+status line relay (see "The other parts" below). A `PartFailure` says:
 
 | Field | Means |
 |---|---|
 | `id` | Names the report, for `dismissFailure` |
-| `part` | Which part: `host` today. Text, not a closed list, so a client reads a part added after it was built |
+| `part` | Which part: `host`, `session`, `keepAwake`, `statusLine`. Text, not a closed list, so a client reads a part added after it was built |
 | `name` | Which one, for a part there are several of (a session); nil for the host |
 | `at` | When it stopped, as near as is known |
 | `ended` | The sessions that ended with it: name, folder, agent |
@@ -688,6 +688,27 @@ it for all of them. The list is kept in `failures.json` in the state
 folder, at most twenty, so a host that is restarted, or dies itself, still
 has it. Both apps word a report the same way (`PartFailure.headline`,
 `details`).
+
+**The other parts.** None of them is started again by the host:
+
+- **A session's program** that dies of SIGKILL or of a signal a crash
+  gives (SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGTRAP, SIGFPE) is reported
+  with its session, which ends as it always did. A program the user
+  stopped (Control C, SIGINT) or that ended by itself is not, nor one whose
+  end was asked for: closing a session sends SIGHUP and, three seconds
+  later, SIGKILL, and the host notes that the end was asked for before it
+  sends either. A program that exits by itself with the status a signal
+  would give (137 for SIGKILL) is taken for killed. Offering to resume the
+  agent's conversation in a new session is for a later release.
+- **The hold that keeps the Mac awake** that macOS refuses is reported
+  once. The host asks for it again on every refresh, and the report says
+  so once it is held (`restarted`).
+- **The status line relay** runs once each time Claude Code updates its
+  status line, so there is nothing that keeps running to start again.
+  When it cannot save what it was given, it writes why next to the file
+  (`<file>.failed`) and removes that once it saves again. The host looks
+  for it on every refresh and reports it once for the session, and again
+  only if it was saved in between.
 
 **How a death is told from a stop.** A running host keeps a marker,
 `host-<port>.json` in its state folder (`HostMarker`): its process, and its
