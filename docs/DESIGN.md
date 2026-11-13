@@ -607,6 +607,36 @@ What cannot be known:
   others. Escape alone or Control C typed to a working session makes its
   state not known until the agent says more.
 
+## When an agent is done or needs you
+
+Each app works out what to tell of from the states the host sends (#3),
+with `AgentNotice.notices(in:told:)`: a session whose agent is done or waits
+in a state it was not told in before. `told` is kept by the app for each
+Mac across connections, so that coming back to the app tells nothing
+twice; a session that works again, or whose state is not known, is
+forgotten in it, so that what it says next is new.
+
+**Whether someone is at the Mac.** The host works it out on its refresh and
+when it changes: the Mac app says whether it is in front
+(`appInFront(Bool)`, only to its own Mac's host), and `MacUse.idleSeconds`
+reads macOS's `HIDIdleTime`. Five minutes without either is no one there.
+Every client is told `macInUse(Bool)`; the iPhone tells nothing while it
+is true.
+
+**On the iPhone.** In front, a banner over the sessions list, for a session
+other than the one on screen. Behind, a local notification
+(`AgentNotifications`): the app asks iOS for a little more time when it
+leaves the front (`beginBackgroundTask`), during which the connection
+lives. A question's or a finished task's notification has a text reply
+action that asks for the phone to be unlocked; the reply is sent as
+`answer(session:to:text:)`, naming the state it answers, and the host types
+it, then Return, only while the session is still in that state; else it
+answers `error` and types nothing. A reply given while the connection was
+gone waits for it. Notifications hide their text where iOS hides previews.
+
+**On the Mac.** A banner over the window for a session that is not the one
+selected while the app is in front.
+
 ## Shells an agent opens
 
 AgentTerm's MCP server is `agenttermd mcp` (`AgentShellsMCP`): JSON-RPC, one

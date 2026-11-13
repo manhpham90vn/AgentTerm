@@ -51,6 +51,10 @@ struct RootView: View {
                 ForEach(model.failures) { failure in
                     FailureBanner(failure: failure)
                 }
+                // An agent of another session finished, or waits for you.
+                if let notice = model.agentNotice {
+                    AgentNoticeBanner(notice: notice)
+                }
                 CenterView()
             }
             .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity)
@@ -359,6 +363,41 @@ private struct FailureBanner: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.orange.opacity(0.12))
+    }
+}
+
+/// An agent of a session that is not in front finished its task or waits
+/// for the user (#22): which session, and why. Touching it opens it.
+private struct AgentNoticeBanner: View {
+    @EnvironmentObject private var model: AppModel
+    let notice: AgentNotice
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: AgentStateMark.symbol(for: notice.state)).foregroundStyle(AgentStateMark.color(for: notice.state))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(notice.name) \(notice.why)")
+                    .font(.system(size: 12, weight: .medium))
+                if let detail = notice.detail {
+                    Text(detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 8)
+            Button("Open") { model.open(notice) }
+                .controlSize(.small)
+            Button("Dismiss") { model.dismissAgentNotice() }
+                .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(AgentStateMark.color(for: notice.state).opacity(0.12))
+        .contentShape(Rectangle())
+        .onTapGesture { model.open(notice) }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("agent-notice")
     }
 }
 

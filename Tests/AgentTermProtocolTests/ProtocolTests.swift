@@ -207,4 +207,30 @@ final class ProtocolTests: XCTestCase {
         XCTAssertTrue(usage.headline(now: at).hasPrefix("The usage of “review” could not be saved at "))
         XCTAssertEqual(usage.details, "")
     }
+
+    /// NOTE-1: an agent that is done or waits is told once; one that asks
+    /// something else is told again; one that keeps waiting, or works, is not.
+    func testWhatIsToldOfTheAgents() {
+        func session(_ id: SessionID, _ state: AgentState?) -> SessionInfo {
+            SessionInfo(id: id, title: "s\(id)", cwd: "/p", size: .default, createdAt: Date(), state: state)
+        }
+        let permission = AgentState.waitingForPermission(AgentQuestion(text: "make test"))
+        let done = AgentState.done(said: "All tests pass.")
+        var told: [SessionID: AgentState] = [:]
+        // On connecting: what waits or is done, at once.
+        XCTAssertEqual(AgentNotice.notices(in: [session(1, permission), session(2, .working(since: Date())), session(3, nil)], told: &told).map(\.session), [1])
+        XCTAssertEqual(AgentNotice.notices(in: [session(1, permission)], told: &told), [], "keeps waiting: told once")
+        XCTAssertEqual(AgentNotice.notices(in: [session(1, .working(since: Date()))], told: &told), [])
+        let again = AgentNotice.notices(in: [session(1, done)], told: &told)
+        XCTAssertEqual(again.map(\.why), ["is done"])
+        XCTAssertEqual(again.first?.detail, "All tests pass.")
+        XCTAssertTrue(again.first?.takesAReply == true)
+        // Asked something else, told again.
+        let question = AgentState.waitingForAnswer(AgentQuestion(text: "Which colour?", choices: ["Red", "Blue"]))
+        XCTAssertEqual(AgentNotice.notices(in: [session(1, question)], told: &told).first?.detail, "Which colour?\nRed · Blue")
+        XCTAssertFalse(AgentNotice(session: 1, name: "", folder: "", state: permission).takesAReply, "a permission is answered in the session")
+        // Ended: forgotten.
+        _ = AgentNotice.notices(in: [], told: &told)
+        XCTAssertTrue(told.isEmpty)
+    }
 }

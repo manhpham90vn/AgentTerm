@@ -43,6 +43,7 @@ struct AgentTermApp: App {
             .onOpenURL { model.pair(with: $0) }
             .onChange(of: scenePhase) { _, phase in
                 if phase == .active { model.resume() }
+                if phase == .background { model.enteredBackground() }
             }
         }
     }

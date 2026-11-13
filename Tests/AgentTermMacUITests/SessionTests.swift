@@ -55,6 +55,36 @@ final class SessionTests: MacUITestCase {
         shot("waiting")
     }
 
+    /// NOTE-4: an agent of a session that is not in front that comes to
+    /// wait is told in a banner, which opens it.
+    func testAnAgentThatWaitsInAnotherSessionIsToldInABanner() throws {
+        let phone = try device()
+        app.press(.button("Shell"))
+        wait("the shell to start") { phone.sessions.count == 1 }
+        let shell = try XCTUnwrap(phone.sessions.first?.id)
+        // A stand-in for Claude Code that asks permission a moment after it starts.
+        let folder = root.appendingPathComponent("stand-in")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let script = folder.appendingPathComponent("claude")
+        let event = #"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"make deploy"}}"#
+        try "#!/bin/sh\nsleep 2\nprintf '%s' '\(event)' | '\(hostExecutable.path)' hook claude PermissionRequest\nexec sleep 600\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        phone.send(.create(CreateRequest(command: script.path, cwd: project.path, title: "deploy")))
+        wait("the agent's session") { phone.sessions.count == 2 }
+        let agent = try XCTUnwrap(phone.sessions.first { $0.id != shell }?.id)
+        // The shell is the one in front.
+        app.press(.id("session-\(shell)"))
+
+        // Named after the conversation the stand-in folder's history gives it.
+        app.wait(for: .containing("needs permission"), timeout: 15)
+        app.wait(for: .containing("make deploy"))
+        shot("notice")
+        app.press(.button("Open"))
+        app.waitGone(.containing("needs permission"))
+        app.wait(for: .id("session-\(agent)"))
+    }
+
     func testStartingSessionsAndFindingThemAgainAfterReopeningTheApp() throws {
         let phone = try device()
         // SES-2: a shell from the launch buttons.

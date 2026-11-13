@@ -13,6 +13,14 @@ struct RootTabs: View {
             SessionsView()
                 .tabItem { Label("Sessions", systemImage: "terminal") }
                 .tag("sessions")
+                // An agent of another session finished, or needs you.
+                .overlay(alignment: .top) {
+                    if let notice = model.agentNotice, notice.session != model.openSessionID {
+                        AgentNoticeBanner(notice: notice)
+                            .padding(.horizontal, 12)
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
+                }
             NavigationStack {
                 HistoryList(folder: nil)
                     .background(Palette.canvas.ignoresSafeArea())
@@ -108,6 +116,17 @@ private struct SettingsTab: View {
                     )
                 }
 
+                Section {
+                    Toggle("Tell me when an agent is done or needs me", isOn: $model.notifyAgents)
+                        .accessibilityIdentifier("notify-agents")
+                } header: {
+                    Text("Agents")
+                } footer: {
+                    Text(
+                        "While you work from this iPhone: a banner in the app, and a notification just after you leave it. Once iOS puts the app to sleep, after a short while, nothing arrives until you open it again. Nothing is told while someone is at \(macName). What an agent said shows on the lock screen only if iOS shows previews there."
+                    )
+                }
+
                 // Git, as on the Mac: commit messages, then how diffs are shown.
                 Section {
                     Button {
@@ -192,5 +211,41 @@ private struct SettingsTab: View {
                 Text("Sessions keep running on \(macName). To connect again you pair with it once more.")
             }
         }
+    }
+}
+
+/// An agent of a session that is not on screen finished or waits (#22):
+/// which session, and why. Touching it opens the session.
+private struct AgentNoticeBanner: View {
+    @EnvironmentObject private var model: PhoneModel
+    let notice: AgentNotice
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(notice.name) \(notice.why)")
+                    .font(.subheadline.weight(.semibold))
+                if let detail = notice.detail {
+                    Text(detail)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
+            }
+            Spacer(minLength: 0)
+            Button {
+                model.dismissAgentNotice()
+            } label: {
+                Image(systemName: "xmark").font(.footnote.weight(.semibold))
+            }
+            .accessibilityLabel("Dismiss")
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.thinMaterial))
+        .contentShape(Rectangle())
+        .onTapGesture { model.open(notice) }
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("agent-notice")
+        .accessibilityAddTraits(.isButton)
     }
 }

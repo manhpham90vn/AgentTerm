@@ -49,6 +49,9 @@ public final class HostServer {
         /// Installs the MCP server in the agents' configuration (#10). Nil
         /// installs nothing: a test's host, a trial run.
         public var agentShells: AgentShellsInstall?
+        /// How long since a key or the pointer was used on the Mac, in
+        /// seconds; nil when that is not known. A test stands one in.
+        public var idleSeconds: () -> TimeInterval? = { MacUse.idleSeconds() }
         /// Asks the agents' services what their accounts have left. `nil`
         /// asks nobody, which is what tests want.
         public var fetchAccountUsage: ((String) -> AccountUsage?)?
@@ -123,6 +126,8 @@ public final class HostServer {
         let isLocal: Bool
         var identity: DeviceRegistry.Identity?
         var attached: Set<SessionID> = []
+        /// A Mac app that says it is in front: someone is at the Mac.
+        var inFront = false
 
         var authenticated: Bool { identity != nil }
         /// The Mac's own apps may pair and revoke devices.
@@ -388,6 +393,7 @@ public final class HostServer {
             if let file = self.markerFile { HostMarker.touch(file) }
             // Power may have been plugged in or pulled since the last look.
             self.updateSleepGuard()
+            self.updateMacInUse()
             self.checkStatusLines()
             // In case the folder's watch missed one.
             self.readEvents()
@@ -503,6 +509,23 @@ public final class HostServer {
         marker.sessions = now
         marker.write(to: file)
         self.marker = marker
+    }
+
+    // MARK: Whether someone is at the Mac (#22, #24)
+
+    /// Five minutes without a key or the pointer, and no app in front: no
+    /// one is at the Mac.
+    static let idleBeforeAway: TimeInterval = 5 * 60
+    private var macInUse = true
+
+    /// Works it out again, and tells every client when it changed.
+    private func updateMacInUse() {
+        let front = clients.values.contains { $0.authenticated && $0.inFront }
+        let idle = configuration.idleSeconds()
+        let now = front || idle.map { $0 < Self.idleBeforeAway } ?? true
+        guard now != macInUse else { return }
+        macInUse = now
+        for client in clients.values where client.authenticated { send(.macInUse(now), to: client) }
     }
 
     private func broadcastFailures() {
@@ -685,6 +708,7 @@ public final class HostServer {
     private func drop(_ client: Client) {
         guard clients.removeValue(forKey: client.id) != nil else { return }
         client.connection.cancel()
+        if client.inFront { updateMacInUse() }
         for id in client.attached {
             guard let session = sessions[id] else { continue }
             if session.arbiter.remove(client.id) { applySize(of: session) }
@@ -768,6 +792,20 @@ public final class HostServer {
             handleAgentShell(id: id, key: key, request: request, from: client)
         case .setAgentShells(let on):
             setAgentShells(on)
+        case .answer(let id, let state, let text):
+            // Only while the agent still asks what the reply answers: one
+            // that comes later is not typed into what it asks next.
+            guard let session = sessions[id], session.info.state == state else {
+                send(.error("The agent has moved on since: the reply was not sent."), to: client)
+                return
+            }
+            session.process.write(Data(text.utf8))
+            // Return a moment later, as a person types it: an agent's
+            // prompt takes text that arrives with Return as pasted.
+            queue.asyncAfter(deadline: .now() + 0.15) { [weak session] in session?.process.write(Data("\r".utf8)) }
+        case .appInFront(let front):
+            client.inFront = front
+            updateMacInUse()
         case .attach(let id, let size, let have):
             guard let session = sessions[id] else {
                 send(.error("no such session"), to: client)
@@ -1323,6 +1361,7 @@ public final class HostServer {
         send(.keepAwake(keepAwake), to: client)
         send(.keepAwakeOptions(keepAwakeOptions), to: client)
         if let install = configuration.agentShells { send(.agentShells(install.isOn), to: client) }
+        send(.macInUse(macInUse), to: client)
         send(.commitWriter(commitWriter), to: client)
         if let item = configuration.loginItem { send(.startAtLogin(item.isOn), to: client) }
         // Without any yet, the client is sent none and hands over its own.

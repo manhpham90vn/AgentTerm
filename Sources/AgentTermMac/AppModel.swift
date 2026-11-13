@@ -175,6 +175,28 @@ final class AppModel: ObservableObject {
     /// host does not install it.
     @Published private(set) var agentShells: Bool?
 
+    /// An agent of a session that is not the one in front finished, or
+    /// waits for the user (#22): shown until it is opened or dismissed.
+    @Published private(set) var agentNotice: AgentNotice?
+    /// What was told of each session, so that each is told once.
+    private var told: [SessionID: AgentState] = [:]
+
+    /// Opens the session a notice is about.
+    func open(_ notice: AgentNotice) {
+        agentNotice = nil
+        guard let session = sessions.first(where: { $0.id == notice.session }) else { return }
+        select(session: session)
+    }
+
+    func dismissAgentNotice() { agentNotice = nil }
+
+    /// The host of this Mac learns from it whether someone is at the Mac:
+    /// another Mac's host is not told, since this Mac is not that one.
+    private func tellWhetherInFront() {
+        guard !isRemote else { return }
+        connection?.send(.appInFront(NSApp.isActive))
+    }
+
     func setAgentShells(_ on: Bool) {
         agentShells = on
         connection?.send(.setAgentShells(on))
@@ -444,7 +466,13 @@ final class AppModel: ObservableObject {
             .store(in: &observers)
         // The SSH configuration may have been edited while the app was behind.
         NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
-            .sink { [weak self] _ in self?.refreshSSHHosts() }
+            .sink { [weak self] _ in
+                self?.refreshSSHHosts()
+                self?.tellWhetherInFront()
+            }
+            .store(in: &observers)
+        NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
+            .sink { [weak self] _ in self?.tellWhetherInFront() }
             .store(in: &observers)
         diffTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
@@ -896,6 +924,7 @@ final class AppModel: ObservableObject {
         switch message {
         case .welcome(let version, _):
             hostVersion = version
+            tellWhetherInFront()
             refreshSSHHosts()
             hostMatch = ProtocolMatch(host: version)
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
@@ -910,6 +939,10 @@ final class AppModel: ObservableObject {
         case .sessions(let list):
             sessionsKnown = true
             sessions = list
+            // The session in front of someone at this window needs no notice.
+            let shown = NSApp.isActive ? selectedSession : nil
+            if let latest = AgentNotice.notices(in: list, told: &told).last(where: { $0.session != shown }) { agentNotice = latest }
+            if let current = agentNotice, !list.contains(where: { $0.id == current.session && $0.state == current.state }) { agentNotice = nil }
             // Pick up sessions that were already running before this window opened.
             for info in list where controllers[info.id] == nil {
                 connection?.send(.attach(session: info.id, size: info.size))
@@ -921,8 +954,8 @@ final class AppModel: ObservableObject {
             startAtLogin = on
         case .agentShells(let on):
             agentShells = on
-        case .agentShellResult:
-            // For `agenttermd mcp`, not for an app.
+        case .agentShellResult, .macInUse:
+            // For `agenttermd mcp`, and for the iPhone.
             break
         case .keepAwake(let on):
             keepAwake = on

@@ -80,6 +80,32 @@ itself.
 - Antigravity does not say when it waits for permission: while it runs a
   tool, its state is not shown, and its session says why.
 
+### When an agent is done or needs you
+
+- While the Mac is used from the iPhone, the iPhone says when an agent has
+  finished its task or needs an instruction (a permission, a question):
+  a banner in the app for a session other than the one on screen, and a
+  notification just after the app was left, while iOS lets it run. Once
+  iOS has put the app to sleep nothing arrives, until it is opened again.
+  There is no push through Apple.
+- Each is told once: an agent that asks again something else is told
+  again, one that keeps waiting is not. On connecting, what waits or is
+  done and was not told yet is told at once.
+- Nothing is told on the iPhone while someone is at the Mac: its app in
+  front, or a key or the pointer used in the last five minutes.
+- A notification for a question, or for a finished task, takes a short
+  reply, written or dictated, sent as the next message; it asks for the
+  phone to be unlocked first. One for a permission has no buttons: the
+  agents do not say which choices they offer, so touching it opens the
+  session. A reply that arrives after the agent moved on is dropped, and
+  the app says so.
+- What the agent said shows on the lock screen only where iOS shows
+  previews there; by default it does not.
+- A switch in the iPhone's Settings ("Tell me when an agent is done or
+  needs me") turns it off.
+- On the Mac, a banner says so for a session that is not the one in front,
+  and opens it.
+
 ### Shells an agent opens
 
 - An agent can open a shell as a session the user sees: asked to "open an

@@ -3,6 +3,7 @@ import AgentTermProtocol
 import AgentTermTelemetry
 import AgentTermTerminal
 import SwiftUI
+import UserNotifications
 
 enum LinkStatus: Equatable {
     case connecting
@@ -288,6 +289,79 @@ final class PhoneModel: ObservableObject {
     /// Attempts to connect since the last time it worked.
     private var failedAttempts = 0
     private var active = true
+
+    // MARK: Agents that finished or need an instruction (#22)
+
+    /// Shown as a banner while the app is in front, until it is opened or
+    /// dismissed.
+    @Published private(set) var agentNotice: AgentNotice?
+    /// Someone is at the Mac: then nothing is told here.
+    @Published private(set) var macInUse = false
+    /// Whether to be told at all: a switch in the Settings tab.
+    @Published var notifyAgents: Bool = UserDefaults.standard.object(forKey: "notifyAgents") as? Bool ?? true {
+        didSet {
+            UserDefaults.standard.set(notifyAgents, forKey: "notifyAgents")
+            if notifyAgents { notifications.askOnce() }
+        }
+    }
+    /// What was told of each Mac's sessions, so that each is told once,
+    /// also across connections.
+    private var told: [String: [SessionID: AgentState]] = [:]
+    /// Replies given while the connection was gone, sent once it is back.
+    private var pendingAnswers: [(session: SessionID, state: AgentState, text: String)] = []
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    let notifications = AgentNotifications()
+
+    /// Tells of what the host's sessions say now, where the user is: a
+    /// banner in the app, a notification just outside it.
+    private func tellOfAgents(_ list: [SessionInfo]) {
+        guard let mac = pairing?.id else { return }
+        var known = told[mac] ?? [:]
+        let notices = AgentNotice.notices(in: list, told: &known)
+        told[mac] = known
+        if let current = agentNotice, !list.contains(where: { $0.id == current.session && $0.state == current.state }) { agentNotice = nil }
+        guard notifyAgents, !macInUse else { return }
+        for notice in notices {
+            // The session on screen is being looked at.
+            if active, notice.session == openSessionID { continue }
+            if active { agentNotice = notice } else { notifications.post(notice, mac: mac, macName: pairing?.name ?? "the Mac") }
+        }
+    }
+
+    /// Opens the session a notice is about, in the Sessions tab.
+    func open(_ notice: AgentNotice) {
+        agentNotice = nil
+        guard sessions.contains(where: { $0.id == notice.session }) else { return }
+        tab = "sessions"
+        path = [.session(notice.session)]
+    }
+
+    func dismissAgentNotice() { agentNotice = nil }
+
+    /// A reply to an agent where it was told of: typed into its session by
+    /// the host only while the agent still asks what it answers.
+    func answer(session: SessionID, to state: AgentState, text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        if status == .connected, let connection {
+            connection.send(.answer(session: session, to: state, text: text))
+        } else {
+            pendingAnswers.append((session, state, text))
+            resume()
+        }
+    }
+
+    /// The app left the front: iOS lets it run a little longer, during
+    /// which the connection lives and a notification can still be made.
+    func enteredBackground() {
+        active = false
+        guard backgroundTask == .invalid else { return }
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Agents") { [weak self] in
+            guard let self else { return }
+            UIApplication.shared.endBackgroundTask(self.backgroundTask)
+            self.backgroundTask = .invalid
+        }
+    }
     private static let fontSizeKey = "terminalFontSize"
     private static let currentHostKey = "currentHost"
     static let fontSizes: ClosedRange<Double> = 9...18
@@ -298,6 +372,7 @@ final class PhoneModel: ObservableObject {
         hosts = PairingStore.load()
         let last = UserDefaults.standard.string(forKey: Self.currentHostKey)
         pairing = hosts.first { $0.id == last } ?? hosts.first
+        notifications.model = self
         if pairing != nil { connect() }
     }
 
@@ -568,6 +643,10 @@ final class PhoneModel: ObservableObject {
     /// Called when the app comes to the front.
     func resume() {
         active = true
+        if backgroundTask != .invalid {
+            UIApplication.shared.endBackgroundTask(backgroundTask)
+            backgroundTask = .invalid
+        }
         if pairing != nil, connection == nil {
             connect()
         } else {
@@ -672,6 +751,8 @@ final class PhoneModel: ObservableObject {
             hostMatch = ProtocolMatch(host: version)
             if hostMatch != .same { Telemetry.shared.record(.versionMismatch(hostIsOlder: hostMatch == .hostOlder)) }
             status = .connected
+            for answer in pendingAnswers { connection?.send(.answer(session: answer.session, to: answer.state, text: answer.text)) }
+            pendingAnswers.removeAll()
             failedAttempts = 0
             reattachAfterConnect = true
             // Whatever was under way when the connection dropped got no answer.
@@ -685,6 +766,7 @@ final class PhoneModel: ObservableObject {
         case .sessions(let list):
             sessions = list
             sessionsKnown = true
+            tellOfAgents(list)
             if let pairing { pruneComposeDrafts(of: pairing.id, keeping: list) }
             syncSessionLayout()
             if let open = openSessionID, !list.contains(where: { $0.id == open }) {
@@ -717,6 +799,8 @@ final class PhoneModel: ObservableObject {
         case .agentShellResult:
             // For `agenttermd mcp`, not for an app.
             break
+        case .macInUse(let inUse):
+            macInUse = inUse
         case .keepAwake(let on):
             keepAwake = on
         case .keepAwakeOptions(let options):
@@ -1079,5 +1163,79 @@ final class PhoneModel: ObservableObject {
         fontSize = size
         UserDefaults.standard.set(size, forKey: Self.fontSizeKey)
         controller?.setFontSize(size)
+    }
+}
+
+/// Local notifications of agents that finished or need an instruction (#22).
+/// There is no push through Apple: the app makes them itself, from what the
+/// host says over its connection, while iOS lets the app run.
+final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
+    weak var model: PhoneModel?
+    private static let replyCategory = "agent-reply"
+    private static let openCategory = "agent-open"
+    private var asked = false
+
+    override init() {
+        super.init()
+        let center = UNUserNotificationCenter.current()
+        center.delegate = self
+        // A reply runs something on the Mac: the phone is unlocked first.
+        let reply = UNTextInputNotificationAction(
+            identifier: "reply", title: "Reply", options: [.authenticationRequired], textInputButtonTitle: "Send", textInputPlaceholder: "Your answer")
+        center.setNotificationCategories([
+            UNNotificationCategory(identifier: Self.replyCategory, actions: [reply], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle]),
+            UNNotificationCategory(identifier: Self.openCategory, actions: [], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle]),
+        ])
+    }
+
+    /// Asks iOS, the first time, whether the app may notify.
+    func askOnce() {
+        guard !asked else { return }
+        asked = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    func post(_ notice: AgentNotice, mac: String, macName: String) {
+        askOnce()
+        let content = UNMutableNotificationContent()
+        content.title = "\(notice.name) \(notice.why)"
+        content.subtitle = "\((notice.folder as NSString).lastPathComponent) on \(macName)"
+        // What the agent said shows only where iOS shows previews: by
+        // default not on the lock screen.
+        content.body = notice.detail ?? ""
+        content.sound = .default
+        content.threadIdentifier = "\(mac)-\(notice.session)"
+        content.categoryIdentifier = notice.takesAReply ? Self.replyCategory : Self.openCategory
+        content.userInfo = [
+            "mac": mac, "session": Int(notice.session),
+            "state": String(decoding: MessageCoding.encode(notice.state), as: UTF8.self),
+        ]
+        let request = UNNotificationRequest(identifier: "\(mac)-\(notice.session)", content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
+    }
+
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void
+    ) {
+        let info = response.notification.request.content.userInfo
+        let session = (info["session"] as? Int).map { SessionID(truncatingIfNeeded: $0) }
+        let state = (info["state"] as? String).flatMap { MessageCoding.decode(AgentState.self, from: Data($0.utf8)) }
+        DispatchQueue.main.async { [weak self] in
+            defer { completionHandler() }
+            guard let model = self?.model, let session, let state, model.pairing?.id == info["mac"] as? String else { return }
+            if let reply = response as? UNTextInputNotificationResponse {
+                model.answer(session: session, to: state, text: reply.userText)
+            } else if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
+                model.open(AgentNotice(session: session, name: "", folder: "", state: state))
+            }
+        }
+    }
+
+    /// In front, the app shows its own banner instead.
+    func userNotificationCenter(
+        _ center: UNUserNotificationCenter, willPresent notification: UNNotification,
+        withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+    ) {
+        completionHandler([])
     }
 }

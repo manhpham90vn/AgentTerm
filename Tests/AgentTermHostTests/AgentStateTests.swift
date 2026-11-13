@@ -190,6 +190,8 @@ final class AgentStateHostTests: XCTestCase {
     private var server: HostServer!
     private var port: UInt16 = 0
     private let token = "test-token-0123456789abcdef0123456789"
+    /// How long the stand-in Mac has been left alone, in seconds.
+    private var idle: TimeInterval = 0
     /// Whether the host holds the Mac awake now, through the stand-in hold.
     private var held = false
     private let holdLock = NSLock()
@@ -216,6 +218,12 @@ final class AgentStateHostTests: XCTestCase {
             return true
         }
         configuration.isOnPower = { true }
+        configuration.idleSeconds = { [weak self] in
+            self?.holdLock.lock()
+            defer { self?.holdLock.unlock() }
+            return self?.idle
+        }
+        configuration.refreshInterval = 0.2
         server = HostServer(configuration: configuration)
         port = try server.start()
     }
@@ -354,5 +362,53 @@ final class AgentStateHostTests: XCTestCase {
     func testOptionsSavedBeforeReadWithTheNewOneOff() throws {
         let old = try XCTUnwrap(MessageCoding.decode(KeepAwakeOptions.self, from: Data(#"{"display":true,"onlyOnPower":false}"#.utf8)))
         XCTAssertEqual(old, KeepAwakeOptions(display: true))
+    }
+
+    /// NOTE-2: a reply reaches the session while the agent still asks what
+    /// it answers, and is dropped, with a word, once it moved on.
+    func testAReplyIsTypedOnlyWhileItIsCurrent() throws {
+        let script = try standIn()
+        let phone = Client(port: port, token: token, name: "phone")
+        waitUntil("connected") { !phone.messages.isEmpty }
+        phone.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: "agent")))
+        waitUntil("the session") { phone.sessions.count == 1 }
+        let agent = try XCTUnwrap(phone.sessions.first)
+        phone.connection.send(.attach(session: agent.id, size: TermSize(cols: 80, rows: 24)))
+        // Through the stand-in's first steps by typing, to "waiting for permission".
+        phone.connection.sendInput(Data("\n".utf8), to: agent.id)
+        waitUntil("working") { phone.sessions.first?.state?.isWorking == true }
+        phone.connection.sendInput(Data("\n".utf8), to: agent.id)
+        let waiting = AgentState.waitingForPermission(AgentQuestion(text: "make test"))
+        waitUntil("waiting") { phone.sessions.first?.state == waiting }
+
+        // A reply to what it asked before is dropped, with a word.
+        phone.connection.send(.answer(session: agent.id, to: .done(said: "earlier"), text: "go on"))
+        waitUntil("the reply to be refused") {
+            phone.messages.contains { if case .error(let text) = $0 { return text.contains("moved on") } else { return false } }
+        }
+        XCTAssertEqual(phone.sessions.first?.state, waiting, "nothing was typed")
+
+        // A reply to what it asks now is typed, then Return: the stand-in goes on.
+        phone.connection.send(.answer(session: agent.id, to: waiting, text: "yes"))
+        waitUntil("the agent to go on") { phone.sessions.first?.state?.isWorking == true }
+    }
+
+    /// NOTE-3: the Mac is in use while its app is in front, or a key or the
+    /// pointer was used in the last five minutes; every client is told.
+    func testWhetherSomeoneIsAtTheMac() throws {
+        let phone = Client(port: port, token: token, name: "phone")
+        let mac = Client(port: port, token: token, name: "mac")
+        func told(_ client: Client) -> Bool? { client.messages.compactMap { if case .macInUse(let on) = $0 { return on } else { return nil } }.last }
+        waitUntil("told that it is in use") { told(phone) == true }
+
+        holdLock.lock(); idle = 6 * 60; holdLock.unlock()
+        waitUntil("told that no one is at it") { told(phone) == false }
+        mac.connection.send(.appInFront(true))
+        waitUntil("in use with its app in front") { told(phone) == true }
+        mac.connection.send(.appInFront(false))
+        waitUntil("not with its app behind") { told(phone) == false }
+        holdLock.lock(); idle = 10; holdLock.unlock()
+        waitUntil("in use once a key is pressed") { told(phone) == true }
+        XCTAssertEqual(told(mac), true, "every client is told")
     }
 }

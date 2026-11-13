@@ -402,6 +402,17 @@ A second host stands in for the other Mac, with a project of its own.
 | AGENT-9 | A stand-in agent that waits for permission | The Mac app shows it | A mark next to its name in the folder list and on its tab, read as "waiting for permission"; its folder's row says a session waits | M |
 | AGENT-10 | The same | The iPhone shows it | A mark in the sessions list, and the state in the terminal's title | hand, until the iPhone tests cover it |
 
+### When an agent is done or needs you
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| NOTE-1 | Sessions whose agents wait, work, are done | Their states change | Told once when done or waiting, again when asked something else, not while it keeps waiting; what waits is told on connecting; an ended session is forgotten | P |
+| NOTE-2 | An agent waiting for permission | A reply to what it asked before; then one to what it asks now | The first is dropped and the device is told the agent moved on; the second is typed, then Return | H |
+| NOTE-3 | The Mac left alone for six minutes | Its app comes to the front and goes behind; a key is pressed | Every client is told in use, not in use, in use | H |
+| NOTE-4 | The Mac app with a shell in front, an agent in another session | The agent comes to wait for permission | A banner names the session and what it asks; Open selects it | M |
+| NOTE-5 | The iPhone in the sessions list, an agent in a session | The agent finishes | A banner over the list, which opens the session | hand, until the iPhone tests cover it |
+| NOTE-6 | The iPhone just left, an agent asks a question | The notification is answered with a reply | The reply is typed into the session after unlocking | hand: needs a real phone |
+
 ### Shells an agent opens
 
 | ID | Input | Action or event | Expected response | Checked by |

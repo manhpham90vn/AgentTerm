@@ -271,6 +271,12 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case agentShell(id: Int, key: String, request: AgentShellRequest)
     /// Installs the MCP server in each agent's configuration, or removes it.
     case setAgentShells(Bool)
+    /// A reply to an agent where it was told of (#22): typed into the
+    /// session, then Return, only while its agent is still in `to`, the
+    /// state the reply answers. One that comes after it moved on is dropped.
+    case answer(session: SessionID, to: AgentState, text: String)
+    /// The Mac app is in front, or is no longer: then the Mac is in use.
+    case appInFront(Bool)
 }
 
 /// JSON text frames sent by the host.
@@ -354,6 +360,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// Whether the MCP server is installed in the agents' configuration.
     /// Not sent by a host that does not install it (a test's, a trial run).
     case agentShells(Bool)
+    /// Whether someone is at the Mac (#22, #24): its app in front, or a key
+    /// or the pointer used in the last five minutes.
+    case macInUse(Bool)
 }
 
 public enum MessageCoding {
