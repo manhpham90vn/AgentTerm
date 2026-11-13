@@ -19,6 +19,18 @@ final class SessionTests: MacUITestCase {
         XCTAssertTrue(app.first(.id("system-cpu"))?.label.hasPrefix("CPU ") ?? false)
     }
 
+    /// TEST-1: the host and the app a test starts, and the login shells they
+    /// start in turn, use the test's home folder, so no startup file of
+    /// the person running the tests is read.
+    func testTheShellsOfATestUseTheTestsHome() throws {
+        let phone = try device()
+        let seen = root.appendingPathComponent("seen-home")
+        // Started by the app's host, through the login shell, as every session is.
+        phone.send(.create(CreateRequest(command: "printf '%s' \"$HOME\" > '\(seen.path)'; sleep 600", cwd: project.path, title: "home")))
+        wait("the session to write its home") { FileManager.default.fileExists(atPath: seen.path) }
+        XCTAssertEqual(try String(contentsOf: seen, encoding: .utf8), home.path)
+    }
+
     func testStartingSessionsAndFindingThemAgainAfterReopeningTheApp() throws {
         let phone = try device()
         // SES-2: a shell from the launch buttons.

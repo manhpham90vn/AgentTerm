@@ -227,7 +227,7 @@ class MacUITestCase: XCTestCase {
         process.executableURL = hostExecutable
         process.arguments =
             ["--port", String(port), "--local-only", "--no-account-usage", "--home", home.path, "--agents", root.appendingPathComponent("agents").path] + extra
-        var environment = ProcessInfo.processInfo.environment
+        var environment = Self.ownHome(home)
         environment["AGENTTERM_STATE_DIR"] = state.path
         process.environment = environment
         process.standardOutput = FileHandle.nullDevice
@@ -243,10 +243,25 @@ class MacUITestCase: XCTestCase {
         return process
     }
 
+    /// This process's environment, with `home` as the home folder: the
+    /// login shells the host starts, for sessions and to find the user's
+    /// PATH, read their startup files from there, and none of those of the
+    /// person running the tests (TEST-1).
+    static func ownHome(_ home: URL) -> [String: String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOME"] = home.path
+        // zsh looks for its files here first, whatever HOME says.
+        environment["ZDOTDIR"] = home.path
+        // What the host and the app take for the home folder, and give
+        // their sessions as HOME: NSHomeDirectory() follows this, not HOME.
+        environment["CFFIXED_USER_HOME"] = home.path
+        return environment
+    }
+
     /// Starts the app on the test's host. Its preferences are its own too:
     /// with a home of its own it reads and writes none of the real app's.
     func launchApp() throws -> MacDriver {
-        var environment = ProcessInfo.processInfo.environment
+        var environment = Self.ownHome(home)
         environment["AGENTTERM_STATE_DIR"] = state.path
         environment["AGENTTERM_PORT"] = String(appPort)
         // The home the host was given: on its own Mac the app reads

@@ -385,6 +385,12 @@ A second host stands in for the other Mac, with a project of its own.
 | VN-2 | Telex, VNI, and a tool that retypes with backspaces | Type in zsh and in each agent on the Mac | The words come out right, with nothing doubled or lost | hand (issue #4) |
 | VN-3 | The Vietnamese keyboard on a real iPhone | Write in the message field and send | The words arrive as written | hand |
 
+### The tests themselves
+
+| ID | Input | Action or event | Expected response | Checked by |
+|---|---|---|---|---|
+| TEST-1 | A host and an app started by a test or a test script | A session starts through the login shell | Its `HOME` is the test's home folder: none of the startup files of the person running the tests is read. The hosts and apps get the test's home as `HOME`, `ZDOTDIR` and `CFFIXED_USER_HOME` | M |
+
 ## What the tests found
 
 Bugs that came to light while these tests were written, as a record of
