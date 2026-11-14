@@ -1232,10 +1232,11 @@ public final class HostServer {
                 send(.error("The agent has moved on since: the reply was not sent."), to: client)
                 return
             }
-            session.process.write(Data(text.utf8))
-            // Return a moment later, as a person types it: an agent's
-            // prompt takes text that arrives with Return as pasted.
-            queue.asyncAfter(deadline: .now() + 0.15) { [weak session] in session?.process.write(Data("\r".utf8)) }
+            // As a person types it, a step at a time: text and Return for a
+            // prompt, the keys that pick a choice for a list of them (#55).
+            for (index, step) in AgentAnswer.steps(agent: session.info.agent, state: state, text: text).enumerated() {
+                queue.asyncAfter(deadline: .now() + 0.15 * Double(index)) { [weak session] in session?.process.write(Data(step.utf8)) }
+            }
         case .appInFront(let front):
             client.inFront = front
             updateMacInUse()

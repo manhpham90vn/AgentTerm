@@ -765,6 +765,18 @@ being the most iOS shows. The body is the question alone
 (`AgentNotice.words`). A choice is sent as a reply is, `answer` with the
 choice's words as its text.
 
+How the host types an answer is the agent's list's to say
+(`AgentAnswer.steps`, #55). A prompt takes the text, then Return. A
+question with choices is a list with its first choice marked, and Return
+chooses what is marked: text and Return there answered every such question
+with its first choice, in Claude Code, Copilot CLI and Antigravity alike,
+as trying each showed. So an answer that is one of the choices is typed as
+Down, once for each choice before it, then Return; any other answer goes
+to the row after the choices ("Type something.", "Other", "Write-in..."):
+Down past the choices, the text, Return, with a Return before the text in
+Antigravity. The steps are typed 0.15 s apart, as a person types them. Only
+the first of several questions asked together is told and answered.
+
 **On the Mac.** A banner over the window for a session that is not the one
 selected while the app is in front.
 

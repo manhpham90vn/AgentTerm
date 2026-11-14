@@ -423,6 +423,56 @@ final class AgentStateHostTests: XCTestCase {
         waitUntil("the agent to go on") { phone.sessions.first?.state?.isWorking == true }
     }
 
+    /// NOTE-14 (#55): an answer to a question with choices is typed as the
+    /// agent's list of them takes it, not as text into a prompt, which
+    /// every agent answers with its first choice.
+    func testAnAnswerPicksItsChoiceInTheAgentsList() {
+        let asked = AgentState.waitingForAnswer(AgentQuestion(text: "Which color?", choices: ["Red", "Green", "Blue"]))
+        let down = "\u{1b}[B"
+        for agent in ["claude", "copilot", "agy"] {
+            XCTAssertEqual(AgentAnswer.steps(agent: agent, state: asked, text: "Red"), ["\r"], agent)
+            XCTAssertEqual(AgentAnswer.steps(agent: agent, state: asked, text: "Green"), [down, "\r"], agent)
+            XCTAssertEqual(AgentAnswer.steps(agent: agent, state: asked, text: " blue\n"), [down + down, "\r"], agent)
+        }
+        // The user's own words go to the row after the choices.
+        XCTAssertEqual(AgentAnswer.steps(agent: "claude", state: asked, text: "Purple"), [down + down + down, "Purple", "\r"])
+        XCTAssertEqual(AgentAnswer.steps(agent: "copilot", state: asked, text: "Purple"), [down + down + down, "Purple", "\r"])
+        XCTAssertEqual(AgentAnswer.steps(agent: "agy", state: asked, text: "Purple"), [down + down + down, "\r", "Purple", "\r"])
+        // A prompt takes text and Return: a question without choices, a
+        // finished task's next instruction, any other program.
+        XCTAssertEqual(AgentAnswer.steps(agent: "claude", state: .waitingForAnswer(AgentQuestion(text: "Why?")), text: "Because"), ["Because", "\r"])
+        XCTAssertEqual(AgentAnswer.steps(agent: "claude", state: .done(said: "ok"), text: "Green"), ["Green", "\r"])
+        XCTAssertEqual(AgentAnswer.steps(agent: nil, state: asked, text: "Green"), ["Green", "\r"])
+    }
+
+    /// NOTE-14: what the host types for a choice reaches the agent's
+    /// terminal as those keys.
+    func testAChoiceIsTypedAsKeysIntoTheSession() throws {
+        let typed = root.appendingPathComponent("typed")
+        let script = root.appendingPathComponent("claude")
+        let hook = Handoff.shellQuote(tool.path) + " hook claude"
+        let asks =
+            #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which color?","options":[{"label":"Red"},{"label":"Green"},{"label":"Blue"}]}]}}"#
+        // It asks, then writes down the next four bytes typed into it.
+        try """
+        #!/bin/sh
+        printf '%s' '\(asks)' | \(hook) PreToolUse
+        stty raw -echo
+        head -c 4 > '\(typed.path)'
+        exec sleep 600
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let phone = Client(port: port, token: token, name: "phone")
+        waitUntil("connected") { !phone.messages.isEmpty }
+        phone.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: "agent")))
+        let asked = AgentState.waitingForAnswer(AgentQuestion(text: "Which color?", choices: ["Red", "Green", "Blue"]))
+        waitUntil("the question") { phone.sessions.first?.state == asked }
+        let agent = try XCTUnwrap(phone.sessions.first)
+        phone.connection.send(.answer(session: agent.id, to: asked, text: "Green"))
+        waitUntil("the keys to be typed") { (try? Data(contentsOf: typed))?.count == 4 }
+        XCTAssertEqual(try Data(contentsOf: typed), Data("\u{1b}[B\r".utf8), "Down, then Return: the second choice")
+    }
+
     /// NOTE-3: the Mac is in use while its app is in front, or a key or the
     /// pointer was used in the last five minutes; every client is told.
     func testWhetherSomeoneIsAtTheMac() throws {

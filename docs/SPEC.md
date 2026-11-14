@@ -174,7 +174,9 @@ itself.
   phone to be unlocked first. A question's choices are buttons of its
   notification, shown when it is opened out, each of which answers with
   that choice; its text is the question alone, so that a long one does not
-  push the choices out of sight. One for a permission has no buttons: the
+  push the choices out of sight. A choice is picked in the agent's
+  own list of them, and a reply that is none of the choices is given as
+  the agent's "other" answer, whichever agent asked. One for a permission has no buttons: the
   agents do not say which choices they offer, so touching it opens the
   session. A reply that arrives after the agent moved on is dropped, and
   the app says so.
