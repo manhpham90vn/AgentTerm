@@ -851,7 +851,9 @@ public final class HostServer {
             var problem: String?
             if case .success(let worktree) = made, let setup {
                 // As in a terminal, with the user's PATH.
-                let ran = Subprocess.run(HostEnvironment.shell, ["-l", "-i", "-c", setup], cwd: worktree.directory, timeout: 600, mergeErrors: true)
+                let ran = Subprocess.run(
+                    HostEnvironment.shell, ["-l", "-i", "-c", setup], cwd: worktree.directory, timeout: 600, mergeErrors: true,
+                    environment: HostEnvironment.loginShellCommandEnvironment)
                 if ran?.status != 0 {
                     let said = String(decoding: ran?.output ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
                     problem = "The setup command failed in the new worktree: \(setup)\n\n\(String(said.suffix(1500)))"

@@ -125,7 +125,11 @@ public enum GitWorktrees {
             _ = try run(["push", "--set-upstream", "origin", branch], in: path, timeout: 120, environment: GitActions.actionEnvironment)
             // gh is the user's, found through their shell.
             let line = "gh pr create --fill --head " + Handoff.shellQuote(branch)
-            guard let result = Subprocess.run(HostEnvironment.shell, ["-l", "-i", "-c", line], cwd: path, timeout: 120, mergeErrors: true) else {
+            guard
+                let result = Subprocess.run(
+                    HostEnvironment.shell, ["-l", "-i", "-c", line], cwd: path, timeout: 120, mergeErrors: true,
+                    environment: HostEnvironment.loginShellCommandEnvironment)
+            else {
                 throw Failure(text: "gh could not be started.")
             }
             let said = String(decoding: result.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)

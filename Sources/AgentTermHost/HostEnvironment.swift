@@ -83,6 +83,17 @@ public enum HostEnvironment {
         return env
     }
 
+    /// What a command the host runs for the user through their login shell
+    /// is given, as a worktree's setup command or `gh`: the host's own
+    /// environment, and under XCTest none of the user's startup files, as
+    /// a session's shell (`sessionEnvironment`). Nil: the host's own.
+    static var loginShellCommandEnvironment: [String: String]? {
+        guard LoginShellPath.underTests else { return nil }
+        var env = ProcessInfo.processInfo.environment
+        if env["ZDOTDIR"] == nil { env["ZDOTDIR"] = testShellHome.path }
+        return env
+    }
+
     /// An empty folder for a session's zsh to read its startup files from,
     /// under XCTest.
     private static let testShellHome: URL = {

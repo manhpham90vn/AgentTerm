@@ -222,6 +222,18 @@ final class WorktreeHostTests: XCTestCase {
         XCTAssertTrue(client.worktrees[1].inUse)
     }
 
+    /// WT-11: under the tests, the login shell a worktree's setup command
+    /// runs in reads none of the startup files of the person running them:
+    /// it reads them where a session's shell does (TEST-1).
+    func testASetupCommandUnderTheTestsReadsNoneOfTheUsersStartupFiles() throws {
+        let expected = try XCTUnwrap(HostEnvironment.sessionEnvironment()["ZDOTDIR"], "a session's shell is kept off them")
+        client.connection.send(.setWorktreeSetup(folder: project.path, command: "printf %s \"$ZDOTDIR\" > zdotdir"))
+        client.connection.send(.createInWorktree(request: CreateRequest(command: "claude", cwd: project.path), branch: nil))
+        waitUntil("the session") { self.client.sessions.count == 1 }
+        let path = project.appendingPathComponent(".agentterm/worktrees/agentterm/claude-1/zdotdir").path
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), expected)
+    }
+
     /// WT-5: a worktree a session runs in is not removed; one with unmerged
     /// work is removed only when asked to throw it away.
     func testAWorktreeInUseIsNotRemoved() throws {
