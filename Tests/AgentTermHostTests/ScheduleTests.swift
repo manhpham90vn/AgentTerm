@@ -524,6 +524,9 @@ final class SchedulerHostTests: XCTestCase {
         try "one\nmine, not committed\n".write(to: project.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         client.connection.send(.saveSchedule(morning()))
         waitUntil("saved") { self.client.schedules.count == 1 }
+        // Not on a whole second: a run is named by when it came due, and
+        // that moment comes back from a device a hair off what it was.
+        set(clock.addingTimeInterval(0.7957149))
         client.connection.send(.runSchedule(id: "s-claude"))
         waitUntil("the run's session") { self.client.sessions.count == 1 }
         waitUntil("recorded") { self.runs.map(\.note) == ["Run now"] }
@@ -541,7 +544,11 @@ final class SchedulerHostTests: XCTestCase {
         try "one\nmine, not committed\ntwo\n".write(to: project.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         git("commit", "-q", "-am", "by the run")
         set(clock.addingTimeInterval(180))
-        client.connection.send(.stopScheduleRun(id: "s-claude", at: run.at))
+        // The moment as a device may send it back: written as seconds since
+        // 1970 and read again, it can come out a fraction of a microsecond off.
+        let sent = run.at.addingTimeInterval(0.0000005)
+        XCTAssertNotEqual(sent, run.at)
+        client.connection.send(.stopScheduleRun(id: "s-claude", at: sent))
         waitUntil("the session ended") { self.client.sessions.isEmpty }
         waitUntil("how it ended") { self.runs.first?.outcome == "Stopped by you" }
         waitUntil("what it changed") { self.runs.first?.changes != nil }
@@ -550,10 +557,13 @@ final class SchedulerHostTests: XCTestCase {
         XCTAssertEqual(ended.summary, "Stopped by you, after 3 min")
         XCTAssertEqual(ended.changes, "1 commit, 1 file changed, 1 insertion, 1 new file not tracked")
         XCTAssertTrue(ended.hasOutput)
-        client.connection.send(.scheduleRunOutput(id: "s-claude", at: run.at))
+        client.connection.send(.scheduleRunOutput(id: "s-claude", at: sent))
         waitUntil("what it printed") {
-            self.client.messages.contains { if case .scheduleRunOutput("s-claude", run.at, let text?) = $0 { return text.contains("the stand-in claude is at work") } else { return false } }
+            self.client.messages.contains { if case .scheduleRunOutput("s-claude", _, let text?) = $0 { return text.contains("the stand-in claude is at work") } else { return false } }
         }
+        // Answered under the run's own name, whatever hair the moment is off by.
+        let answered = client.messages.compactMap { message -> Date? in if case .scheduleRunOutput("s-claude", let at, .some) = message { return at } else { return nil } }.last
+        XCTAssertEqual(answered.map { ScheduleOverview.Run.id(schedule: "s-claude", at: $0) }, ScheduleOverview.Run.id(schedule: "s-claude", at: run.at))
         // A run nothing was kept of, and one that is no longer going.
         client.connection.send(.scheduleRunOutput(id: "s-claude", at: .distantPast))
         waitUntil("nothing kept") { self.client.messages.contains(.scheduleRunOutput(id: "s-claude", at: .distantPast, text: nil)) }

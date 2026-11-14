@@ -1063,12 +1063,16 @@ public final class HostServer {
 
     private func stopRun(of id: String, at: Date, for client: Client) {
         // One that still waits to start is taken off the list.
-        if let waiting = waitingRuns.firstIndex(where: { $0.schedule == id && $0.at == at }), !preparingRuns.contains(runKey(id, at)) {
-            waitingRuns.remove(at: waiting)
-            if let index = schedules.firstIndex(where: { $0.id == id }) { record(ScheduleRun(at: at, started: false, note: "Stopped by you before it started"), in: index) }
+        // Named by when it came due, as the device has it: the same to the millisecond.
+        if let waiting = waitingRuns.firstIndex(where: { $0.schedule == id && abs($0.at.timeIntervalSince(at)) < 0.001 }),
+            !preparingRuns.contains(runKey(id, waitingRuns[waiting].at))
+        {
+            let due = waitingRuns.remove(at: waiting).at
+            if let index = schedules.firstIndex(where: { $0.id == id }) { record(ScheduleRun(at: due, started: false, note: "Stopped by you before it started"), in: index) }
             return
         }
-        guard let run = schedules.first(where: { $0.id == id })?.runs.first(where: { $0.at == at && $0.started }), let session = run.session.flatMap({ sessions[$0] })
+        guard let run = schedules.first(where: { $0.id == id })?.runs.first(where: { $0.cameDue(at: at) && $0.started }),
+            let session = run.session.flatMap({ sessions[$0] })
         else {
             send(.error("That run is not going on any more."), to: client)
             return
@@ -1079,7 +1083,9 @@ public final class HostServer {
     }
 
     private func sendRunOutput(of id: String, at: Date, to client: Client) {
-        let file = runOutputFile(id, at)
+        // The run's own moment, which its file is named by.
+        let due = schedules.first { $0.id == id }?.runs.first { $0.cameDue(at: at) }?.at ?? at
+        let file = runOutputFile(id, due)
         work(for: client, { file.flatMap { try? String(contentsOf: $0, encoding: .utf8) } }) { server, client, text in
             server.send(.scheduleRunOutput(id: id, at: at, text: text), to: client)
         }

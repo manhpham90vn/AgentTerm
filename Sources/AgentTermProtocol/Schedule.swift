@@ -327,6 +327,11 @@ public struct ScheduleRun: Codable, Equatable, Sendable {
     /// How long it took, once it is over.
     public var duration: TimeInterval? { ended.map { max($0.timeIntervalSince(at), 0) } }
 
+    /// Whether this is the run that came due at a moment a device names:
+    /// the same to the millisecond, since a moment that went through a
+    /// message and back may be a hair off what it was.
+    public func cameDue(at moment: Date) -> Bool { abs(at.timeIntervalSince(moment)) < 0.001 }
+
     /// What is said of it in a list: its note, and once it is over how it
     /// ended and how long it took.
     public var summary: String {
@@ -350,7 +355,11 @@ public struct ScheduleOverview: Sendable {
         }
         public var id: String { Self.id(schedule: schedule.id, at: run.at) }
         /// How a run is named: by its schedule and when it came due.
-        public static func id(schedule: String, at: Date) -> String { schedule + "@" + String(at.timeIntervalSince1970) }
+        ///
+        /// To the millisecond: a moment written into a message as seconds
+        /// since 1970 and read again can come out a fraction of a
+        /// microsecond off, and is still the same run.
+        public static func id(schedule: String, at: Date) -> String { schedule + "@" + String(Int((at.timeIntervalSince1970 * 1000).rounded())) }
     }
 
     public let running: [Run]
