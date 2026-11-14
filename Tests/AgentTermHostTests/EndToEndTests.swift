@@ -709,6 +709,56 @@ final class EndToEndTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.deletingLastPathComponent().appendingPathComponent("escape.txt").path))
     }
 
+    /// GIT-63 (#44): what a device does inside a submodule is answered
+    /// with the submodule's changes, and the folder around it, asked
+    /// again, says what is changed in it now, not what it kept from before.
+    func testWhatIsDoneInASubmoduleShowsInTheFolderAroundIt() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-sub-\(UUID().uuidString)").standardizedFileURL
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = root.appendingPathComponent("library")
+        let directory = root.appendingPathComponent("project")
+        for repository in [library, directory] {
+            try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+            git("init", "-q", "-b", "main", in: repository)
+            for (key, value) in [("user.name", "Test"), ("user.email", "test@example.com"), ("commit.gpgsign", "false")] { git("config", key, value, in: repository) }
+        }
+        try "one\n".write(to: library.appendingPathComponent("l.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: library)
+        git("commit", "-q", "-m", "library", in: library)
+        git("-c", "protocol.file.allow=always", "submodule", "add", "-q", library.path, "lib", in: directory)
+        let inside = directory.appendingPathComponent("lib")
+        for (key, value) in [("user.name", "Test"), ("user.email", "test@example.com"), ("commit.gpgsign", "false")] { git("config", key, value, in: inside) }
+        git("commit", "-q", "-m", "project", in: directory)
+        try "one\ntwo\n".write(to: inside.appendingPathComponent("l.txt"), atomically: true, encoding: .utf8)
+
+        let phone = connect("phone")
+        /// What the newest list of the folder's changes says: its own
+        /// files, then each submodule's.
+        func latest(_ path: String) -> [String]? {
+            phone.messages.compactMap { message -> [String]? in
+                guard case .diff(path, let snapshot) = message else { return nil }
+                func named(_ files: [FileDiff], _ place: String) -> [String] { files.map { ($0.isStaged ? "staged " : "") + $0.marker + " " + place + $0.path } }
+                return named(snapshot.files, "") + snapshot.submodules.flatMap { named($0.changes.files, $0.path + ": ") }
+            }.last
+        }
+        phone.connection.send(.diff(path: directory.path))
+        waitUntil("the folder's changes") { latest(directory.path) == ["M lib: l.txt"] }
+
+        // Staged in the submodule; the folder says so when asked right after.
+        phone.connection.send(.gitStage(path: inside.path, files: ["l.txt"]))
+        waitUntil("staged in the submodule") { latest(inside.path) == ["staged M l.txt"] }
+        phone.connection.send(.diff(path: directory.path))
+        waitUntil("the folder says it is staged there") { latest(directory.path) == ["staged M lib: l.txt"] }
+
+        // Committed there: the folder shows the submodule's commit as its own change.
+        phone.connection.send(.gitCommit(path: inside.path, message: "library: two"))
+        waitUntil("committed in the submodule") { latest(inside.path) == [] }
+        phone.connection.send(.diff(path: directory.path))
+        waitUntil("the commit moved") { latest(directory.path) == ["M lib"] }
+        phone.connection.send(.gitStage(path: directory.path, files: ["lib"]))
+        waitUntil("staged in the folder") { latest(directory.path) == ["staged M lib"] }
+    }
+
     func testStagingAndCommittingFromAClient() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-commit-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

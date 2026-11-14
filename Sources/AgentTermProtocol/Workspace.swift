@@ -28,6 +28,24 @@ public struct FileDiff: Codable, Identifiable, Equatable, Sendable {
     /// revert is stopped on it (#42): git's two letters, "UU" when both
     /// sides changed it. Nil for a file that does not conflict.
     public var conflict: String?
+    /// The entry is a submodule and the change is its commit: another one
+    /// is checked out in it than the folder records (#44). The files
+    /// changed inside it are a list of their own, `DiffSnapshot.submodules`.
+    public var isSubmodule: Bool = false
+
+    /// What an earlier build wrote, without what was added since, still reads.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        path = try values.decode(String.self, forKey: .path)
+        added = try values.decode(Int.self, forKey: .added)
+        deleted = try values.decode(Int.self, forKey: .deleted)
+        isUntracked = try values.decode(Bool.self, forKey: .isUntracked)
+        patch = try values.decode(String.self, forKey: .patch)
+        isStaged = try values.decode(Bool.self, forKey: .isStaged)
+        status = try values.decode(Status.self, forKey: .status)
+        conflict = try values.decodeIfPresent(String.self, forKey: .conflict)
+        isSubmodule = try values.decodeIfPresent(Bool.self, forKey: .isSubmodule) ?? false
+    }
 
     /// Staged and unstaged entries of one file are different rows.
     public var id: String { (conflict != nil ? "conflict:" : isStaged ? "staged:" : "") + path }
@@ -49,6 +67,29 @@ public struct FileDiff: Codable, Identifiable, Equatable, Sendable {
     /// One letter for a list: git's letter, "U" for a file git does not
     /// track yet, "!" for one that conflicts.
     public var marker: String { conflict != nil ? "!" : isUntracked ? "U" : status.rawValue }
+
+    /// The two commits of a submodule whose commit moved, shortened: the
+    /// one the folder records and the one checked out. Nil for a file.
+    public var submoduleCommits: (from: String?, to: String?)? {
+        guard isSubmodule else { return nil }
+        func commit(_ sign: Character) -> String? {
+            patch.split(separator: "\n").first { $0.first == sign && $0.dropFirst().hasPrefix("Subproject commit ") }
+                .map { String($0.dropFirst("+Subproject commit ".count).prefix(7)) }
+        }
+        return (commit("-"), commit("+"))
+    }
+
+    /// What is said of a submodule's row in place of a directory: which
+    /// commit it moved from and to.
+    public var submoduleWords: String? {
+        guard let commits = submoduleCommits else { return nil }
+        switch (commits.from, commits.to) {
+        case (let from?, let to?): return "submodule, \(from) → \(to)"
+        case (nil, let to?): return "submodule, added at \(to)"
+        case (let from?, nil): return "submodule, removed at \(from)"
+        default: return "submodule"
+        }
+    }
 
     /// How a file that conflicts does, in a few words: which side did what.
     /// "Ours" is the side that is checked out, "theirs" what is brought in.
@@ -489,7 +530,13 @@ public struct DiscardQuestion: Equatable, Sendable {
         let tracked = files.count - new
         if files.count == 1, let file = files.first {
             let name = (file.path as NSString).lastPathComponent
-            if file.isUntracked {
+            if file.isSubmodule {
+                // Not the files in it: the commit that is checked out there (#44).
+                title = "Put \(name) back to its recorded commit?"
+                message =
+                    "The submodule is checked out at the commit this folder records for it\(file.submoduleCommits?.from.map { ", \($0)" } ?? ""). Commits made in it are not deleted, but stay only on a branch of the submodule, if one was checked out there."
+                confirm = "Check Out Recorded Commit"
+            } else if file.isUntracked {
                 title = "Move \(name) to the Trash?"
                 message = "git does not track it yet, so nothing else keeps it. It can be put back from the Trash of the Mac."
                 confirm = "Move to Trash"
@@ -537,6 +584,24 @@ public struct DiffSnapshot: Codable, Equatable, Sendable {
     /// What git stopped in the middle of, waiting for conflicts to be
     /// resolved and then to be continued or aborted (#42). Nil when nothing.
     public var operation: GitOperation?
+    /// The submodules with changes of their own inside them (#44), each
+    /// with those changes as a folder's are. One whose commit only moved is
+    /// not here: that is a change of the folder, among `files`.
+    public var submodules: [SubmoduleChanges] = []
+
+    /// What an earlier build wrote, without what was added since, still reads.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        isRepository = try values.decode(Bool.self, forKey: .isRepository)
+        branch = try values.decodeIfPresent(String.self, forKey: .branch)
+        files = try values.decode([FileDiff].self, forKey: .files)
+        upstream = try values.decodeIfPresent(String.self, forKey: .upstream)
+        ahead = try values.decodeIfPresent(Int.self, forKey: .ahead)
+        behind = try values.decodeIfPresent(Int.self, forKey: .behind)
+        pushRemote = try values.decodeIfPresent(String.self, forKey: .pushRemote)
+        operation = try values.decodeIfPresent(GitOperation.self, forKey: .operation)
+        submodules = try values.decodeIfPresent([SubmoduleChanges].self, forKey: .submodules) ?? []
+    }
 
     /// The files that conflict.
     public var conflicts: [FileDiff] { files.filter { $0.conflict != nil } }
@@ -576,8 +641,41 @@ public struct DiffSnapshot: Codable, Equatable, Sendable {
             file.patch = ""
             return file
         }
+        copy.submodules = submodules.map { SubmoduleChanges(path: $0.path, changes: $0.changes.withoutPatches) }
         return copy
     }
+}
+
+/// A submodule with changes inside it (#44): where it is, from the folder
+/// whose changes list it, and what is changed there, which is staged,
+/// committed and discarded in the submodule itself.
+public struct SubmoduleChanges: Codable, Equatable, Identifiable, Sendable {
+    public var path: String
+    public var changes: DiffSnapshot
+
+    public var id: String { path }
+
+    public init(path: String, changes: DiffSnapshot) {
+        self.path = path
+        self.changes = changes
+    }
+
+    /// The folder to act in: the submodule's own, inside `folder`.
+    public func directory(in folder: String) -> String { (folder as NSString).appendingPathComponent(path) }
+
+    /// What its header says after its path: the branch checked out in it,
+    /// or that none is, as is usual in a submodule.
+    public var branchWords: String { changes.branch ?? "detached HEAD" }
+
+    /// What is said before committing in a submodule with no branch
+    /// checked out; nil when one is.
+    public var detachedWarning: String? {
+        changes.branch == nil
+            ? "No branch is checked out in \(path): the commit will be on no branch. The folder can still record it, but check out a branch there to keep it."
+            : nil
+    }
+
+    public static let commitAdvice = "Commits what is staged in the submodule. The folder then shows the submodule's new commit as a change of its own, to be committed in the folder."
 }
 
 /// A past conversation with an agent, found in that agent's own files.

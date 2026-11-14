@@ -78,6 +78,9 @@ final class AppModel: ObservableObject {
         var commit: CommitInfo?
         /// What the diff is of when it is not a commit's: "STASH" (#38).
         var label: String?
+        /// The file is changed inside a submodule (#44), which `folder`
+        /// then is: the tab goes when nothing is changed there any more.
+        var inSubmodule = false
     }
     /// Whether the diff's tab is the one in front.
     @Published private(set) var diffInFront = false
@@ -1423,6 +1426,9 @@ final class AppModel: ObservableObject {
                 amending[path] = nil
                 files.refresh()
             }
+            // Something was done inside a submodule of the folder on show:
+            // what the folder says of it is read again (#44).
+            if let panelFolder, path.hasPrefix(panelFolder + "/") { refreshDiff() }
             guard path == panelFolder else { break }
             diffGeneration += 1
             apply(snapshot, to: path)
@@ -1430,7 +1436,9 @@ final class AppModel: ObservableObject {
             loadingDiffFile = false
             guard isRemote, let tab = diffTab, tab.folder == path, tab.commit == nil else { break }
             if let file {
-                if file.path == tab.file.path, file.isStaged == tab.file.isStaged, file != tab.file { diffTab = OpenDiff(folder: path, file: file) }
+                if file.path == tab.file.path, file.isStaged == tab.file.isStaged, file != tab.file {
+                    diffTab = OpenDiff(folder: path, file: file, inSubmodule: tab.inSubmodule)
+                }
             } else {
                 closeDiffTab()
             }
@@ -1908,8 +1916,25 @@ final class AppModel: ObservableObject {
             listWorktrees(selectedFolder)
         }
         if diff != snapshot { diff = snapshot }
-        // A commit's diff is what it is: only a change not yet committed follows the list.
-        guard let tab = diffTab, tab.folder == directory, tab.commit == nil else { return }
+        follow(snapshot, in: directory)
+    }
+
+    /// Has the diff's tab follow the change it shows, in the folder or in
+    /// one of its submodules, theirs too (#44).
+    private func follow(_ snapshot: DiffSnapshot, in directory: String) {
+        guard let tab = diffTab, tab.commit == nil else { return }
+        guard tab.folder == directory else {
+            if tab.folder.hasPrefix(directory + "/") {
+                if let inside = snapshot.submodules.first(where: { tab.folder == $0.directory(in: directory) || tab.folder.hasPrefix($0.directory(in: directory) + "/") }) {
+                    follow(inside.changes, in: inside.directory(in: directory))
+                } else if tab.inSubmodule {
+                    // Nothing is changed in its submodule any more. A tab
+                    // of another worktree of the folder is not this: it stays.
+                    closeDiffTab()
+                }
+            }
+            return
+        }
         // The tab shows the change as it is now. A file that was
         // just staged or unstaged is followed into its new list.
         guard var now = snapshot.files.first(where: { $0.id == tab.file.id }) ?? snapshot.files.first(where: { $0.path == tab.file.path }) else {
@@ -1923,7 +1948,7 @@ final class AppModel: ObservableObject {
             if now.isStaged == tab.file.isStaged { now.patch = tab.file.patch }
             connection?.send(.diffFile(path: directory, file: now.path, staged: now.isStaged))
         }
-        if now != tab.file { diffTab = OpenDiff(folder: directory, file: now) }
+        if now != tab.file { diffTab = OpenDiff(folder: directory, file: now, inSubmodule: tab.inSubmodule) }
     }
 
     /// The change that has a tab in the middle pane, if any.
@@ -1942,9 +1967,11 @@ final class AppModel: ObservableObject {
 
     /// Shows a change's diff in the middle pane. There is one diff tab; it
     /// follows the change picked in the Git tab.
-    func openDiff(_ file: FileDiff) {
-        guard let folder = panelFolder else { return }
-        diffTab = OpenDiff(folder: folder, file: file)
+    /// - Parameter submodule: The submodule the file is changed in (#44),
+    ///   nil for a change of the folder itself.
+    func openDiff(_ file: FileDiff, in submodule: String? = nil) {
+        guard let folder = directory(of: submodule) else { return }
+        diffTab = OpenDiff(folder: folder, file: file, inSubmodule: submodule != nil)
         // From another Mac the list has no diffs in it: this file's is asked for.
         if isRemote {
             loadingDiffFile = true
@@ -1968,23 +1995,75 @@ final class AppModel: ObservableObject {
     }
 
     /// Stages files for the next commit. No files means every change.
-    func stage(_ files: [FileDiff]) {
+    func stage(_ files: [FileDiff], in submodule: String? = nil) {
         let paths = files.map(\.path)
-        if isRemote, let directory = panelFolder {
+        if isRemote, let directory = directory(of: submodule) {
             sendForDiff(.gitStage(path: directory, files: paths), in: directory)
             return
         }
-        git { GitActions.stage(paths, in: $0) }
+        git(in: submodule) { GitActions.stage(paths, in: $0) }
+    }
+
+    // MARK: Submodules (#44)
+
+    /// The folder git is run in: the one the side panel shows, or a
+    /// submodule inside it.
+    func directory(of submodule: String?) -> String? {
+        guard let folder = panelFolder else { return nil }
+        return submodule.map { (folder as NSString).appendingPathComponent($0) } ?? folder
+    }
+
+    /// Whether a change of a list is the one the diff's tab shows.
+    func isInDiffTab(_ file: FileDiff, in submodule: String?) -> Bool {
+        guard let tab = diffTab, tab.commit == nil else { return false }
+        return tab.folder == directory(of: submodule) && tab.file.id == file.id
+    }
+
+    /// Stages the change the diff's tab shows, or unstages it, in the
+    /// folder the tab is of: a submodule's own, for a file in one.
+    func toggleStageOfDiffTab() {
+        guard let tab = diffTab, tab.commit == nil else { return }
+        let paths = [tab.file.path]
+        let staged = tab.file.isStaged
+        if isRemote {
+            sendForDiff(staged ? .gitUnstage(path: tab.folder, files: paths) : .gitStage(path: tab.folder, files: paths), in: tab.folder)
+            return
+        }
+        git(at: tab.folder) { staged ? GitActions.unstage(paths, in: $0) : GitActions.stage(paths, in: $0) }
+    }
+
+    /// The submodule the diff's tab is in, as the folder on show names it.
+    var diffTabSubmodule: String? {
+        guard let tab = diffTab, tab.inSubmodule, let folder = panelFolder, tab.folder.hasPrefix(folder + "/") else { return nil }
+        return String(tab.folder.dropFirst(folder.count + 1))
+    }
+
+    /// The submodule a commit is being written for, and its message.
+    @Published var committingSubmodule: SubmoduleChanges?
+    @Published var submoduleMessage = ""
+
+    /// Commits what is staged inside a submodule. Its new commit is then a
+    /// change of the folder, to be committed there.
+    func commitSubmodule() {
+        guard let submodule = committingSubmodule, let directory = directory(of: submodule.path) else { return }
+        let message = submoduleMessage
+        committingSubmodule = nil
+        submoduleMessage = ""
+        if isRemote {
+            sendForDiff(.gitCommit(path: directory, message: message), in: directory)
+            return
+        }
+        git(in: submodule.path) { GitActions.commit(message: message, in: $0) }
     }
 
     /// Takes files out of the next commit. No files means all of them.
-    func unstage(_ files: [FileDiff]) {
+    func unstage(_ files: [FileDiff], in submodule: String? = nil) {
         let paths = files.map(\.path)
-        if isRemote, let directory = panelFolder {
+        if isRemote, let directory = directory(of: submodule) {
             sendForDiff(.gitUnstage(path: directory, files: paths), in: directory)
             return
         }
-        git { GitActions.unstage(paths, in: $0) }
+        git(in: submodule) { GitActions.unstage(paths, in: $0) }
     }
 
     // MARK: Commits (#36)
@@ -2246,12 +2325,21 @@ final class AppModel: ObservableObject {
 
     /// The changes the user is asked about before they are discarded (#39).
     @Published var discarding: [FileDiff]?
+    /// The submodule they are changed in, nil for the folder's own.
+    private var discardingIn: String?
+
+    /// What is not staged in the folder, or in a submodule of it.
+    private func unstaged(in submodule: String?) -> [FileDiff] {
+        guard let submodule else { return diff?.unstaged ?? [] }
+        return diff?.submodules.first { $0.path == submodule }?.changes.unstaged ?? []
+    }
 
     /// Asks before discarding changes that are not staged. No files means
     /// every one of them.
-    func requestDiscard(_ files: [FileDiff]) {
-        let asked = files.isEmpty ? (diff?.unstaged ?? []) : files.filter { !$0.isStaged }
+    func requestDiscard(_ files: [FileDiff], in submodule: String? = nil) {
+        let asked = files.isEmpty ? unstaged(in: submodule) : files.filter { !$0.isStaged }
         guard !asked.isEmpty else { return }
+        discardingIn = submodule
         discarding = asked
     }
 
@@ -2261,12 +2349,13 @@ final class AppModel: ObservableObject {
         guard let asked = discarding else { return }
         discarding = nil
         // Every change is asked for as such, so that one made since is not left out.
-        let paths = asked.count == (diff?.unstaged.count ?? -1) && asked.count > 1 ? [] : asked.map(\.path)
-        if isRemote, let directory = panelFolder {
+        let submodule = discardingIn
+        let paths = asked.count == unstaged(in: submodule).count && asked.count > 1 ? [] : asked.map(\.path)
+        if isRemote, let directory = directory(of: submodule) {
             sendForDiff(.gitDiscard(path: directory, files: paths), in: directory)
             return
         }
-        git { GitActions.discard(paths, in: $0) }
+        git(in: submodule) { GitActions.discard(paths, in: $0) }
     }
 
     /// Commits what is staged in the selected folder with the message written for it.
@@ -2332,11 +2421,13 @@ final class AppModel: ObservableObject {
     /// lines of it that were picked. The file's diff is read again after.
     func apply(_ use: PatchParts.Use, hunk: PatchHunk, picked: Set<Int>?, of file: FileDiff) {
         guard let patch = PatchParts.patch(path: file.path, hunk: hunk, picked: picked, use: use) else { return }
-        if isRemote, let directory = panelFolder {
+        // In the folder the diff's tab is of: a submodule's own, for a file in one (#44).
+        guard let directory = diffTab?.folder ?? panelFolder else { return }
+        if isRemote {
             sendForDiff(.gitApplyPart(path: directory, file: file.path, patch: patch, use: use.rawValue), in: directory)
             return
         }
-        git { GitActions.applyPart(patch, use: use, file: file.path, in: $0) }
+        git(at: directory) { GitActions.applyPart(patch, use: use, file: file.path, in: $0) }
     }
 
     // MARK: Amend and undo the last commit (#41)
@@ -2444,8 +2535,12 @@ final class AppModel: ObservableObject {
 
     /// Runs a git change in the selected folder off the main thread, then
     /// shows what git said if it failed and reads the changes again.
-    private func git(_ action: @escaping (String) -> String?, then: ((Bool) -> Void)? = nil) {
-        guard let directory = panelFolder else { return }
+    private func git(in submodule: String? = nil, _ action: @escaping (String) -> String?, then: ((Bool) -> Void)? = nil) {
+        guard let directory = directory(of: submodule) else { return }
+        git(at: directory, action, then: then)
+    }
+
+    private func git(at directory: String, _ action: @escaping (String) -> String?, then: ((Bool) -> Void)? = nil) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let problem = action(directory)
             DispatchQueue.main.async { [weak self] in

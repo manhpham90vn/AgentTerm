@@ -97,13 +97,13 @@ struct DiffView: View {
         } else if let diff = model.diff {
             if !diff.isRepository {
                 placeholder("This folder is not a git repository.")
-            } else if diff.files.isEmpty && diff.operation != nil {
+            } else if diff.files.isEmpty && diff.submodules.isEmpty && diff.operation != nil {
                 // Stopped, with nothing left to resolve or commit.
                 VStack(spacing: 0) {
                     ConflictBanner(diff: diff)
                     placeholder("Nothing else is changed.")
                 }
-            } else if diff.files.isEmpty && !model.isAmending {
+            } else if diff.files.isEmpty && diff.submodules.isEmpty && !model.isAmending {
                 placeholder("No uncommitted changes.")
             } else {
                 // The list only: a file that is clicked shows its diff in the middle pane.
@@ -158,9 +158,11 @@ struct DiffView: View {
                     .padding(.top, staged.isEmpty ? 0 : 6)
                     rows(unstaged)
                 }
+                submodules(diff)
             }
             .padding(6)
         }
+        .sheet(item: $model.committingSubmodule) { SubmoduleCommitSheet(submodule: $0) }
         // Asked first: what is discarded does not come back (#39).
         .confirmationDialog(
             question?.title ?? "", isPresented: Binding(get: { model.discarding != nil }, set: { if !$0 { model.discarding = nil } }), titleVisibility: .visible
@@ -176,7 +178,7 @@ struct DiffView: View {
 
     /// The files of one of the two lists, flat or grouped by folder.
     @ViewBuilder
-    private func rows(_ files: [FileDiff]) -> some View {
+    private func rows(_ files: [FileDiff], in submodule: String? = nil) -> some View {
         if isTree {
             ForEach(DiffTree.rows(for: files, collapsed: collapsedFolders)) { row in
                 switch row.kind {
@@ -186,16 +188,110 @@ struct DiffView: View {
                             if expanded { collapsedFolders.insert(row.id) } else { collapsedFolders.remove(row.id) }
                         }
                 case .file(let file):
-                    FileRow(file: file, selected: file.id == selectedFile?.id, showsDirectory: false, depth: row.depth)
-                        .onTapGesture { model.openDiff(file) }
+                    FileRow(file: file, selected: model.isInDiffTab(file, in: submodule), showsDirectory: false, depth: row.depth, submodule: submodule)
+                        .onTapGesture { model.openDiff(file, in: submodule) }
                 }
             }
         } else {
             ForEach(files) { file in
-                FileRow(file: file, selected: file.id == selectedFile?.id)
-                    .onTapGesture { model.openDiff(file) }
+                FileRow(file: file, selected: model.isInDiffTab(file, in: submodule), submodule: submodule)
+                    .onTapGesture { model.openDiff(file, in: submodule) }
             }
         }
+    }
+
+    /// The submodules with changes inside them (#44), each a list of its
+    /// own under the folder's: what is staged there and what is not, with
+    /// the same actions, done in the submodule.
+    @ViewBuilder
+    private func submodules(_ diff: DiffSnapshot) -> some View {
+        ForEach(diff.submodules) { submodule in
+            SubmoduleHeader(submodule: submodule).padding(.top, 8)
+            let staged = submodule.changes.staged
+            let unstaged = submodule.changes.unstaged
+            if !staged.isEmpty {
+                ChangesHeader(title: "Staged", count: staged.count, symbol: "minus", help: "Unstage all in \(submodule.path)") {
+                    model.unstage([], in: submodule.path)
+                }
+                rows(staged, in: submodule.path)
+            }
+            if !unstaged.isEmpty {
+                ChangesHeader(
+                    title: "Changes", count: unstaged.count, symbol: "plus", help: "Stage all in \(submodule.path)",
+                    second: ("arrow.uturn.backward", "Discard all in \(submodule.path)", { model.requestDiscard([], in: submodule.path) })
+                ) { model.stage([], in: submodule.path) }
+                rows(unstaged, in: submodule.path)
+            }
+        }
+    }
+}
+
+/// A submodule with changes inside it (#44): where it is, the branch
+/// checked out there, and committing what is staged in it.
+private struct SubmoduleHeader: View {
+    @EnvironmentObject private var model: AppModel
+    let submodule: SubmoduleChanges
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "shippingbox").font(.system(size: 10.5)).foregroundStyle(.secondary)
+            Text(submodule.path).font(.system(size: 12, weight: .semibold)).lineLimit(1).truncationMode(.head)
+            Text(submodule.branchWords)
+                .font(.system(size: 10.5))
+                .foregroundStyle(submodule.changes.branch == nil ? Color.orange : Color.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 4)
+            Button("Commit…") {
+                model.submoduleMessage = ""
+                model.committingSubmodule = submodule
+            }
+            .controlSize(.mini)
+            .disabled(submodule.changes.staged.isEmpty)
+            .help(submodule.changes.staged.isEmpty ? "Stage something in the submodule first" : "Commit what is staged in the submodule")
+            .accessibilityLabel("Commit in \(submodule.path)")
+            .accessibilityIdentifier("submodule-commit-" + submodule.path)
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 6)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.white.opacity(0.04)))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("submodule-" + submodule.path)
+        .help("A submodule: its changes are staged, committed and discarded in it")
+    }
+}
+
+/// The message of a commit made inside a submodule.
+struct SubmoduleCommitSheet: View {
+    @EnvironmentObject private var model: AppModel
+    let submodule: SubmoduleChanges
+
+    private var count: Int { submodule.changes.staged.count }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Commit in \(submodule.path)").font(.headline)
+            Text("\(count) staged \(count == 1 ? "file" : "files"), on \(submodule.branchWords). \(SubmoduleChanges.commitAdvice)")
+                .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            if let warning = submodule.detachedWarning {
+                Label(warning, systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 11)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
+            TextField("Commit message", text: $model.submoduleMessage, axis: .vertical)
+                .lineLimit(2...6)
+                .textFieldStyle(.roundedBorder)
+                .accessibilityIdentifier("submodule-message")
+            HStack {
+                Spacer()
+                Button("Cancel") { model.committingSubmodule = nil }.keyboardShortcut(.cancelAction)
+                Button("Commit") { model.commitSubmodule() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(model.submoduleMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityIdentifier("submodule-commit")
+            }
+        }
+        .padding(20)
+        .frame(width: 460)
     }
 }
 
@@ -720,10 +816,16 @@ private struct FileRow: View {
     /// The flat list shows where each file lives; the tree already does.
     var showsDirectory = true
     var depth = 0
+    /// The submodule the file is changed in (#44), where it is staged and discarded.
+    var submodule: String?
     @State private var hovering = false
 
     private var name: String { (file.path as NSString).lastPathComponent }
-    private var directory: String { (file.path as NSString).deletingLastPathComponent }
+    /// Where the file is; for a submodule whose commit moved, from which
+    /// commit to which.
+    private var directory: String { file.submoduleWords ?? (file.path as NSString).deletingLastPathComponent }
+    /// Told apart from the folder's own for assistive tools and tests.
+    private var place: String { submodule.map { $0 + "/" } ?? "" }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -739,27 +841,31 @@ private struct FileRow: View {
                     .font(.system(size: 12))
                     .strikethrough(file.status == .deleted)
                     .lineLimit(1)
-                if showsDirectory {
+                if showsDirectory || file.isSubmodule {
                     Text(directory)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .truncationMode(.head)
+                        .truncationMode(file.isSubmodule ? .tail : .head)
                 }
                 Spacer(minLength: 4)
-                DiffCount(added: file.added, deleted: file.deleted)
+                // A submodule's commit has no lines to count.
+                if !file.isSubmodule { DiffCount(added: file.added, deleted: file.deleted) }
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel("\(name), \(file.isStaged ? "staged" : "not staged"), \(file.added) added, \(file.deleted) removed")
-            .accessibilityIdentifier((file.isStaged ? "staged-" : "change-") + file.path)
+            .accessibilityLabel(
+                file.submoduleWords.map { "\(name), \($0), \(file.isStaged ? "staged" : "not staged")" }
+                    ?? "\(name), \(file.isStaged ? "staged" : "not staged"), \(file.added) added, \(file.deleted) removed"
+            )
+            .accessibilityIdentifier((file.isStaged ? "staged-" : "change-") + place + file.path)
             .accessibilityAddTraits(.isButton)
-            .accessibilityAction { model.openDiff(file) }
+            .accessibilityAction { model.openDiff(file, in: submodule) }
             if !file.isStaged {
                 // Discarding is asked about first. Faint until the row is
                 // under the pointer, as the button beside it is: one that
                 // is not drawn at all is not there for VoiceOver either.
                 Button {
-                    model.requestDiscard([file])
+                    model.requestDiscard([file], in: submodule)
                 } label: {
                     Image(systemName: file.isUntracked ? "trash" : "arrow.uturn.backward")
                         .font(.system(size: 10, weight: .bold))
@@ -781,7 +887,7 @@ private struct FileRow: View {
             .foregroundStyle(.secondary)
             .opacity(hovering || selected ? 1 : 0.35)
             .help(file.isStaged ? "Unstage" : "Stage")
-            .accessibilityLabel((file.isStaged ? "Unstage " : "Stage ") + name)
+            .accessibilityLabel((file.isStaged ? "Unstage " : "Stage ") + place + name)
         }
         .padding(.leading, 8 + CGFloat(depth) * treeIndent)
         .padding(.trailing, 6)
@@ -796,13 +902,13 @@ private struct FileRow: View {
         .contextMenu {
             Button(file.isStaged ? "Unstage" : "Stage", action: move)
             if !file.isStaged {
-                Button(file.isUntracked ? "Move to the Trash…" : "Discard Changes…", role: .destructive) { model.requestDiscard([file]) }
+                Button(file.isUntracked ? "Move to the Trash…" : "Discard Changes…", role: .destructive) { model.requestDiscard([file], in: submodule) }
             }
         }
     }
 
     private func move() {
-        if file.isStaged { model.unstage([file]) } else { model.stage([file]) }
+        if file.isStaged { model.unstage([file], in: submodule) } else { model.stage([file], in: submodule) }
     }
 
     private var markerColor: Color {
@@ -828,13 +934,14 @@ struct DiffDocumentView: View {
 
     /// Whether the change can be taken apart: one that is not committed,
     /// with a diff to take apart.
-    private var hasParts: Bool { model.diffTabLabel == nil && !PatchParts.hunks(of: file.patch).isEmpty }
+    /// A submodule's commit is taken whole: it has no lines to pick.
+    private var hasParts: Bool { model.diffTabLabel == nil && !file.isSubmodule && !PatchParts.hunks(of: file.patch).isEmpty }
 
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 // Of a commit, its hash; else which of the two lists it is in.
-                Text(model.diffTabLabel ?? (file.conflict != nil ? "CONFLICT" : file.isStaged ? "STAGED" : "CHANGES"))
+                Text(model.diffTabLabel ?? (file.conflict != nil ? "CONFLICT" : file.isStaged ? "STAGED" : "CHANGES") + (model.diffTabSubmodule.map { " IN " + $0.uppercased() } ?? ""))
                     .font(.system(size: 9.5, weight: .bold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
@@ -866,7 +973,7 @@ struct DiffDocumentView: View {
                             .accessibilityIdentifier("pick-parts")
                     }
                     Button(file.isStaged ? "Unstage" : "Stage") {
-                        if file.isStaged { model.unstage([file]) } else { model.stage([file]) }
+                        model.toggleStageOfDiffTab()
                     }
                     .controlSize(.small)
                 }

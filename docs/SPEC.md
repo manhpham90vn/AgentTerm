@@ -599,8 +599,23 @@ panel.
     rebase stops again at its next commit; **Abort…**, asked first, puts
     the folder and the branch back as they were. Stage all is refused while
     a file conflicts: it would take those files as they are.
+    **Submodules** (#44): a submodule with changes inside it is a list of
+    its own under the folder's, headed by its path and the branch checked
+    out in it, or "detached HEAD". Its files are listed as the folder's
+    are, staged and not, each with its diff, and are staged, unstaged and
+    discarded in the submodule; **Commit…** commits what is staged there,
+    warning first when no branch is checked out in it. They are not
+    changes of the folder. A submodule whose commit is another than the
+    folder records is: a row of the folder's own that says from which
+    commit to which, staged and committed in the folder as a file is.
+    Discarding it, asked first, checks out the recorded commit again. A
+    submodule inside a submodule is listed the same way under it. A new
+    worktree has its submodules checked out, theirs too, before its setup
+    command runs; when one cannot be fetched the worktree is made all the
+    same, and the banner says so.
     Not part of it:
-    choosing a remote.
+    choosing a remote, and adding, removing or updating submodules from
+    their remotes.
 - **History**, the place in the bar at the left: every conversation the
     agents had on the Mac, one section per agent, newest first, each with a
     title, its folder and how long ago it was. A conversation can be
@@ -852,7 +867,8 @@ button at the top right of Sessions goes back to the list of Macs.
   and undone from the menu beside the branch; what git is stopped in is
   said at the top with the files that conflict, which show as they are,
   and can be aborted, or continued once they were resolved on the Mac
-  (resolving a conflict is on the Mac), the branch pushed and pulled, and the commit message written by an
+  (resolving a conflict is on the Mac); a submodule's changes are listed
+  under it with a commit box of its own, the branch pushed and pulled, and the commit message written by an
   agent. **History**: the conversations each agent had in the
   folder only, as on the Mac; every conversation is in the History tab. **Files**: see
   Files above.

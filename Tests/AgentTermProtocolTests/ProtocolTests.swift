@@ -355,6 +355,39 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(WorktreeInfo(path: "/gone", branch: "old", isMain: false, missing: true).menuDetail, "missing: its folder is gone")
     }
 
+    /// GIT-60, GIT-61 (#44): what is said of a submodule's row and before
+    /// its commit is discarded, the same on both apps; a list of changes
+    /// with submodules goes over the wire and back, with and without diffs.
+    func testWhatIsSaidOfASubmodule() throws {
+        var moved = FileDiff(
+            path: "libs/library", added: 1, deleted: 1, isUntracked: false,
+            patch: "@@ -1 +1 @@\n-Subproject commit 621fc7f0000000000000000000000000000000aa\n+Subproject commit 2afeb230000000000000000000000000000000bb")
+        XCTAssertNil(moved.submoduleWords, "a file is not a submodule")
+        moved.isSubmodule = true
+        XCTAssertEqual(moved.submoduleWords, "submodule, 621fc7f → 2afeb23")
+        var added = moved
+        added.patch = "@@ -0,0 +1 @@\n+Subproject commit 2afeb230000000000000000000000000000000bb"
+        XCTAssertEqual(added.submoduleWords, "submodule, added at 2afeb23")
+        let question = DiscardQuestion(files: [moved])
+        XCTAssertEqual(question.title, "Put library back to its recorded commit?")
+        XCTAssertTrue(question.message.contains("621fc7f"))
+        XCTAssertEqual(question.confirm, "Check Out Recorded Commit")
+
+        let inside = DiffSnapshot(isRepository: true, branch: nil, files: [FileDiff(path: "l.txt", added: 1, deleted: 0, isUntracked: false, patch: "@@ -1 +1,2 @@\n one\n+two")])
+        let submodule = SubmoduleChanges(path: "libs/library", changes: inside)
+        XCTAssertEqual(submodule.directory(in: "/code/project"), "/code/project/libs/library")
+        XCTAssertEqual(submodule.branchWords, "detached HEAD")
+        XCTAssertNotNil(submodule.detachedWarning)
+        XCTAssertNil(SubmoduleChanges(path: "x", changes: DiffSnapshot(isRepository: true, branch: "main", files: [])).detachedWarning)
+
+        var snapshot = DiffSnapshot(isRepository: true, branch: "main", files: [moved])
+        snapshot.submodules = [submodule]
+        let message = ServerMessage.diff(path: "/code/project", snapshot: snapshot)
+        XCTAssertEqual(try MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message)), message)
+        XCTAssertEqual(snapshot.withoutPatches.submodules.first?.changes.files.map(\.patch), [""])
+        XCTAssertEqual(snapshot.withoutPatches.submodules.first?.changes.files.map(\.path), ["l.txt"])
+    }
+
     /// WT-18 (#43): what a worktree's chip says, and what is asked before
     /// one is thrown away, the same on both apps.
     func testWhatAWorktreesChipSays() {

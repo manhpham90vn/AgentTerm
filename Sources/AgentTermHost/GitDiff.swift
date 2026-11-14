@@ -39,7 +39,13 @@ public enum GitDiff {
             }
         }
         // The working tree against the index is what is not staged.
-        if read.unstaged { files += parse(run(["diff"] + options, in: directory) ?? "") }
+        // A submodule that only has changes inside it is not a change of the
+        // folder: those are listed under it (#44). One whose commit moved is.
+        if read.unstaged { files += parse(run(["diff", "--ignore-submodules=dirty"] + options, in: directory) ?? "") }
+        if !read.submodules.isEmpty {
+            let paths = Set(read.submodules.map(\.path))
+            for index in files.indices where paths.contains(files[index].path) { files[index].isSubmodule = true }
+        }
         // A worktree of this repository that lies inside it, as Claude Code's
         // `.claude/worktrees` do, is not a file nobody tracks (#43).
         let untracked = read.untracked.filter { !($0.hasSuffix("/") && isOwnWorktree($0, in: directory, gitDirectory: gitDirectory)) }
@@ -55,6 +61,14 @@ public enum GitDiff {
         }
 
         var snapshot = DiffSnapshot(isRepository: true, branch: read.branch, files: files, operation: operation(inGitDirectory: gitDirectory))
+        // What is changed inside each submodule that has changes, read as a
+        // folder's is, its own submodules too.
+        for submodule in read.submodules.filter(\.dirty).prefix(maxSubmodules) {
+            let changes = Self.snapshot(directory: (directory as NSString).appendingPathComponent(submodule.path))
+            if changes.isRepository, !(changes.files.isEmpty && changes.submodules.isEmpty) {
+                snapshot.submodules.append(SubmoduleChanges(path: submodule.path, changes: changes))
+            }
+        }
         if snapshot.branch != nil {
             snapshot.upstream = read.upstream
             snapshot.ahead = read.upstream == nil ? nil : read.ahead
@@ -69,6 +83,9 @@ public enum GitDiff {
         }
         return snapshot
     }
+
+    /// The most submodules whose own changes are read for one folder.
+    private static let maxSubmodules = 30
 
     /// Whether a folder git lists as untracked is a worktree of the same
     /// repository: its `.git` is then a file that points into the
@@ -120,9 +137,10 @@ public enum GitDiff {
     /// under `prefix`, named from there.
     static func readStatus(_ text: String, prefix: String) -> (
         branch: String?, upstream: String?, ahead: Int?, behind: Int?, staged: Bool, unstaged: Bool, untracked: [String],
-        conflicts: [(path: String, code: String)]
+        conflicts: [(path: String, code: String)], submodules: [(path: String, dirty: Bool)]
     ) {
         var conflicts: [(path: String, code: String)] = []
+        var submodules: [(path: String, dirty: Bool)] = []
         var branch: String?
         var upstream: String?
         var ahead: Int?
@@ -153,13 +171,21 @@ public enum GitDiff {
                 } else {
                     if code.first != "." { staged = true }
                     if code.last != "." { unstaged = true }
+                    // "1 XY S<c><m><u> …": a submodule, with whether its
+                    // commit moved, and whether files in it are modified
+                    // or not tracked. The path is the ninth word.
+                    let words = record.split(separator: " ", maxSplits: record.hasPrefix("2 ") ? 9 : 8, omittingEmptySubsequences: false)
+                    if words.count > 8, words[2].hasPrefix("S"), let path = words.last.map(String.init), path.hasPrefix(prefix) {
+                        let flags = Array(words[2])
+                        submodules.append((String(path.dropFirst(prefix.count)), flags.count == 4 && (flags[2] != "." || flags[3] != ".")))
+                    }
                 }
             } else if record.hasPrefix("? ") {
                 let path = String(record.dropFirst(2))
                 if path.hasPrefix(prefix) { untracked.append(String(path.dropFirst(prefix.count))) }
             }
         }
-        return (branch, upstream, ahead, behind, staged, unstaged, untracked, conflicts)
+        return (branch, upstream, ahead, behind, staged, unstaged, untracked, conflicts, submodules)
     }
 
     /// The largest new file whose lines are shown.
@@ -370,15 +396,37 @@ public enum GitActions {
     /// from, since nothing else keeps it. No files means every change that
     /// is not staged. What is staged is left as it is: it is taken out of
     /// the next commit first, by whoever means to lose it.
+    /// Which of some paths are submodules: entries of the index that are a
+    /// commit of another repository.
+    static func submodules(among paths: [String], in directory: String) -> [String] {
+        guard let entries = list(["ls-files", "--stage", "-z", "--"] + paths, in: directory) else { return [] }
+        // "160000 <hash> 0\t<path>"
+        return entries.compactMap { entry in
+            guard entry.hasPrefix("160000 "), let tab = entry.firstIndex(of: "\t") else { return nil }
+            return String(entry[entry.index(after: tab)...])
+        }
+    }
+
     public static func discard(_ files: [String], in directory: String) -> String? {
         let all = files.isEmpty
         let named = all ? ["."] : files
         // Every change at once takes a folder git does not track whole,
         // rather than leave it behind empty.
-        guard let changed = list(["diff", "--name-only", "--relative", "-z", "--"] + named, in: directory),
+        // A submodule is among them only when its commit moved: what is
+        // changed inside it is discarded there.
+        guard var changed = list(["diff", "--name-only", "--relative", "--ignore-submodules=dirty", "-z", "--"] + named, in: directory),
             let untracked = list(["ls-files", "--others", "--exclude-standard", "-z"] + (all ? ["--directory", "--no-empty-directory"] : []) + ["--"] + named, in: directory)
         else { return "git could not be started." }
         guard !changed.isEmpty || !untracked.isEmpty else { return "There is no change to discard." }
+        // A submodule goes back to the commit the folder records for it (#44).
+        let moved = changed.isEmpty ? [] : submodules(among: changed, in: directory)
+        changed.removeAll { moved.contains($0) }
+        if !moved.isEmpty {
+            let problem = findingTools {
+                run(["submodule", "update", "--init", "--"] + moved, in: directory, timeout: 300, environment: actionEnvironment, literalPaths: false)
+            }
+            if let problem { return problem }
+        }
         if !changed.isEmpty, let problem = run(["restore", "--worktree", "--"] + changed, in: directory) { return problem }
         for file in untracked {
             let path = (directory as NSString).appendingPathComponent(file.hasSuffix("/") ? String(file.dropLast()) : file)

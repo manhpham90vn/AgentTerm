@@ -1205,7 +1205,14 @@ final class PhoneModel: ObservableObject {
         case .gitShow(let folder, let hash, let details):
             commitDetails[hash] = details ?? commits[folder]?.first { $0.hash == hash }.map { CommitDetails(commit: $0) }
         case .diff(let folder, let snapshot):
-            diffs[folder] = snapshot
+            // The answer to something done inside a submodule: the folders
+            // around it are asked what they say of it now (#44).
+            let around = diffs.filter { outer in
+                folder.hasPrefix(outer.key + "/")
+                    && outer.value.submodules.contains { folder == $0.directory(in: outer.key) || folder.hasPrefix($0.directory(in: outer.key) + "/") }
+            }
+            if let outermost = around.keys.min(by: { $0.count < $1.count }) { loadDiff(outermost) }
+            take(snapshot, of: folder)
             if committing == folder {
                 // The answer to a commit that git accepted: an error would have come first.
                 committing = nil
@@ -1377,6 +1384,18 @@ final class PhoneModel: ObservableObject {
 
     func loadDiff(_ folder: String) {
         connection?.send(.diff(path: folder))
+    }
+
+    /// Keeps a folder's changes, and those of the submodules changed inside
+    /// it under their own folders (#44): each is then a folder as any other
+    /// to what stages, commits and discards in it.
+    private func take(_ snapshot: DiffSnapshot, of folder: String) {
+        // One that has no changes inside it any more is not kept as it was.
+        for old in diffs[folder]?.submodules ?? [] where !snapshot.submodules.contains(where: { $0.path == old.path }) {
+            diffs[old.directory(in: folder)] = nil
+        }
+        diffs[folder] = snapshot
+        for submodule in snapshot.submodules { take(submodule.changes, of: submodule.directory(in: folder)) }
     }
 
     func loadPatch(folder: String, file: String, staged: Bool) {

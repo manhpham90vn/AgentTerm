@@ -314,6 +314,54 @@ final class GitTests: MacUITestCase {
         XCTAssertEqual(read("notes.txt"), "first line\ntheir second line\n")
     }
 
+    /// GIT-64 (#44): a file changed inside a submodule is listed under the
+    /// submodule, staged and committed there; the submodule's commit is
+    /// then a change of the folder.
+    func testASubmodulesChangesAreStagedAndCommittedInIt() throws {
+        let library = root.appendingPathComponent("library")
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        git("init", "-q", "-b", "main", in: library)
+        try write("one\n", to: "l.txt", in: library)
+        for repository in [library] {
+            git("config", "user.name", "Other", in: repository)
+            git("config", "user.email", "other@example.com", in: repository)
+            git("config", "commit.gpgsign", "false", in: repository)
+        }
+        git("add", ".", in: library)
+        git("commit", "-q", "-m", "library", in: library)
+        git("-c", "protocol.file.allow=always", "submodule", "add", "-q", library.path, "libs/library", in: project)
+        let inside = project.appendingPathComponent("libs/library")
+        git("config", "user.name", "Other", in: inside)
+        git("config", "user.email", "other@example.com", in: inside)
+        git("config", "commit.gpgsign", "false", in: inside)
+        git("commit", "-q", "-m", "with the library", in: project)
+        try write("one\ntwo\n", to: "l.txt", in: inside)
+
+        app.press(.button("Git"))
+        app.wait(for: .id("submodule-libs/library"), timeout: 15)
+        app.wait(for: .id("change-libs/library/l.txt"))
+        XCTAssertFalse(app.exists(.id("change-libs/library")), "what is changed inside it is not a change of the folder")
+        // Its diff opens as any other.
+        app.press(.id("change-libs/library/l.txt"))
+        app.wait(for: .containing("+two"))
+        app.wait(for: .containing("CHANGES IN LIBS/LIBRARY"))
+
+        app.press(.button("Stage libs/library/l.txt"))
+        app.wait(for: .id("staged-libs/library/l.txt"))
+        shot("submodule")
+        app.press(.id("submodule-commit-libs/library"))
+        app.write("library: two", into: .id("submodule-message"))
+        app.press(.id("submodule-commit"))
+        wait("the commit in the submodule", timeout: 20) { self.git("log", "-1", "--format=%s", in: inside) == "library: two" }
+        // Nothing is changed inside it any more; its commit is the folder's change.
+        app.waitGone(.id("submodule-libs/library"), timeout: 15)
+        app.wait(for: .id("change-libs/library"), timeout: 15)
+        app.wait(for: .containing("library, submodule, "))
+        shot("submodule-moved")
+        app.press(.button("Stage library"))
+        app.wait(for: .id("staged-libs/library"))
+    }
+
     func testARefusedCommitSaysWhatGitSaid() throws {
         // A hook that refuses every commit, as a project's own checks may.
         let hook = project.appendingPathComponent(".git/hooks/pre-commit")

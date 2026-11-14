@@ -92,17 +92,63 @@ private struct ChangesList: View {
     @State private var collapsedFolders: Set<String> = []
     /// The changes the user is asked about before they are discarded (#39).
     @State private var discarding: [FileDiff]?
+    /// Where they are changed: the folder, or a submodule inside it (#44).
+    @State private var discardingIn: String?
 
     private var isTree: Bool { viewMode == "tree" }
     private var question: DiscardQuestion? { discarding.map(DiscardQuestion.init(files:)) }
+
+    private func askToDiscard(_ files: [FileDiff], in directory: String) {
+        discardingIn = directory
+        discarding = files
+    }
 
     /// Discards what was asked about. Every change is asked for as such,
     /// so that one made since is not left out.
     private func discardConfirmed() {
         guard let asked = discarding else { return }
         discarding = nil
-        let all = asked.count > 1 && asked.count == (model.diffs[folder]?.unstaged.count ?? -1)
-        model.discard(all ? [] : asked.map(\.path), in: folder)
+        let directory = discardingIn ?? folder
+        let all = asked.count > 1 && asked.count == (model.diffs[directory]?.unstaged.count ?? -1)
+        model.discard(all ? [] : asked.map(\.path), in: directory)
+    }
+
+    /// The submodules with changes inside them (#44), each a list of its
+    /// own under the folder's, with its own commit box once something is
+    /// staged in it.
+    @ViewBuilder
+    private func submodules(_ diff: DiffSnapshot) -> some View {
+        ForEach(diff.submodules) { submodule in
+            let directory = submodule.directory(in: folder)
+            let staged = submodule.changes.staged
+            let unstaged = submodule.changes.unstaged
+            VStack(alignment: .leading, spacing: 4) {
+                Label(submodule.path, systemImage: "shippingbox").font(.subheadline.weight(.semibold)).lineLimit(1)
+                Text("Submodule, on \(submodule.branchWords). Its changes are staged, committed and discarded in it.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if !staged.isEmpty, let warning = submodule.detachedWarning {
+                    Text(warning).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 6)
+            .padding(.top, 22)
+            .padding(.bottom, 8)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("submodule-" + submodule.path)
+            if !staged.isEmpty {
+                CommitBox(folder: directory, stagedCount: staged.count).padding(.bottom, 12)
+                SectionHeader(title: "Staged", count: staged.count, action: "Unstage All") { model.unstage([], in: directory) }
+                rows(staged, in: directory)
+            }
+            if !unstaged.isEmpty {
+                SectionHeader(
+                    title: "Changes", count: unstaged.count, action: "Stage All", second: ("Discard All…", { askToDiscard(unstaged, in: directory) })
+                ) { model.stage([], in: directory) }
+                .padding(.top, staged.isEmpty ? 0 : 16)
+                rows(unstaged, in: directory)
+            }
+        }
     }
 
     var body: some View {
@@ -110,7 +156,7 @@ private struct ChangesList: View {
             if let diff = model.diffs[folder] {
                 if !diff.isRepository {
                     Placeholder(text: "This folder is not a git repository.")
-                } else if diff.files.isEmpty {
+                } else if diff.files.isEmpty && diff.submodules.isEmpty {
                     // Nothing to commit, but a commit that was just made is
                     // what there is to push, and the branch can be another.
                     ScrollView {
@@ -176,11 +222,12 @@ private struct ChangesList: View {
                             }
                             if !diff.unstaged.isEmpty {
                                 SectionHeader(
-                                    title: "Changes", count: diff.unstaged.count, action: "Stage All", second: ("Discard All…", { discarding = diff.unstaged })
+                                    title: "Changes", count: diff.unstaged.count, action: "Stage All", second: ("Discard All…", { askToDiscard(diff.unstaged, in: folder) })
                                 ) { model.stage([], in: folder) }
                                 .padding(.top, diff.staged.isEmpty ? 0 : 16)
                                 rows(diff.unstaged)
                             }
+                            submodules(diff)
                         }
                         .padding(.horizontal, 16)
                         .padding(.bottom, 24)
@@ -218,8 +265,9 @@ private struct ChangesList: View {
     }
 
     /// The files of one of the two lists, flat or grouped by folder.
-    private func rows(_ files: [FileDiff]) -> some View {
-        VStack(spacing: 0) {
+    private func rows(_ files: [FileDiff], in directory: String? = nil) -> some View {
+        let folder = directory ?? folder
+        return VStack(spacing: 0) {
             if isTree {
                 let rows = DiffTree.rows(for: files, collapsed: collapsedFolders)
                 ForEach(rows) { row in
@@ -232,7 +280,7 @@ private struct ChangesList: View {
                         }
                         .buttonStyle(.plain)
                     case .file(let file):
-                        fileRow(file, showsDirectory: false, depth: row.depth)
+                        fileRow(file, showsDirectory: false, depth: row.depth, in: folder)
                     }
                     if row.id != rows.last?.id {
                         Palette.hairline.frame(height: 1).padding(.leading, 38 + CGFloat(row.depth) * treeIndent)
@@ -240,7 +288,7 @@ private struct ChangesList: View {
                 }
             } else {
                 ForEach(files) { file in
-                    fileRow(file, showsDirectory: true, depth: 0)
+                    fileRow(file, showsDirectory: true, depth: 0, in: folder)
                     if file.id != files.last?.id {
                         Palette.hairline.frame(height: 1).padding(.leading, 38)
                     }
@@ -251,7 +299,7 @@ private struct ChangesList: View {
     }
 
     /// A file: tapping it shows its diff, the button at its end stages or unstages it.
-    private func fileRow(_ file: FileDiff, showsDirectory: Bool, depth: Int) -> some View {
+    private func fileRow(_ file: FileDiff, showsDirectory: Bool, depth: Int, in folder: String) -> some View {
         HStack(spacing: 0) {
             NavigationLink(value: Route.file(folder: folder, file: file.path, staged: file.isStaged)) {
                 FileRow(file: file, showsDirectory: showsDirectory, depth: depth)
@@ -264,7 +312,7 @@ private struct ChangesList: View {
                 if !file.isStaged {
                     // Asked about first: what is discarded does not come back.
                     Button(role: .destructive) {
-                        discarding = [file]
+                        askToDiscard([file], in: folder)
                     } label: {
                         Label(file.isUntracked ? "Move to the Trash…" : "Discard Changes…", systemImage: file.isUntracked ? "trash" : "arrow.uturn.backward")
                     }
@@ -574,8 +622,9 @@ private struct FileRow: View {
                 Text((file.path as NSString).lastPathComponent)
                     .font(.body)
                     .lineLimit(1)
-                let directory = (file.path as NSString).deletingLastPathComponent
-                if showsDirectory, !directory.isEmpty {
+                // For a submodule whose commit moved: from which commit to which (#44).
+                let directory = file.submoduleWords ?? (file.path as NSString).deletingLastPathComponent
+                if showsDirectory || file.isSubmodule, !directory.isEmpty {
                     Text(directory)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -584,7 +633,7 @@ private struct FileRow: View {
                 }
             }
             Spacer(minLength: 8)
-            DiffCount(added: file.added, deleted: file.deleted)
+            if !file.isSubmodule { DiffCount(added: file.added, deleted: file.deleted) }
         }
         .padding(.leading, 12 + CGFloat(depth) * treeIndent)
         .padding(.trailing, 2)

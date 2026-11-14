@@ -108,6 +108,16 @@ public enum GitWorktrees {
         return (root + inside, branch)
     }
 
+    /// Checks out the submodules of a new worktree, theirs too (#44): git
+    /// leaves their folders empty. Nil when there are none or all went
+    /// well; otherwise what git said, for the worktree is made all the same.
+    public static func checkOutSubmodules(in directory: String) -> String? {
+        guard let top = try? top(of: directory).asWritten, FileManager.default.fileExists(atPath: top + "/.gitmodules") else { return nil }
+        // Each is fetched from where it comes from, which may take a while.
+        let done = git(["submodule", "update", "--init", "--recursive"], in: top, timeout: 900, environment: GitActions.actionEnvironment)
+        return done.status == 0 ? nil : "The submodules of the new worktree could not be checked out: their folders are empty there.\n\n\(String(done.output.suffix(1500)))"
+    }
+
     /// Merges, opens a pull request for, or throws away a worktree. What
     /// was done, in words: a pull request's address, for one.
     public static func finish(folder: String, path: String, finish: WorktreeFinish, deleteBranch: Bool) throws -> String {

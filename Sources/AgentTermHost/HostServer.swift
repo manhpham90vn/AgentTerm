@@ -858,6 +858,8 @@ public final class HostServer {
         workQueue.async { [weak self] in
             let made = Result { try GitWorktrees.create(in: folder, agent: agent, branch: branch, from: from) }
             var problem: String?
+            // Before the setup command, which may build what is in them.
+            if case .success(let worktree) = made { problem = GitWorktrees.checkOutSubmodules(in: worktree.directory) }
             if case .success(let worktree) = made, let setup {
                 // As in a terminal, with the user's PATH.
                 let ran = Subprocess.run(
@@ -865,7 +867,7 @@ public final class HostServer {
                     environment: HostEnvironment.loginShellCommandEnvironment)
                 if ran?.status != 0 {
                     let said = String(decoding: ran?.output ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-                    problem = "The setup command failed in the new worktree: \(setup)\n\n\(String(said.suffix(1500)))"
+                    problem = (problem.map { $0 + "\n\n" } ?? "") + "The setup command failed in the new worktree: \(setup)\n\n\(String(said.suffix(1500)))"
                 }
             }
             self?.queue.async {
@@ -1647,6 +1649,12 @@ public final class HostServer {
             }
         ) { server, client, result in
             server.diffCache[path] = (result.1, Date())
+            // What was done in a submodule changes what the folders around
+            // it show of it (#44): theirs are read again when asked for.
+            for outer in Set(server.diffCache.keys).union(server.diffWatches.keys) where path.hasPrefix(outer + "/") {
+                server.diffCache[outer] = nil
+                server.diffDirty.insert(outer)
+            }
             if let problem = result.0 { server.send(.error(problem), to: client) }
             if let list = result.2 { server.send(.gitBranches(path: path, branches: list), to: client) }
             if let list = result.3 { server.send(.gitStashes(path: path, stashes: list), to: client) }
