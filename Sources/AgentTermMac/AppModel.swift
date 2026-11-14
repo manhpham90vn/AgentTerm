@@ -52,6 +52,7 @@ final class AppModel: ObservableObject {
         // The side panel shows the worktree of the session in front, however
         // it came to be selected (#23).
         didSet {
+            hideNoticeOfTheSessionInFront()
             guard selectedSession != oldValue, let session = sessions.first(where: { $0.id == selectedSession }) else { return }
             if let project = WorktreePath.project(of: session.cwd), folders.contains(where: { $0.path == project }) {
                 if selectedFolder != project { selectedFolder = project }
@@ -72,6 +73,14 @@ final class AppModel: ObservableObject {
     struct OpenDiff: Equatable {
         let folder: String
         var file: FileDiff
+        /// The commit whose change to the file this is (#36); nil for a
+        /// change that is not committed yet, which the Git tab's list follows.
+        var commit: CommitInfo?
+        /// What the diff is of when it is not a commit's: "STASH" (#38).
+        var label: String?
+        /// The file is changed inside a submodule (#44), which `folder`
+        /// then is: the tab goes when nothing is changed there any more.
+        var inSubmodule = false
     }
     /// Whether the diff's tab is the one in front.
     @Published private(set) var diffInFront = false
@@ -204,6 +213,20 @@ final class AppModel: ObservableObject {
     @Published private(set) var agentShells: Bool?
     /// Whether the agents are asked to run their commands in shells the user sees.
     @Published private(set) var agentsUseShells: Bool?
+    /// What keeps the agents from opening shells although that is on (#58),
+    /// as the host says it, and those of them the user has closed here.
+    @Published private(set) var agentShellsFaults: [AgentShellsFault] = []
+    @Published private var closedShellsFaults: Set<String> = []
+    /// The ones to warn of: a fault that was closed is shown again only
+    /// after it went away and came back.
+    var shownShellsFaults: [AgentShellsFault] { agentShellsFaults.filter { !closedShellsFaults.contains($0.id) } }
+
+    func dismiss(_ fault: AgentShellsFault) { closedShellsFaults.insert(fault.id) }
+
+    private func took(_ faults: [AgentShellsFault]) {
+        agentShellsFaults = faults
+        closedShellsFaults.formIntersection(faults.map(\.id))
+    }
 
     func setAgentsUseShells(_ on: Bool) {
         agentsUseShells = on
@@ -259,8 +282,23 @@ final class AppModel: ObservableObject {
         if self.place == .schedules { editingSchedule = nil }
         self.place = place
         showSidebar = true
+        hideNoticeOfTheSessionInFront()
     }
     func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
+
+    // MARK: What is done with a schedule and its runs (#47)
+
+    /// Every schedule is held back.
+    @Published private(set) var schedulesPaused = false
+    /// What runs printed, as asked for, by the run's id; nil inside when
+    /// nothing was kept of one.
+    @Published private(set) var runOutputs: [String: String?] = [:]
+
+    func runNow(_ schedule: Schedule) { connection?.send(.runSchedule(id: schedule.id)) }
+    func stop(_ run: ScheduleOverview.Run) { connection?.send(.stopScheduleRun(id: run.schedule.id, at: run.run.at)) }
+    func duplicate(_ schedule: Schedule) { connection?.send(.duplicateSchedule(id: schedule.id)) }
+    func pauseSchedules(_ paused: Bool) { connection?.send(.pauseSchedules(paused)) }
+    func loadOutput(of run: ScheduleOverview.Run) { connection?.send(.scheduleRunOutput(id: run.schedule.id, at: run.run.at)) }
 
     /// A schedule to start from: the folder in front, the first agent.
     func newSchedule() -> Schedule {
@@ -288,6 +326,23 @@ final class AppModel: ObservableObject {
     }
 
     func dismissAgentNotice() { agentNotice = nil }
+
+    /// A notice hides by itself once its session is the one in front,
+    /// however the user got there: its row, its tab, a shortcut (#60). In
+    /// front means before the user's eyes: a session chosen in a window
+    /// that is behind another app's counts once the app is used again. The
+    /// host is told, so that the other devices hide theirs.
+    private func hideNoticeOfTheSessionInFront() {
+        guard place == .sessions, NSApp.isActive, let front = selectedSession else { return }
+        if agentNotice?.session == front { agentNotice = nil }
+        guard let state = sessions.first(where: { $0.id == front })?.state, !state.isWorking, noticeSeenTold?.session != front || noticeSeenTold?.state != state
+        else { return }
+        noticeSeenTold = (front, state)
+        connection?.send(.noticeSeen(session: front, state: state))
+    }
+
+    /// The last notice the host was told is seen, so it is told once.
+    private var noticeSeenTold: (session: SessionID, state: AgentState)?
 
     /// The host of this Mac learns from it whether someone is at the Mac:
     /// another Mac's host is not told, since this Mac is not that one.
@@ -416,25 +471,111 @@ final class AppModel: ObservableObject {
         if diff.upstream == nil, let remote = diff.pushRemote {
             pendingFirstPush = FirstPush(folder: directory, branch: branch, remote: remote)
         } else {
-            sync("push", in: directory) { GitActions.push(in: $0) }
+            sync("push", in: directory, .gitPush(path: directory)) { GitActions.push(in: $0) }
         }
     }
 
     func pushConfirmed(_ push: FirstPush) {
-        sync("push", in: push.folder) { GitActions.push(in: $0) }
+        sync("push", in: push.folder, .gitPush(path: push.folder)) { GitActions.push(in: $0) }
     }
 
-    func pull() {
+    /// Brings in what the upstream has: the way the repository is set up
+    /// to, or by a merge or a rebase when one is asked for (#37).
+    func pull(_ mode: GitActions.PullMode = .asSetUp) {
         guard let directory = panelFolder else { return }
-        sync("pull", in: directory) { GitActions.pull(in: $0) }
+        sync("pull", in: directory, .gitPull(path: directory, mode: mode.rawValue)) { GitActions.pull(in: $0, mode: mode) }
     }
 
-    private func sync(_ what: String, in directory: String, _ action: @escaping (String) -> String?) {
+    // MARK: Fetch and forced push (#37)
+
+    /// What the last fetch no one asked for said when it failed, by
+    /// folder: shown beside Fetch, not as an alert every few minutes.
+    @Published private(set) var fetchProblems: [String: String] = [:]
+    /// When each folder's remotes were last asked, by this app.
+    private var fetchedAt: [String: Date] = [:]
+    /// A forced push that waits to be confirmed, with what it would overwrite.
+    @Published var pendingForcePush: ForcePush?
+    /// The folder whose remote is being asked what a forced push would overwrite.
+    @Published private(set) var askingForcePush: String?
+
+    struct ForcePush: Identifiable {
+        let folder: String
+        let question: ForcePushQuestion
+        var id: String { folder }
+    }
+
+    /// Asks the folder's remotes for what is new. `automatic` when no one
+    /// asked: its failure is noted beside Fetch and interrupts no one.
+    func fetch(automatic: Bool = false) {
+        guard let directory = panelFolder, syncing[directory] == nil else { return }
+        syncing[directory] = "fetch"
+        fetchedAt[directory] = Date()
+        if isRemote {
+            sendForDiff(.gitFetch(path: directory, automatic: automatic), in: directory)
+            return
+        }
+        DispatchQueue.global(qos: automatic ? .utility : .userInitiated).async { [weak self] in
+            let problem = GitActions.fetch(in: directory)
+            DispatchQueue.main.async { self?.fetched(directory, problem: problem, automatic: automatic) }
+        }
+    }
+
+    private func fetched(_ directory: String, problem: String?, automatic: Bool) {
+        syncing[directory] = nil
+        if let problem {
+            if automatic { fetchProblems[directory] = problem } else { notice = problem }
+        } else {
+            fetchProblems[directory] = nil
+        }
+        if !isRemote { refreshDiff() }
+    }
+
+    /// Fetches the folder that is shown when it is time to: the side panel
+    /// open on a repository with a remote, the app in front, the setting
+    /// on, and the last fetch longer ago than the interval.
+    private func fetchIfDue() {
+        guard display.fetchAutomatically, showDiff, NSApp.isActive, let directory = panelFolder, let diff, diff.isRepository,
+            diff.upstream != nil || diff.pushRemote != nil, syncing[directory] == nil
+        else { return }
+        guard Date().timeIntervalSince(fetchedAt[directory] ?? .distantPast) >= DisplaySettings.fetchInterval else { return }
+        fetch(automatic: true)
+    }
+
+    /// Asks what a forced push would overwrite, then asks the user.
+    func requestForcePush() {
+        guard let directory = panelFolder, let branch = diff?.branch, askingForcePush == nil else { return }
+        askingForcePush = directory
+        if isRemote {
+            connection?.send(.gitForcePushPreview(path: directory))
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let found = GitActions.forcePushLoses(in: directory)
+            DispatchQueue.main.async { self?.forcePushPreview(directory, branch: branch, upstream: found?.upstream, loses: found?.commits ?? []) }
+        }
+    }
+
+    private func forcePushPreview(_ directory: String, branch: String?, upstream: String?, loses: [String]) {
+        guard askingForcePush == directory else { return }
+        askingForcePush = nil
+        guard let upstream, let branch = branch ?? diff?.branch else {
+            notice = "The remote could not be asked what a forced push would overwrite, so nothing was pushed."
+            return
+        }
+        pendingForcePush = ForcePush(folder: directory, question: ForcePushQuestion(branch: branch, upstream: upstream, loses: loses))
+        if !isRemote { refreshDiff() }
+    }
+
+    func forcePushConfirmed(_ push: ForcePush) {
+        sync("push", in: push.folder, .gitPush(path: push.folder, force: true)) { GitActions.push(in: $0, force: true) }
+    }
+
+    private func sync(_ what: String, in directory: String, _ message: ClientMessage, _ action: @escaping (String) -> String?) {
         guard syncing[directory] == nil else { return }
         syncing[directory] = what
         if isRemote {
             // The other Mac's git does it, and says when it is over.
-            sendForDiff(what == "push" ? .gitPush(path: directory) : .gitPull(path: directory), in: directory)
+            sendForDiff(message, in: directory)
             return
         }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -517,6 +658,24 @@ final class AppModel: ObservableObject {
 
     /// The Files tab's tree and open file, for the selected folder.
     let files = FilesModel()
+    /// The search of the folder's files, in the Files tab (#45).
+    let search = SearchModel()
+    /// History's filters, search, transcripts and pins (#46).
+    let historyStore = HistoryStore()
+    /// The files at hand while a schedule's prompt is written (#47): a
+    /// search of the schedule's own folder, whatever folder is on show.
+    let promptSearch = SearchModel(firstNumber: 1_000_000)
+    /// The run whose output is on show.
+    @Published var shownRun: ScheduleOverview.Run?
+
+    /// Shows the search of the side panel's folder, by name (⌘P) or by
+    /// text (⌘⇧F): in Sessions, the side panel shown, on its Files tab.
+    func showSearch(_ mode: SearchModel.Mode) {
+        if place != .sessions { show(.sessions, toggling: false) }
+        showDiff = true
+        UserDefaults.standard.set("files", forKey: "rightPanelTab")
+        search.show(mode)
+    }
 
     /// Devices that were paired with this Mac.
     @Published private(set) var devices: [DeviceInfo] = []
@@ -581,12 +740,29 @@ final class AppModel: ObservableObject {
         if let last = UserDefaults.standard.string(forKey: Self.currentMacKey), let mac = remoteMacs.first(where: { $0.id == last }) {
             remote = mac
             files.reset(remote: { [weak self] message in self?.connection?.send(message) })
+            search.reset(remote: { [weak self] message in self?.connection?.send(message) })
+            promptSearch.reset(remote: { [weak self] message in self?.connection?.send(message) })
             // The tabs saved here are this Mac's.
             tabLayout = TabLayout()
             startOwnHost()
         }
         connect()
         folderChanged()
+        // History's reading, pins and searches are the host's, for this Mac too (#46).
+        historyStore.send = { [weak self] message in self?.connection?.send(message) }
+        historyStore.exported = { [weak self] path in
+            // A transcript written out as a file opens as any file, in Sessions.
+            self?.panelConversation = nil
+            self?.show(.sessions, toggling: false)
+            self?.files.open(path)
+        }
+        historyStore.deleted = { [weak self] id in
+            guard let self else { return }
+            self.history?.removeAll { $0.id == id }
+            self.folderHistory?.removeAll { $0.id == id }
+            if self.historySelection?.id == id { self.historySelection = nil }
+            if self.panelConversation?.id == id { self.panelConversation = nil }
+        }
         // A file that comes to the front takes the diff's place there.
         files.$active.sink { [weak self] active in
             if active != nil { self?.diffInFront = false }
@@ -608,6 +784,7 @@ final class AppModel: ObservableObject {
             .sink { [weak self] _ in
                 self?.refreshSSHHosts()
                 self?.tellWhetherInFront()
+                self?.hideNoticeOfTheSessionInFront()
             }
             .store(in: &observers)
         NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
@@ -618,7 +795,11 @@ final class AppModel: ObservableObject {
         // read again when its files change (`panelWatch`) (#21).
         diffTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.isRemote, self.showDiff, NSApp.isActive else { return }
+                guard let self else { return }
+                // The remotes are asked every few minutes; looked at here
+                // often, so that a folder just opened is asked soon.
+                self.fetchIfDue()
+                guard self.isRemote, self.showDiff, NSApp.isActive else { return }
                 self.refreshDiff()
             }
         }
@@ -882,6 +1063,8 @@ final class AppModel: ObservableObject {
         remoteHandoffPlan = nil
         browseListing = nil
         files.reset(remote: mac == nil ? nil : { [weak self] message in self?.connection?.send(message) })
+        search.reset(remote: mac == nil ? nil : { [weak self] message in self?.connection?.send(message) })
+        promptSearch.reset(remote: mac == nil ? nil : { [weak self] message in self?.connection?.send(message) })
         connectAttempts = 0
         launchedDaemon = false
         status = .connecting
@@ -971,6 +1154,7 @@ final class AppModel: ObservableObject {
         startAtLogin = nil
         agentShells = nil
         agentsUseShells = nil
+        took([])
         // The next host says its own; until then none of this one's shows.
         keepAwakeOptions = KeepAwakeOptions()
         commitWriter = CommitWriterSettings()
@@ -1020,6 +1204,8 @@ final class AppModel: ObservableObject {
             stoppingHost = false
             connection = nil
             files.connectionLost()
+            search.connectionLost()
+            historyStore.reset()
             forgetHostState()
             retryConnection(reason: reason)
         }
@@ -1129,11 +1315,28 @@ final class AppModel: ObservableObject {
             agentShells = on
         case .agentsUseShells(let on):
             agentsUseShells = on
+        case .agentShellsFaults(let faults):
+            took(faults)
+        case .noticeSeen(let session, let state):
+            // Seen on another device.
+            if agentNotice?.session == session, agentNotice?.state == state { agentNotice = nil }
         case .schedules(let list):
             schedules = list
+        case .schedulesPaused(let paused):
+            schedulesPaused = paused
+        case .scheduleRunOutput(let id, let at, let text):
+            runOutputs[ScheduleOverview.Run.id(schedule: id, at: at)] = .some(text)
         case .worktrees(let folder, let list, let setup):
             worktrees[folder] = list
             worktreeSetups[folder] = setup
+        case .filesFound, .textFound, .searchEnded:
+            // Each takes the answers that carry its own searches' numbers.
+            search.handle(message)
+            promptSearch.handle(message)
+        case .historyOlder, .conversationRead, .historyFound, .historySearchEnded, .historyMarks, .conversationDeleted, .conversationExported:
+            historyStore.handle(message, folderPath: panelFolder)
+        case .worktreeSetups(let setups):
+            worktreeSetups = setups
         case .worktreeFinished(_, _, let said):
             worktreeSaid = said
         case .macInUse(let inUse):
@@ -1251,6 +1454,24 @@ final class AppModel: ObservableObject {
             devices = list
         case .accountUsage(let list):
             accountUsage = Dictionary(list.map { ($0.agent, $0) }, uniquingKeysWith: { $1 })
+        case .gitBranches(let path, let list):
+            if path == panelFolder { branches = list }
+        case .gitLastCommit(let path, let last):
+            guard path == panelFolder, let wanted = lastCommitWanted else { break }
+            lastCommitWanted = nil
+            if let last { wanted(last) } else { notice = "There is no commit here yet." }
+        case .gitStashes(let path, let list):
+            if path == panelFolder { stashes = list }
+        case .gitStashShow(_, let hash, let files):
+            stashFiles[hash] = files ?? []
+        case .gitLog(let path, let branch, let skip, let list, let more):
+            if path == panelFolder, branch == commitsBranch { took(list, skip: skip, more: more) }
+        case .gitShow(_, let hash, let details):
+            if let details { commitDetails[hash] = details } else if let commit = commits.first(where: { $0.hash == hash }) { commitDetails[hash] = CommitDetails(commit: commit) }
+        case .gitFetched(let path, let problem, let automatic):
+            fetched(path, problem: problem, automatic: automatic)
+        case .gitForcePushPreview(let path, let upstream, let loses):
+            forcePushPreview(path, branch: nil, upstream: upstream, loses: loses)
         case .diff(let path, let snapshot):
             // Only asked for on another Mac: this Mac's changes are read
             // from its own disk.
@@ -1265,16 +1486,22 @@ final class AppModel: ObservableObject {
                 pendingCommit = nil
                 isCommitting = false
                 commitMessages[path] = nil
+                amending[path] = nil
                 files.refresh()
             }
+            // Something was done inside a submodule of the folder on show:
+            // what the folder says of it is read again (#44).
+            if let panelFolder, path.hasPrefix(panelFolder + "/") { refreshDiff() }
             guard path == panelFolder else { break }
             diffGeneration += 1
             apply(snapshot, to: path)
         case .diffFile(let path, let file):
             loadingDiffFile = false
-            guard isRemote, let tab = diffTab, tab.folder == path else { break }
+            guard isRemote, let tab = diffTab, tab.folder == path, tab.commit == nil else { break }
             if let file {
-                if file.path == tab.file.path, file.isStaged == tab.file.isStaged, file != tab.file { diffTab = OpenDiff(folder: path, file: file) }
+                if file.path == tab.file.path, file.isStaged == tab.file.isStaged, file != tab.file {
+                    diffTab = OpenDiff(folder: path, file: file, inSubmodule: tab.inSubmodule)
+                }
             } else {
                 closeDiffTab()
             }
@@ -1336,7 +1563,9 @@ final class AppModel: ObservableObject {
     /// Starts an agent, or a shell, in a new git worktree of the selected
     /// folder, on a branch of its own (#23). With changes not committed, the
     /// user is asked first: the agent there will not see them.
-    func launchInWorktree(_ agent: AgentInfo?, confirmed: Bool = false) {
+    /// From the worktree bar's sheet (#43) the branch is named and the
+    /// branch it starts from picked; the sheet says what the question asks.
+    func launchInWorktree(_ agent: AgentInfo?, branch: String? = nil, from: String? = nil, confirmed: Bool = false) {
         guard status == .connected, let folder = selectedFolder else { return }
         if !confirmed, let diff, !(diff.staged.isEmpty && diff.unstaged.isEmpty) {
             worktreeQuestion = agent.map { .agent($0) } ?? .shell
@@ -1345,7 +1574,7 @@ final class AppModel: ObservableObject {
         lastError = nil
         selectNextAttached = true
         Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
-        connection?.send(.createInWorktree(request: CreateRequest(command: agent?.id, cwd: folder, title: agent?.name, size: startingSize), branch: nil))
+        connection?.send(.createInWorktree(request: CreateRequest(command: agent?.id, cwd: folder, title: agent?.name, size: startingSize), branch: branch, from: from))
     }
 
     enum WorktreeLaunch: Equatable {
@@ -1468,6 +1697,8 @@ final class AppModel: ObservableObject {
         if let selectedFolder { listWorktrees(selectedFolder) }
         // The diff tab stays: it belongs to its own folder, not to the one on show.
         files.setRoot(panelFolder)
+        search.setRoot(panelFolder)
+        historyStore.folderChanged()
         refreshDiff()
         folderHistory = nil
         refreshHistory(ofFolder: true)
@@ -1744,8 +1975,31 @@ final class AppModel: ObservableObject {
 
     /// Shows a folder's changes as they are now, and has the diff's tab follow.
     private func apply(_ snapshot: DiffSnapshot, to directory: String) {
+        // What the worktrees' chips say of this one is then stale (#43):
+        // how many files are changed, its branch, what it is ahead by.
+        if let diff, let selectedFolder, diff.files.count != snapshot.files.count || diff.branch != snapshot.branch || diff.ahead != snapshot.ahead {
+            listWorktrees(selectedFolder)
+        }
         if diff != snapshot { diff = snapshot }
-        guard let tab = diffTab, tab.folder == directory else { return }
+        follow(snapshot, in: directory)
+    }
+
+    /// Has the diff's tab follow the change it shows, in the folder or in
+    /// one of its submodules, theirs too (#44).
+    private func follow(_ snapshot: DiffSnapshot, in directory: String) {
+        guard let tab = diffTab, tab.commit == nil else { return }
+        guard tab.folder == directory else {
+            if tab.folder.hasPrefix(directory + "/") {
+                if let inside = snapshot.submodules.first(where: { tab.folder == $0.directory(in: directory) || tab.folder.hasPrefix($0.directory(in: directory) + "/") }) {
+                    follow(inside.changes, in: inside.directory(in: directory))
+                } else if tab.inSubmodule {
+                    // Nothing is changed in its submodule any more. A tab
+                    // of another worktree of the folder is not this: it stays.
+                    closeDiffTab()
+                }
+            }
+            return
+        }
         // The tab shows the change as it is now. A file that was
         // just staged or unstaged is followed into its new list.
         guard var now = snapshot.files.first(where: { $0.id == tab.file.id }) ?? snapshot.files.first(where: { $0.path == tab.file.path }) else {
@@ -1759,7 +2013,7 @@ final class AppModel: ObservableObject {
             if now.isStaged == tab.file.isStaged { now.patch = tab.file.patch }
             connection?.send(.diffFile(path: directory, file: now.path, staged: now.isStaged))
         }
-        if now != tab.file { diffTab = OpenDiff(folder: directory, file: now) }
+        if now != tab.file { diffTab = OpenDiff(folder: directory, file: now, inSubmodule: tab.inSubmodule) }
     }
 
     /// The change that has a tab in the middle pane, if any.
@@ -1767,13 +2021,22 @@ final class AppModel: ObservableObject {
 
     /// The change to mark in the Git tab's list: the diff tab's, while the
     /// list is of its folder.
-    var diffTabFileInList: FileDiff? { diffTab?.folder == panelFolder ? diffTab?.file : nil }
+    var diffTabFileInList: FileDiff? { diffTab?.folder == panelFolder && diffTab?.commit == nil ? diffTab?.file : nil }
+
+    /// The commit the diff tab's change belongs to, when it is a commit's
+    /// or a stash's.
+    var diffTabCommit: CommitInfo? { diffTab?.commit }
+    /// What the diff tab says its change is of: a commit's hash, "STASH",
+    /// or nil for a change that is not committed.
+    var diffTabLabel: String? { diffTab?.label ?? diffTab?.commit?.short }
 
     /// Shows a change's diff in the middle pane. There is one diff tab; it
     /// follows the change picked in the Git tab.
-    func openDiff(_ file: FileDiff) {
-        guard let folder = panelFolder else { return }
-        diffTab = OpenDiff(folder: folder, file: file)
+    /// - Parameter submodule: The submodule the file is changed in (#44),
+    ///   nil for a change of the folder itself.
+    func openDiff(_ file: FileDiff, in submodule: String? = nil) {
+        guard let folder = directory(of: submodule) else { return }
+        diffTab = OpenDiff(folder: folder, file: file, inSubmodule: submodule != nil)
         // From another Mac the list has no diffs in it: this file's is asked for.
         if isRemote {
             loadingDiffFile = true
@@ -1797,23 +2060,367 @@ final class AppModel: ObservableObject {
     }
 
     /// Stages files for the next commit. No files means every change.
-    func stage(_ files: [FileDiff]) {
+    func stage(_ files: [FileDiff], in submodule: String? = nil) {
         let paths = files.map(\.path)
-        if isRemote, let directory = panelFolder {
+        if isRemote, let directory = directory(of: submodule) {
             sendForDiff(.gitStage(path: directory, files: paths), in: directory)
             return
         }
-        git { GitActions.stage(paths, in: $0) }
+        git(in: submodule) { GitActions.stage(paths, in: $0) }
+    }
+
+    // MARK: Submodules (#44)
+
+    /// The folder git is run in: the one the side panel shows, or a
+    /// submodule inside it.
+    func directory(of submodule: String?) -> String? {
+        guard let folder = panelFolder else { return nil }
+        return submodule.map { (folder as NSString).appendingPathComponent($0) } ?? folder
+    }
+
+    /// Whether a change of a list is the one the diff's tab shows.
+    func isInDiffTab(_ file: FileDiff, in submodule: String?) -> Bool {
+        guard let tab = diffTab, tab.commit == nil else { return false }
+        return tab.folder == directory(of: submodule) && tab.file.id == file.id
+    }
+
+    /// Stages the change the diff's tab shows, or unstages it, in the
+    /// folder the tab is of: a submodule's own, for a file in one.
+    func toggleStageOfDiffTab() {
+        guard let tab = diffTab, tab.commit == nil else { return }
+        let paths = [tab.file.path]
+        let staged = tab.file.isStaged
+        if isRemote {
+            sendForDiff(staged ? .gitUnstage(path: tab.folder, files: paths) : .gitStage(path: tab.folder, files: paths), in: tab.folder)
+            return
+        }
+        git(at: tab.folder) { staged ? GitActions.unstage(paths, in: $0) : GitActions.stage(paths, in: $0) }
+    }
+
+    /// The submodule the diff's tab is in, as the folder on show names it.
+    var diffTabSubmodule: String? {
+        guard let tab = diffTab, tab.inSubmodule, let folder = panelFolder, tab.folder.hasPrefix(folder + "/") else { return nil }
+        return String(tab.folder.dropFirst(folder.count + 1))
+    }
+
+    /// The submodule a commit is being written for, and its message.
+    @Published var committingSubmodule: SubmoduleChanges?
+    @Published var submoduleMessage = ""
+
+    /// Commits what is staged inside a submodule. Its new commit is then a
+    /// change of the folder, to be committed there.
+    func commitSubmodule() {
+        guard let submodule = committingSubmodule, let directory = directory(of: submodule.path) else { return }
+        let message = submoduleMessage
+        committingSubmodule = nil
+        submoduleMessage = ""
+        if isRemote {
+            sendForDiff(.gitCommit(path: directory, message: message), in: directory)
+            return
+        }
+        git(in: submodule.path) { GitActions.commit(message: message, in: $0) }
     }
 
     /// Takes files out of the next commit. No files means all of them.
-    func unstage(_ files: [FileDiff]) {
+    func unstage(_ files: [FileDiff], in submodule: String? = nil) {
         let paths = files.map(\.path)
-        if isRemote, let directory = panelFolder {
+        if isRemote, let directory = directory(of: submodule) {
             sendForDiff(.gitUnstage(path: directory, files: paths), in: directory)
             return
         }
-        git { GitActions.unstage(paths, in: $0) }
+        git(in: submodule) { GitActions.unstage(paths, in: $0) }
+    }
+
+    // MARK: Commits (#36)
+
+    /// The commits of the folder the side panel shows, newest first, as
+    /// far as they were asked for, and whether there are older ones.
+    @Published private(set) var commits: [CommitInfo] = []
+    @Published private(set) var commitsMore = false
+    @Published private(set) var loadingCommits = false
+    /// The branch whose commits are listed; nil for the checked out one.
+    @Published var commitsBranch: String? { didSet { if commitsBranch != oldValue { loadCommits() } } }
+    /// What each commit that was opened changed, by its hash.
+    @Published private(set) var commitDetails: [String: CommitDetails] = [:]
+    /// The commit that is opened out in the list, with its message and files.
+    @Published var openedCommit: String?
+    /// A revert or a cherry-pick that waits to be confirmed.
+    @Published var pendingCommitAction: PendingCommitAction?
+
+    struct PendingCommitAction: Identifiable {
+        let action: CommitActionQuestion.Action
+        let commit: CommitInfo
+        var id: String { action.rawValue + commit.hash }
+    }
+
+    /// How many commits are asked for at a time.
+    static let commitsPage = 50
+    /// Tells an answer for the list as it is from one for a list since replaced.
+    private var commitsGeneration = 0
+
+    /// Reads the first page of commits again.
+    func loadCommits() {
+        commitsGeneration += 1
+        commits = []
+        commitsMore = false
+        loadCommits(skip: 0)
+    }
+
+    /// Reads the next page, when there is one and none is on its way.
+    func loadMoreCommits() {
+        guard commitsMore, !loadingCommits else { return }
+        loadCommits(skip: commits.count)
+    }
+
+    private func loadCommits(skip: Int) {
+        guard let directory = panelFolder else { return }
+        loadingCommits = true
+        let branch = commitsBranch
+        if isRemote {
+            connection?.send(.gitLog(path: directory, branch: branch, skip: skip, limit: Self.commitsPage))
+            return
+        }
+        let generation = commitsGeneration
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let found = GitActions.log(in: directory, branch: branch, skip: skip, limit: Self.commitsPage)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, generation == self.commitsGeneration, self.panelFolder == directory else { return }
+                self.took(found.commits, skip: skip, more: found.more)
+            }
+        }
+    }
+
+    private func took(_ list: [CommitInfo], skip: Int, more: Bool) {
+        loadingCommits = false
+        // A page that no longer follows what is listed is another list's.
+        guard skip == commits.count else { return }
+        commits += list
+        commitsMore = more
+    }
+
+    /// Opens a commit out in the list, or closes it, and reads what it changed.
+    func toggle(_ commit: CommitInfo) {
+        if openedCommit == commit.hash {
+            openedCommit = nil
+            return
+        }
+        openedCommit = commit.hash
+        guard commitDetails[commit.hash] == nil, let directory = panelFolder else { return }
+        if isRemote {
+            connection?.send(.gitShow(path: directory, hash: commit.hash))
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let details = GitActions.show(commit.hash, in: directory)
+            DispatchQueue.main.async { self?.commitDetails[commit.hash] = details ?? CommitDetails(commit: commit) }
+        }
+    }
+
+    /// Shows what a commit did to one file, in the diff's tab.
+    func openDiff(_ file: FileDiff, of commit: CommitInfo) {
+        guard let folder = panelFolder else { return }
+        diffTab = OpenDiff(folder: folder, file: file, commit: commit)
+        loadingDiffFile = false
+        showDiffTab()
+    }
+
+    func copyHash(of commit: CommitInfo) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(commit.hash, forType: .string)
+    }
+
+    func commitActionConfirmed(_ pending: PendingCommitAction) {
+        guard let directory = panelFolder else { return }
+        let hash = pending.commit.hash
+        let revert = pending.action == .revert
+        sync(revert ? "revert" : "cherry-pick", in: directory, revert ? .gitRevert(path: directory, hash: hash) : .gitCherryPick(path: directory, hash: hash)) {
+            revert ? GitActions.revert(hash, in: $0) : GitActions.cherryPick(hash, in: $0)
+        }
+    }
+
+    // MARK: Stash (#38)
+
+    /// What is in the stash of the folder the side panel shows, newest first.
+    @Published private(set) var stashes: [StashInfo] = []
+    /// The files each stash that was opened holds, by its hash.
+    @Published private(set) var stashFiles: [String: [FileDiff]] = [:]
+    /// The stash that is opened out in the list.
+    @Published var openedStash: String?
+    /// The stash the user is asked about before it is dropped.
+    @Published var droppingStash: StashInfo?
+
+    func loadStashes() {
+        guard let directory = panelFolder else {
+            stashes = []
+            return
+        }
+        if isRemote {
+            connection?.send(.gitStashes(path: directory))
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let list = GitActions.stashes(in: directory)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.panelFolder == directory else { return }
+                self.stashes = list
+            }
+        }
+    }
+
+    /// Runs a change to the stash here or on the other Mac, then shows the
+    /// stash and the changes as they are.
+    private func changeStash(_ message: (String) -> ClientMessage, _ action: @escaping (String) -> String?) {
+        guard let directory = panelFolder else { return }
+        if isRemote {
+            sendForDiff(message(directory), in: directory)
+            return
+        }
+        git(action) { [weak self] _ in self?.loadStashes() }
+    }
+
+    /// Puts the folder's changes aside, the new files too when asked.
+    func stash(named name: String, untracked: Bool) {
+        changeStash({ .gitStash(path: $0, message: name, untracked: untracked) }) { GitActions.stash(message: name, untracked: untracked, in: $0) }
+    }
+
+    /// Opens a stash out in the list, or closes it, and reads what it holds.
+    func toggle(_ stash: StashInfo) {
+        if openedStash == stash.hash {
+            openedStash = nil
+            return
+        }
+        openedStash = stash.hash
+        guard stashFiles[stash.hash] == nil, let directory = panelFolder else { return }
+        if isRemote {
+            connection?.send(.gitStashShow(path: directory, hash: stash.hash))
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let files = GitActions.stashFiles(stash.hash, in: directory)
+            DispatchQueue.main.async { self?.stashFiles[stash.hash] = files ?? [] }
+        }
+    }
+
+    func applyStash(_ stash: StashInfo, pop: Bool) {
+        changeStash({ .gitStashApply(path: $0, hash: stash.hash, pop: pop) }) { GitActions.applyStash(stash.hash, pop: pop, in: $0) }
+    }
+
+    func dropStashConfirmed() {
+        guard let stash = droppingStash else { return }
+        droppingStash = nil
+        if openedStash == stash.hash { openedStash = nil }
+        changeStash({ .gitStashDrop(path: $0, hash: stash.hash) }) { GitActions.dropStash(stash.hash, in: $0) }
+    }
+
+    /// Shows what a stash holds of one file, in the diff's tab.
+    func openDiff(_ file: FileDiff, of stash: StashInfo) {
+        guard let folder = panelFolder else { return }
+        diffTab = OpenDiff(folder: folder, file: file, commit: CommitInfo(hash: stash.hash, subject: stash.message, date: stash.date), label: "STASH")
+        loadingDiffFile = false
+        showDiffTab()
+    }
+
+    // MARK: Branches (#35)
+
+    /// The branches of the folder the side panel shows, its own first.
+    /// Read when the list of them is opened, and after each change to them.
+    @Published private(set) var branches: [BranchInfo] = []
+    /// The branch the user is asked about before it is deleted, and whether
+    /// this is the second question, for one with commits of its own.
+    @Published var deletingBranch: (branch: BranchInfo, again: Bool)?
+
+    func loadBranches() {
+        guard let directory = panelFolder else {
+            branches = []
+            return
+        }
+        if isRemote {
+            connection?.send(.gitBranches(path: directory))
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let list = GitActions.branches(in: directory)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.panelFolder == directory else { return }
+                self.branches = list
+            }
+        }
+    }
+
+    /// Runs a change to the branches here or on the other Mac, then shows
+    /// the branches and the changes as they are.
+    private func changeBranches(_ message: (String) -> ClientMessage, _ action: @escaping (String) -> String?) {
+        guard let directory = panelFolder else { return }
+        if isRemote {
+            sendForDiff(message(directory), in: directory)
+            return
+        }
+        git(action) { [weak self] _ in self?.loadBranches() }
+    }
+
+    func switchBranch(_ branch: BranchInfo) {
+        changeBranches({ .gitSwitch(path: $0, branch: branch.name) }) { GitActions.switchTo(branch.name, in: $0) }
+    }
+
+    func createBranch(named name: String, from start: String?, checkout: Bool) {
+        changeBranches({ .gitCreateBranch(path: $0, name: name, from: start, checkout: checkout) }) {
+            GitActions.createBranch(name, from: start, checkout: checkout, in: $0)
+        }
+    }
+
+    func renameBranch(_ branch: BranchInfo, to name: String) {
+        changeBranches({ .gitRenameBranch(path: $0, from: branch.name, to: name) }) { GitActions.renameBranch(branch.name, to: name, in: $0) }
+    }
+
+    /// Asked first; a branch with commits of its own is asked about twice.
+    func requestDeleteBranch(_ branch: BranchInfo) { deletingBranch = (branch, false) }
+
+    func deleteBranchConfirmed() {
+        guard let asked = deletingBranch else { return }
+        if !asked.branch.isMerged && !asked.again {
+            deletingBranch = (asked.branch, true)
+            return
+        }
+        deletingBranch = nil
+        let force = !asked.branch.isMerged
+        changeBranches({ .gitDeleteBranch(path: $0, name: asked.branch.name, force: force) }) {
+            GitActions.deleteBranch(asked.branch.name, force: force, in: $0)
+        }
+    }
+
+    /// The changes the user is asked about before they are discarded (#39).
+    @Published var discarding: [FileDiff]?
+    /// The submodule they are changed in, nil for the folder's own.
+    private var discardingIn: String?
+
+    /// What is not staged in the folder, or in a submodule of it.
+    private func unstaged(in submodule: String?) -> [FileDiff] {
+        guard let submodule else { return diff?.unstaged ?? [] }
+        return diff?.submodules.first { $0.path == submodule }?.changes.unstaged ?? []
+    }
+
+    /// Asks before discarding changes that are not staged. No files means
+    /// every one of them.
+    func requestDiscard(_ files: [FileDiff], in submodule: String? = nil) {
+        let asked = files.isEmpty ? unstaged(in: submodule) : files.filter { !$0.isStaged }
+        guard !asked.isEmpty else { return }
+        discardingIn = submodule
+        discarding = asked
+    }
+
+    /// Discards what was asked about: back to what is staged or committed,
+    /// and to the Trash what git does not track.
+    func discardConfirmed() {
+        guard let asked = discarding else { return }
+        discarding = nil
+        // Every change is asked for as such, so that one made since is not left out.
+        let submodule = discardingIn
+        let paths = asked.count == unstaged(in: submodule).count && asked.count > 1 ? [] : asked.map(\.path)
+        if isRemote, let directory = directory(of: submodule) {
+            sendForDiff(.gitDiscard(path: directory, files: paths), in: directory)
+            return
+        }
+        git(in: submodule) { GitActions.discard(paths, in: $0) }
     }
 
     /// Commits what is staged in the selected folder with the message written for it.
@@ -1821,9 +2428,11 @@ final class AppModel: ObservableObject {
         guard let directory = panelFolder, !isCommitting else { return }
         let message = commitMessages[directory] ?? ""
         isCommitting = true
+        // The last commit is being amended: this replaces it (#41).
+        let amends = amending[directory] != nil
         if isRemote {
             // Answered with the changes as they are then, after an error if git refused.
-            if sendForDiff(.gitCommit(path: directory, message: message), in: directory) {
+            if sendForDiff(amends ? .gitAmend(path: directory, message: message) : .gitCommit(path: directory, message: message), in: directory) {
                 pendingCommit = directory
             } else {
                 isCommitting = false
@@ -1831,9 +2440,144 @@ final class AppModel: ObservableObject {
             }
             return
         }
-        git({ GitActions.commit(message: message, in: $0) }) { [weak self] succeeded in
+        git({ amends ? GitActions.amend(message: message, in: $0) : GitActions.commit(message: message, in: $0) }) { [weak self] succeeded in
             self?.isCommitting = false
-            if succeeded { self?.commitMessages[directory] = nil }
+            if succeeded {
+                self?.commitMessages[directory] = nil
+                self?.amending[directory] = nil
+            }
+        }
+    }
+
+    // MARK: Conflicts (#42)
+
+    /// Aborting what is stopped on conflicts waits to be confirmed.
+    @Published var confirmingAbort = false
+
+    /// Resolves a file that conflicts by taking one side, or as it is now.
+    func resolve(_ file: FileDiff, as resolution: GitActions.Resolution) {
+        if isRemote, let directory = panelFolder {
+            sendForDiff(.gitResolve(path: directory, file: file.path, take: resolution.rawValue), in: directory)
+            return
+        }
+        git { GitActions.resolve(file.path, as: resolution, in: $0) }
+    }
+
+    /// Opens a file that conflicts in the editor, markers and all.
+    func edit(conflict file: FileDiff) {
+        guard let directory = panelFolder else { return }
+        files.open((directory as NSString).appendingPathComponent(file.path))
+    }
+
+    /// Goes on with the merge, rebase, cherry-pick or revert that stopped.
+    func continueOperation() {
+        guard let directory = panelFolder else { return }
+        sync("continue", in: directory, .gitContinue(path: directory)) { GitActions.continueOperation(in: $0) }
+    }
+
+    func abortOperationConfirmed() {
+        guard let directory = panelFolder else { return }
+        sync("abort", in: directory, .gitAbort(path: directory)) { GitActions.abortOperation(in: $0) }
+    }
+
+    // MARK: Parts of a file (#40)
+
+    /// Stages, unstages or discards one hunk of a file's change, or the
+    /// lines of it that were picked. The file's diff is read again after.
+    func apply(_ use: PatchParts.Use, hunk: PatchHunk, picked: Set<Int>?, of file: FileDiff) {
+        guard let patch = PatchParts.patch(path: file.path, hunk: hunk, picked: picked, use: use) else { return }
+        // In the folder the diff's tab is of: a submodule's own, for a file in one (#44).
+        guard let directory = diffTab?.folder ?? panelFolder else { return }
+        if isRemote {
+            sendForDiff(.gitApplyPart(path: directory, file: file.path, patch: patch, use: use.rawValue), in: directory)
+            return
+        }
+        git(at: directory) { GitActions.applyPart(patch, use: use, file: file.path, in: $0) }
+    }
+
+    // MARK: Amend and undo the last commit (#41)
+
+    /// The commit being amended, by folder: the commit box then replaces
+    /// it, with the message it had to begin with.
+    @Published private(set) var amending: [String: LastCommit] = [:]
+    /// Undoing or amending that waits to be confirmed.
+    @Published var pendingRewrite: PendingRewrite?
+
+    struct PendingRewrite: Identifiable {
+        let action: RewriteCommitQuestion.Action
+        let last: LastCommit
+        var again = false
+        var id: String { action.rawValue + last.commit.hash + (again ? "again" : "") }
+    }
+
+    /// Whether the folder the side panel shows has its last commit being amended.
+    var isAmending: Bool { panelFolder.map { amending[$0] != nil } ?? false }
+
+    /// Reads the last commit, here or on the other Mac, and goes on with it.
+    private func withLastCommit(_ then: @escaping (LastCommit) -> Void) {
+        guard let directory = panelFolder else { return }
+        if isRemote {
+            lastCommitWanted = then
+            connection?.send(.gitLastCommit(path: directory))
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let last = GitActions.lastCommit(in: directory)
+            DispatchQueue.main.async {
+                guard let self, self.panelFolder == directory else { return }
+                if let last { then(last) } else { self.notice = "There is no commit here yet." }
+            }
+        }
+    }
+
+    /// What is done with another Mac's last commit once it has said it.
+    private var lastCommitWanted: ((LastCommit) -> Void)?
+
+    /// Starts amending the last commit: its message is put in the commit
+    /// box, and what is staged goes into it when the box commits. One a
+    /// remote has already is asked about first.
+    func requestAmend() {
+        withLastCommit { [weak self] last in
+            if last.isPushed { self?.pendingRewrite = PendingRewrite(action: .amend, last: last) } else { self?.beginAmend(last) }
+        }
+    }
+
+    private func beginAmend(_ last: LastCommit) {
+        guard let directory = panelFolder else { return }
+        amending[directory] = last
+        commitMessages[directory] = last.message
+        // The commit box is among the changes: that is where to go on.
+        UserDefaults.standard.set("changes", forKey: "gitPane")
+    }
+
+    /// Leaves the last commit as it is; the message goes with it.
+    func cancelAmend() {
+        guard let directory = panelFolder, amending[directory] != nil else { return }
+        amending[directory] = nil
+        commitMessages[directory] = nil
+    }
+
+    /// Asks before the last commit is undone.
+    func requestUndoCommit() {
+        withLastCommit { [weak self] last in self?.pendingRewrite = PendingRewrite(action: .undo, last: last) }
+    }
+
+    func rewriteConfirmed(_ pending: PendingRewrite) {
+        switch pending.action {
+        case .amend:
+            beginAmend(pending.last)
+        case .undo:
+            // One a remote has is asked about once more.
+            if pending.last.isPushed && !pending.again {
+                // After the dialog has gone: one that is presented while
+                // another closes is not shown.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                    self?.pendingRewrite = PendingRewrite(action: .undo, last: pending.last, again: true)
+                }
+                return
+            }
+            guard let directory = panelFolder else { return }
+            sync("undo", in: directory, .gitUndoCommit(path: directory)) { GitActions.undoLastCommit(in: $0) }
         }
     }
 
@@ -1856,8 +2600,12 @@ final class AppModel: ObservableObject {
 
     /// Runs a git change in the selected folder off the main thread, then
     /// shows what git said if it failed and reads the changes again.
-    private func git(_ action: @escaping (String) -> String?, then: ((Bool) -> Void)? = nil) {
-        guard let directory = panelFolder else { return }
+    private func git(in submodule: String? = nil, _ action: @escaping (String) -> String?, then: ((Bool) -> Void)? = nil) {
+        guard let directory = directory(of: submodule) else { return }
+        git(at: directory, action, then: then)
+    }
+
+    private func git(at directory: String, _ action: @escaping (String) -> String?, then: ((Bool) -> Void)? = nil) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let problem = action(directory)
             DispatchQueue.main.async { [weak self] in

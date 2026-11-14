@@ -21,6 +21,20 @@ enum Route: Hashable {
     case file(folder: String, file: String, staged: Bool)
     /// A file on the Mac, to read or edit.
     case document(path: String)
+    /// The same, shown at a line a search found (#45).
+    case documentLine(path: String, line: Int)
+    /// The commits of a folder's checked out branch (#36).
+    case commits(folder: String)
+    /// One commit: its message and the files it changed.
+    case commit(folder: String, hash: String)
+    /// What a commit did to one file.
+    case commitFile(folder: String, hash: String, file: String)
+    /// What is in a folder's stash (#38).
+    case stashes(folder: String)
+    /// One stash: its files, and bringing it back or dropping it.
+    case stash(folder: String, hash: String)
+    /// What a stash holds of one file.
+    case stashFile(folder: String, hash: String, file: String)
 }
 
 /// A file on the Mac as it was last read.
@@ -81,6 +95,20 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var agentShells: Bool?
     /// Whether the agents are asked to run their commands in shells the user sees.
     @Published private(set) var agentsUseShells: Bool?
+    /// What keeps the agents from opening shells although that is on (#58),
+    /// as the host says it, and those of them the user has closed here.
+    @Published private(set) var agentShellsFaults: [AgentShellsFault] = []
+    @Published private var closedShellsFaults: Set<String> = []
+    /// The ones to warn of: a fault that was closed is shown again only
+    /// after it went away and came back.
+    var shownShellsFaults: [AgentShellsFault] { agentShellsFaults.filter { !closedShellsFaults.contains($0.id) } }
+
+    func dismiss(_ fault: AgentShellsFault) { closedShellsFaults.insert(fault.id) }
+
+    private func took(_ faults: [AgentShellsFault]) {
+        agentShellsFaults = faults
+        closedShellsFaults.formIntersection(faults.map(\.id))
+    }
 
     func setAgentsUseShells(_ on: Bool) {
         agentsUseShells = on
@@ -178,10 +206,55 @@ final class PhoneModel: ObservableObject {
         connection?.send(.gitPush(path: folder))
     }
 
-    func pull(in folder: String) {
+    /// Brings in what the upstream has: the way the repository is set up
+    /// to (`mode` nil), by "merge" or by "rebase" (#37).
+    func pull(in folder: String, mode: String? = nil) {
         guard status == .connected, syncing[folder] == nil else { return }
         syncing[folder] = "pull"
-        connection?.send(.gitPull(path: folder))
+        connection?.send(.gitPull(path: folder, mode: mode))
+    }
+
+    /// What the last fetch no one asked for said when it failed, by folder.
+    @Published private(set) var fetchProblems: [String: String] = [:]
+    private var fetchedAt: [String: Date] = [:]
+    /// A forced push that waits to be confirmed, with what it would overwrite.
+    @Published var pendingForcePush: ForcePush?
+    @Published private(set) var askingForcePush: String?
+
+    struct ForcePush: Identifiable {
+        let folder: String
+        let question: ForcePushQuestion
+        var id: String { folder }
+    }
+
+    /// Asks the folder's remotes on the Mac for what is new. `automatic`
+    /// when no one asked: its failure is noted, and interrupts no one.
+    func fetch(in folder: String, automatic: Bool = false) {
+        guard status == .connected, syncing[folder] == nil else { return }
+        syncing[folder] = "fetch"
+        fetchedAt[folder] = Date()
+        connection?.send(.gitFetch(path: folder, automatic: automatic))
+    }
+
+    /// Fetches the folder on screen when it is time to: the setting on, a
+    /// remote to ask, and the last fetch longer ago than the interval.
+    func fetchIfDue(_ folder: String) {
+        guard display.fetchAutomatically, let diff = diffs[folder], diff.isRepository, diff.upstream != nil || diff.pushRemote != nil else { return }
+        guard Date().timeIntervalSince(fetchedAt[folder] ?? .distantPast) >= DisplaySettings.fetchInterval else { return }
+        fetch(in: folder, automatic: true)
+    }
+
+    /// Asks the Mac what a forced push would overwrite, then asks the user.
+    func requestForcePush(in folder: String) {
+        guard status == .connected, askingForcePush == nil else { return }
+        askingForcePush = folder
+        connection?.send(.gitForcePushPreview(path: folder))
+    }
+
+    func forcePushConfirmed(_ push: ForcePush) {
+        guard status == .connected, syncing[push.folder] == nil else { return }
+        syncing[push.folder] = "push"
+        connection?.send(.gitPush(path: push.folder, force: true))
     }
 
     /// How the Mac is doing: processor, memory, network, heat, battery, uptime.
@@ -249,11 +322,108 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var agents: [AgentInfo] = []
     @Published private(set) var agentsLoaded = false
     /// The screens on the navigation stack.
-    @Published var path: [Route] = []
+    @Published var path: [Route] = [] {
+        // A notice hides by itself once its session is opened, however the
+        // user got there, and does not come back when they leave it (#60).
+        didSet {
+            guard let open = openSessionID else { return }
+            if agentNotice?.session == open { agentNotice = nil }
+            sawNotice(of: open)
+        }
+    }
+
+    /// What the agent of the session on screen said or asks is seen: its
+    /// notification goes from Notification Center, and the Mac is told, so
+    /// that the other devices hide their notice of it (#60).
+    private func sawNotice(of session: SessionID) {
+        guard let mac = pairing?.id else { return }
+        notifications.remove(mac: mac, session: session)
+        guard let state = sessions.first(where: { $0.id == session })?.state, !state.isWorking, noticeSeenTold?.session != session || noticeSeenTold?.state != state
+        else { return }
+        noticeSeenTold = (session, state)
+        connection?.send(.noticeSeen(session: session, state: state))
+    }
+
+    /// The last notice the Mac was told is seen, so it is told once.
+    private var noticeSeenTold: (session: SessionID, state: AgentState)?
     /// The tab in front: "sessions", "history" or "settings".
     @Published var tab = "sessions"
     /// A folder's uncommitted changes, by folder. Without the diffs.
     @Published private(set) var diffs: [String: DiffSnapshot] = [:]
+    // MARK: Stash (#38)
+
+    /// What is in each folder's stash, newest first.
+    @Published private(set) var stashes: [String: [StashInfo]] = [:]
+    /// The files each stash that was opened holds, by its hash.
+    @Published private(set) var stashFiles: [String: [FileDiff]] = [:]
+
+    func loadStashes(_ folder: String) { connection?.send(.gitStashes(path: folder)) }
+
+    func loadStash(_ hash: String, in folder: String) {
+        guard stashFiles[hash] == nil else { return }
+        connection?.send(.gitStashShow(path: folder, hash: hash))
+    }
+
+    /// Puts the folder's changes aside on the Mac, the new files too when asked.
+    func stash(named name: String, untracked: Bool, in folder: String) {
+        connection?.send(.gitStash(path: folder, message: name, untracked: untracked))
+    }
+
+    func applyStash(_ hash: String, pop: Bool, in folder: String) {
+        connection?.send(.gitStashApply(path: folder, hash: hash, pop: pop))
+    }
+
+    /// Throws a stash away, once the user was asked.
+    func dropStash(_ hash: String, in folder: String) {
+        connection?.send(.gitStashDrop(path: folder, hash: hash))
+    }
+
+    // MARK: Commits (#36)
+
+    /// The commits of each folder's checked out branch, newest first, as
+    /// far as they were asked for, and whether there are older ones.
+    @Published private(set) var commits: [String: [CommitInfo]] = [:]
+    @Published private(set) var commitsMore: [String: Bool] = [:]
+    /// The folders a page of commits is on its way for.
+    @Published private(set) var loadingCommits: Set<String> = []
+    /// What each commit that was opened changed, by its hash.
+    @Published private(set) var commitDetails: [String: CommitDetails] = [:]
+    static let commitsPage = 50
+
+    /// Reads the first page of a folder's commits again.
+    func loadCommits(_ folder: String) {
+        commits[folder] = []
+        commitsMore[folder] = false
+        loadingCommits.insert(folder)
+        connection?.send(.gitLog(path: folder, branch: nil, skip: 0, limit: Self.commitsPage))
+    }
+
+    /// Reads the next page, when there is one and none is on its way.
+    func loadMoreCommits(_ folder: String) {
+        guard commitsMore[folder] == true, !loadingCommits.contains(folder) else { return }
+        loadingCommits.insert(folder)
+        connection?.send(.gitLog(path: folder, branch: nil, skip: commits[folder]?.count ?? 0, limit: Self.commitsPage))
+    }
+
+    func loadCommit(_ hash: String, in folder: String) {
+        guard commitDetails[hash] == nil else { return }
+        connection?.send(.gitShow(path: folder, hash: hash))
+    }
+
+    /// The branches of each folder that was asked about (#35), its own first.
+    @Published private(set) var branches: [String: [BranchInfo]] = [:]
+
+    func loadBranches(_ folder: String) { connection?.send(.gitBranches(path: folder)) }
+
+    /// Checks a branch out on the Mac. Refused there, in words, when
+    /// changes that are not committed would be lost.
+    func switchBranch(_ branch: BranchInfo, in folder: String) {
+        connection?.send(.gitSwitch(path: folder, branch: branch.name))
+    }
+
+    func createBranch(named name: String, from start: String?, checkout: Bool, in folder: String) {
+        connection?.send(.gitCreateBranch(path: folder, name: name, from: start, checkout: checkout))
+    }
     /// The diff of a file, by `patchKey`. A missing file is stored as nil.
     @Published private(set) var patches: [String: FileDiff?] = [:]
     /// What each agent's account has used and has left, by agent.
@@ -319,6 +489,20 @@ final class PhoneModel: ObservableObject {
     func setWorktreeSetup(_ command: String?, for folder: String) { connection?.send(.setWorktreeSetup(folder: folder, command: command)) }
     func save(_ schedule: Schedule) { connection?.send(.saveSchedule(schedule)) }
     func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
+
+    // MARK: What is done with a schedule and its runs (#47)
+
+    /// Every schedule is held back.
+    @Published private(set) var schedulesPaused = false
+    /// What runs printed, as asked for, by the run's id; nil inside when
+    /// nothing was kept of one.
+    @Published private(set) var runOutputs: [String: String?] = [:]
+
+    func runNow(_ schedule: Schedule) { connection?.send(.runSchedule(id: schedule.id)) }
+    func stop(_ run: ScheduleOverview.Run) { connection?.send(.stopScheduleRun(id: run.schedule.id, at: run.run.at)) }
+    func duplicate(_ schedule: Schedule) { connection?.send(.duplicateSchedule(id: schedule.id)) }
+    func pauseSchedules(_ paused: Bool) { connection?.send(.pauseSchedules(paused)) }
+    func loadOutput(of run: ScheduleOverview.Run) { connection?.send(.scheduleRunOutput(id: run.schedule.id, at: run.run.at)) }
 
     /// Shown as a banner while the app is in front, until it is opened or
     /// dismissed.
@@ -689,6 +873,7 @@ final class PhoneModel: ObservableObject {
         startAtLogin = nil
         agentShells = nil
         agentsUseShells = nil
+        took([])
         keepAwakeOptions = KeepAwakeOptions()
         commitWriter = CommitWriterSettings()
         schedules = []
@@ -880,6 +1065,12 @@ final class PhoneModel: ObservableObject {
             agentShells = on
         case .agentsUseShells(let on):
             agentsUseShells = on
+        case .agentShellsFaults(let faults):
+            took(faults)
+        case .noticeSeen(let session, let state):
+            // Seen on the Mac, or on another device.
+            if agentNotice?.session == session, agentNotice?.state == state { agentNotice = nil }
+            if let mac = pairing?.id, sessions.first(where: { $0.id == session })?.state == state { notifications.remove(mac: mac, session: session) }
         case .agentShellResult:
             // For `agenttermd mcp`, not for an app.
             break
@@ -888,9 +1079,52 @@ final class PhoneModel: ObservableObject {
             updateLiveActivity()
         case .schedules(let list):
             schedules = list
+        case .schedulesPaused(let paused):
+            schedulesPaused = paused
+        case .scheduleRunOutput(let id, let at, let text):
+            runOutputs[ScheduleOverview.Run.id(schedule: id, at: at)] = .some(text)
         case .worktrees(let folder, let list, let setup):
             worktrees[folder] = list
             worktreeSetups[folder] = setup
+        case .historyMarks(let pinned, let hidden):
+            pinnedConversations = Set(pinned)
+            hiddenConversations = Set(hidden)
+        case .conversationRead(let id, let details):
+            conversationDetails[id] = .some(details)
+            // The last few are kept: each may be large.
+            if conversationDetails.count > 6, let other = conversationDetails.keys.first(where: { $0 != id }) { conversationDetails[other] = nil }
+        case .historyFound(let search, let hits):
+            guard search == historySearch, let key = historySearchKey else { break }
+            historyHits[key, default: []] += hits
+        case .historySearchEnded(let search):
+            guard search == historySearch, let key = historySearchKey else { break }
+            historySearching.remove(key)
+        case .historyOlder(let folder, let conversations, let more):
+            let key = folder ?? ""
+            let known = Set((olderHistory[key] ?? []).map(\.id))
+            olderHistory[key, default: []] += conversations.filter { !known.contains($0.id) }
+            if !more { historyEnded.insert(key) }
+        case .conversationDeleted(let id):
+            conversationDetails[id] = nil
+            for key in histories.keys { histories[key]?.removeAll { $0.id == id } }
+            for key in olderHistory.keys { olderHistory[key]?.removeAll { $0.id == id } }
+            for key in historyHits.keys { historyHits[key]?.removeAll { $0.id == id } }
+        case .conversationExported(_, let path):
+            exportedTranscript = path
+        case .filesFound(let search, let files, let among):
+            guard search == searchNumber else { break }
+            foundFiles = files
+            filesAmong = among
+        case .textFound(let search, let matches):
+            guard search == searchNumber else { break }
+            foundLines += matches
+        case .searchEnded(let search, let truncated, let problem):
+            guard search == searchNumber else { break }
+            isSearching = false
+            searchTruncated = truncated
+            searchProblem = problem
+        case .worktreeSetups(let setups):
+            worktreeSetups = setups
         case .worktreeFinished(_, _, let said):
             worktreeSaid = said
         case .keepAwake(let on):
@@ -1008,12 +1242,54 @@ final class PhoneModel: ObservableObject {
                 savingFile = nil
                 self.message = text
             }
+        case .gitBranches(let folder, let list):
+            branches[folder] = list
+        case .gitLastCommit(let folder, let last):
+            guard let wanted = lastCommitWanted.removeValue(forKey: folder) else { break }
+            if let last { wanted(last) } else { self.message = "There is no commit here yet." }
+        case .gitStashes(let folder, let list):
+            stashes[folder] = list
+        case .gitStashShow(_, let hash, let files):
+            stashFiles[hash] = files ?? []
+        case .gitLog(let folder, nil, let skip, let list, let more):
+            loadingCommits.remove(folder)
+            // A page that does not follow what is listed is another list's.
+            guard skip == (commits[folder]?.count ?? 0) else { break }
+            commits[folder, default: []] += list
+            commitsMore[folder] = more
+        case .gitLog:
+            break
+        case .gitShow(let folder, let hash, let details):
+            commitDetails[hash] = details ?? commits[folder]?.first { $0.hash == hash }.map { CommitDetails(commit: $0) }
         case .diff(let folder, let snapshot):
-            diffs[folder] = snapshot
+            // The answer to something done inside a submodule: the folders
+            // around it are asked what they say of it now (#44).
+            let around = diffs.filter { outer in
+                folder.hasPrefix(outer.key + "/")
+                    && outer.value.submodules.contains { folder == $0.directory(in: outer.key) || folder.hasPrefix($0.directory(in: outer.key) + "/") }
+            }
+            if let outermost = around.keys.min(by: { $0.count < $1.count }) { loadDiff(outermost) }
+            take(snapshot, of: folder)
             if committing == folder {
                 // The answer to a commit that git accepted: an error would have come first.
                 committing = nil
                 commitDrafts[folder] = nil
+                amending[folder] = nil
+            }
+        case .gitFetched(let folder, let problem, let automatic):
+            syncing[folder] = nil
+            if let problem {
+                if automatic { fetchProblems[folder] = problem } else { self.message = problem }
+            } else {
+                fetchProblems[folder] = nil
+            }
+        case .gitForcePushPreview(let folder, let upstream, let loses):
+            guard askingForcePush == folder else { break }
+            askingForcePush = nil
+            if let upstream, let branch = diffs[folder]?.branch {
+                pendingForcePush = ForcePush(folder: folder, question: ForcePushQuestion(branch: branch, upstream: upstream, loses: loses))
+            } else {
+                self.message = "The remote could not be asked what a forced push would overwrite, so nothing was pushed."
             }
         case .gitSynced(let folder):
             // Not at the `diff` before it: one asked for while git was still
@@ -1123,6 +1399,23 @@ final class PhoneModel: ObservableObject {
         connection?.send(.create(CreateRequest(command: agent?.id, cwd: folder, title: agent?.name, size: startingSize)))
     }
 
+    /// Starts an agent, or a shell, in a new worktree of a folder (#34), on
+    /// a branch of its own cut from `from`, and opens it.
+    func launchInWorktree(_ agent: AgentInfo?, in folder: String, branch: String?, from: String?) {
+        guard status == .connected else { return }
+        openCreatedSession = true
+        Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
+        connection?.send(.createInWorktree(request: CreateRequest(command: agent?.id, cwd: folder, title: agent?.name, size: startingSize), branch: branch, from: from))
+    }
+
+    /// The folder a worktree belongs to: the one AgentTerm made it for, or
+    /// the one whose list of worktrees names it. Nil for a folder that is
+    /// no worktree of another.
+    func project(ofWorktree path: String) -> String? {
+        if let project = WorktreePath.project(of: path) { return project }
+        return worktrees.first { $0.value.contains { !$0.isMain && $0.path == path } }?.key
+    }
+
     /// Attaches to a session so its terminal can be shown.
     func open(_ id: SessionID) {
         guard controller?.session != id else { return }
@@ -1150,9 +1443,67 @@ final class PhoneModel: ObservableObject {
         connection?.send(.diff(path: folder))
     }
 
+    /// Keeps a folder's changes, and those of the submodules changed inside
+    /// it under their own folders (#44): each is then a folder as any other
+    /// to what stages, commits and discards in it.
+    private func take(_ snapshot: DiffSnapshot, of folder: String) {
+        // One that has no changes inside it any more is not kept as it was.
+        for old in diffs[folder]?.submodules ?? [] where !snapshot.submodules.contains(where: { $0.path == old.path }) {
+            diffs[old.directory(in: folder)] = nil
+        }
+        diffs[folder] = snapshot
+        for submodule in snapshot.submodules { take(submodule.changes, of: submodule.directory(in: folder)) }
+    }
+
     func loadPatch(folder: String, file: String, staged: Bool) {
         pendingPatch = (folder, file, staged)
         connection?.send(.diffFile(path: folder, file: file, staged: staged))
+    }
+
+    // MARK: Searching a folder's files (#45)
+
+    /// Files whose name matches what was typed, best first, and how many
+    /// files the folder has.
+    @Published private(set) var foundFiles: [String] = []
+    @Published private(set) var filesAmong = 0
+    /// Lines that hold the text that was searched for.
+    @Published private(set) var foundLines: [TextMatch] = []
+    @Published private(set) var isSearching = false
+    @Published private(set) var searchTruncated = false
+    @Published private(set) var searchProblem: String?
+    /// Numbers the searches: an answer to an earlier one is not shown.
+    private var searchNumber = 0
+
+    func findFiles(_ query: String, in folder: String) {
+        searchNumber += 1
+        connection?.send(.findFiles(search: searchNumber, path: folder, query: query))
+    }
+
+    func findText(_ query: String, caseSensitive: Bool, in folder: String) {
+        stopSearch()
+        searchNumber += 1
+        foundLines = []
+        searchTruncated = false
+        searchProblem = nil
+        guard !query.isEmpty, status == .connected else { return }
+        isSearching = true
+        connection?.send(.findText(search: searchNumber, path: folder, query: query, caseSensitive: caseSensitive))
+    }
+
+    func stopSearch() {
+        if isSearching { connection?.send(.stopSearch(search: searchNumber)) }
+        isSearching = false
+    }
+
+    /// Forgets what a search found, when it is closed.
+    func clearSearch() {
+        stopSearch()
+        searchNumber += 1
+        foundFiles = []
+        filesAmong = 0
+        foundLines = []
+        searchTruncated = false
+        searchProblem = nil
     }
 
     // MARK: Files
@@ -1196,16 +1547,163 @@ final class PhoneModel: ObservableObject {
         connection?.send(.gitUnstage(path: folder, files: files))
     }
 
+    /// Discards changes that are not staged, once the user was asked (#39):
+    /// back to what is staged or committed, and to the Mac's Trash what git
+    /// does not track. No files means every such change.
+    func discard(_ files: [String], in folder: String) {
+        connection?.send(.gitDiscard(path: folder, files: files))
+    }
+
     /// Commits what is staged with the message written for the folder.
     func commit(in folder: String) {
         guard committing == nil, let message = commitDrafts[folder] else { return }
         committing = folder
-        connection?.send(.gitCommit(path: folder, message: message))
+        // The last commit is being amended: this replaces it (#41).
+        connection?.send(amending[folder] != nil ? .gitAmend(path: folder, message: message) : .gitCommit(path: folder, message: message))
+    }
+
+    // MARK: Conflicts (#42)
+
+    /// Gives up the merge, rebase, cherry-pick or revert that is stopped on
+    /// conflicts on the Mac, once the user was asked. Resolving the files
+    /// is done on the Mac.
+    func abortOperation(in folder: String) {
+        guard status == .connected, syncing[folder] == nil else { return }
+        syncing[folder] = "abort"
+        connection?.send(.gitAbort(path: folder))
+    }
+
+    /// Goes on with it, once every file was resolved on the Mac.
+    func continueOperation(in folder: String) {
+        guard status == .connected, syncing[folder] == nil else { return }
+        syncing[folder] = "continue"
+        connection?.send(.gitContinue(path: folder))
+    }
+
+    // MARK: Amend and undo the last commit (#41)
+
+    /// The commit being amended, by folder.
+    @Published private(set) var amending: [String: LastCommit] = [:]
+    /// Undoing or amending that waits to be confirmed.
+    @Published var pendingRewrite: PendingRewrite?
+    /// What is done with a folder's last commit once the Mac has said it.
+    private var lastCommitWanted: [String: (LastCommit) -> Void] = [:]
+
+    struct PendingRewrite: Identifiable {
+        let folder: String
+        let action: RewriteCommitQuestion.Action
+        let last: LastCommit
+        var again = false
+        var id: String { folder + action.rawValue + last.commit.hash + (again ? "again" : "") }
+    }
+
+    /// Starts amending the last commit: its message goes into the commit
+    /// box. One a remote has already is asked about first.
+    func requestAmend(in folder: String) {
+        lastCommitWanted[folder] = { [weak self] last in
+            if last.isPushed { self?.pendingRewrite = PendingRewrite(folder: folder, action: .amend, last: last) } else { self?.beginAmend(last, in: folder) }
+        }
+        connection?.send(.gitLastCommit(path: folder))
+    }
+
+    private func beginAmend(_ last: LastCommit, in folder: String) {
+        amending[folder] = last
+        commitDrafts[folder] = last.message
+    }
+
+    func cancelAmend(in folder: String) {
+        guard amending[folder] != nil else { return }
+        amending[folder] = nil
+        commitDrafts[folder] = nil
+    }
+
+    func requestUndoCommit(in folder: String) {
+        lastCommitWanted[folder] = { [weak self] last in self?.pendingRewrite = PendingRewrite(folder: folder, action: .undo, last: last) }
+        connection?.send(.gitLastCommit(path: folder))
+    }
+
+    func rewriteConfirmed(_ pending: PendingRewrite) {
+        switch pending.action {
+        case .amend:
+            beginAmend(pending.last, in: pending.folder)
+        case .undo:
+            // One a remote has is asked about once more, once this
+            // question has gone.
+            if pending.last.isPushed && !pending.again {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.pendingRewrite = PendingRewrite(folder: pending.folder, action: .undo, last: pending.last, again: true)
+                }
+                return
+            }
+            guard status == .connected, syncing[pending.folder] == nil else { return }
+            syncing[pending.folder] = "undo"
+            connection?.send(.gitUndoCommit(path: pending.folder))
+        }
     }
 
     /// `folder` nil loads every conversation on the Mac.
     func loadHistory(_ folder: String?) {
         connection?.send(.history(path: folder))
+    }
+
+    // MARK: History: search, read, pin, hide, delete (#46)
+
+    @Published private(set) var pinnedConversations: Set<String> = []
+    @Published private(set) var hiddenConversations: Set<String> = []
+    /// Conversations as they were read, by their id; nil inside for one
+    /// that is no longer there.
+    @Published private(set) var conversationDetails: [String: ConversationDetails?] = [:]
+    /// What a search of History found, by the list it was for ("" for
+    /// every conversation); nothing while that list is not searched.
+    @Published private(set) var historyHits: [String: [HistoryHit]] = [:]
+    @Published private(set) var historySearching: Set<String> = []
+    /// Pages of older conversations asked for after the first, by list,
+    /// and the lists that have none older.
+    @Published private(set) var olderHistory: [String: [Conversation]] = [:]
+    @Published private(set) var historyEnded: Set<String> = []
+    /// Where a transcript was written out as a file on the Mac, until it is opened.
+    @Published var exportedTranscript: String?
+    private var historySearch = 0
+    private var historySearchKey: String?
+
+    /// Searches a list's conversations by title and by what was said. An
+    /// empty query shows the list again.
+    func searchHistory(_ query: String, in folder: String?) {
+        let key = folder ?? ""
+        historySearch += 1
+        let wanted = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wanted.isEmpty, status == .connected else {
+            historyHits[key] = nil
+            historySearching.remove(key)
+            return
+        }
+        historySearchKey = key
+        historyHits[key] = []
+        historySearching.insert(key)
+        connection?.send(.searchHistory(search: historySearch, path: folder, query: wanted))
+    }
+
+    func readConversation(_ conversation: Conversation) {
+        connection?.send(.readConversation(agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd))
+    }
+
+    func markConversation(_ conversation: Conversation, pinned: Bool? = nil, hidden: Bool? = nil) {
+        connection?.send(.markConversation(id: conversation.id, pinned: pinned, hidden: hidden))
+    }
+
+    /// Deletes a conversation's record on the Mac, once the user was asked twice.
+    func deleteConversation(_ conversation: Conversation) {
+        connection?.send(.deleteConversation(agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd))
+    }
+
+    func exportConversation(_ conversation: Conversation) {
+        connection?.send(.exportConversation(agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd))
+    }
+
+    func loadOlderHistory(_ folder: String?) {
+        let key = folder ?? ""
+        guard let oldest = ((histories[key] ?? []) + (olderHistory[key] ?? [])).map(\.updatedAt).min() else { return }
+        connection?.send(.historyOlder(path: folder, before: oldest))
     }
 
     /// Reopens a conversation in its agent and shows its terminal.
@@ -1307,12 +1805,43 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         // A reply runs something on the Mac: the phone is unlocked first.
-        let reply = UNTextInputNotificationAction(
+        center.setNotificationCategories(Self.fixedCategories)
+    }
+
+    private static var reply: UNNotificationAction {
+        UNTextInputNotificationAction(
             identifier: "reply", title: "Reply", options: [.authenticationRequired], textInputButtonTitle: "Send", textInputPlaceholder: "Your answer")
-        center.setNotificationCategories([
-            UNNotificationCategory(identifier: Self.replyCategory, actions: [reply], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle]),
-            UNNotificationCategory(identifier: Self.openCategory, actions: [], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle]),
-        ])
+    }
+
+    private static var fixedCategories: Set<UNNotificationCategory> {
+        [
+            UNNotificationCategory(identifier: replyCategory, actions: [reply], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle]),
+            UNNotificationCategory(identifier: openCategory, actions: [], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle]),
+        ]
+    }
+
+    /// The categories of questions with choices (#55), by the notification
+    /// each is for: iOS takes a notification's buttons from its category,
+    /// so a question's choices make one of its own, replaced by the next
+    /// thing told of the same session.
+    private var choiceCategories: [String: UNNotificationCategory] = [:]
+
+    /// The category of a notice: one of its own for a question with
+    /// choices, a button for each and the text reply after them.
+    private func category(of notice: AgentNotice, request: String) -> String {
+        let buttons = notice.buttons
+        if buttons.isEmpty {
+            choiceCategories[request] = nil
+        } else {
+            // A choice runs something on the Mac, as a reply does: the
+            // phone is unlocked first.
+            let actions = buttons.map { UNNotificationAction(identifier: $0.id, title: $0.title, options: [.authenticationRequired]) }
+            choiceCategories[request] = UNNotificationCategory(
+                identifier: "agent-choices-\(request)", actions: actions + [Self.reply], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle])
+        }
+        UNUserNotificationCenter.current().setNotificationCategories(Self.fixedCategories.union(choiceCategories.values))
+        if let own = choiceCategories[request] { return own.identifier }
+        return notice.takesAReply ? Self.replyCategory : Self.openCategory
     }
 
     /// Asks iOS, the first time, whether the app may notify.
@@ -1322,6 +1851,14 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
+    /// Takes back what was posted for a session: its agent's words were
+    /// seen, in the app or on another device (#60).
+    func remove(mac: String, session: SessionID) {
+        let center = UNUserNotificationCenter.current()
+        center.removeDeliveredNotifications(withIdentifiers: ["\(mac)-\(session)"])
+        center.removePendingNotificationRequests(withIdentifiers: ["\(mac)-\(session)"])
+    }
+
     func post(_ notice: AgentNotice, mac: String, macName: String) {
         askOnce()
         let content = UNMutableNotificationContent()
@@ -1329,10 +1866,12 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
         content.subtitle = "\((notice.folder as NSString).lastPathComponent) on \(macName)"
         // What the agent said shows only where iOS shows previews: by
         // default not on the lock screen.
-        content.body = notice.detail ?? ""
+        // A question's choices are its buttons, not its last line, which
+        // iOS cuts off after a long question (#55).
+        content.body = notice.words ?? ""
         content.sound = .default
         content.threadIdentifier = "\(mac)-\(notice.session)"
-        content.categoryIdentifier = notice.takesAReply ? Self.replyCategory : Self.openCategory
+        content.categoryIdentifier = category(of: notice, request: "\(mac)-\(notice.session)")
         content.userInfo = [
             "mac": mac, "session": Int(notice.session),
             "state": String(decoding: MessageCoding.encode(notice.state), as: UTF8.self),
@@ -1352,6 +1891,8 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
             guard let model = self?.model, let session, let state, model.pairing?.id == info["mac"] as? String else { return }
             if let reply = response as? UNTextInputNotificationResponse {
                 model.answer(session: session, to: state, text: reply.userText)
+            } else if let choice = AgentNotice(session: session, name: "", folder: "", state: state).choice(ofButton: response.actionIdentifier) {
+                model.answer(session: session, to: state, text: choice)
             } else if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
                 model.open(AgentNotice(session: session, name: "", folder: "", state: state))
             }

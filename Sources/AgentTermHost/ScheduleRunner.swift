@@ -71,17 +71,42 @@ public enum ScheduleRunner {
 
     /// Changes one part of an agent's settings file and leaves the rest as
     /// it was. A file that cannot be read as JSON is left alone.
+    ///
+    /// The agent writes this file too, often, while it runs (#51). So the
+    /// file is read again just before it is written, and when it is no
+    /// longer what the change was made to, the change is made anew to what
+    /// is there now: what the agent wrote in between is kept. Slashes are
+    /// written as the agents write them. What cannot be helped from here:
+    /// the order of the keys is not kept, and an agent that later writes
+    /// back a copy it read before this change undoes it.
     private static func editJSON(at file: URL, _ change: (inout [String: Any]) -> Void) throws {
-        var settings: [String: Any] = [:]
-        if let data = FileManager.default.contents(atPath: file.path) {
-            guard let read = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw CocoaError(.fileReadCorruptFile) }
-            settings = read
+        for _ in 0..<editAttempts {
+            let read = FileManager.default.contents(atPath: file.path)
+            var settings: [String: Any] = [:]
+            if let read {
+                guard let object = try JSONSerialization.jsonObject(with: read) as? [String: Any] else { throw CocoaError(.fileReadCorruptFile) }
+                settings = object
+            }
+            let before = settings as NSDictionary
+            change(&settings)
+            guard !before.isEqual(to: settings) else { return }
+            let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .withoutEscapingSlashes])
+            beforeWriting?(file)
+            // Written by someone else since it was read: once more, from that.
+            guard FileManager.default.contents(atPath: file.path) == read else { continue }
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: file, options: .atomic)
+            return
         }
-        let before = settings as NSDictionary
-        change(&settings)
-        guard !before.isEqual(to: settings) else { return }
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted]).write(to: file, options: .atomic)
+        // Written again every time it was looked at: not something to
+        // overwrite blindly.
+        throw CocoaError(.fileWriteUnknown)
     }
+
+    /// How often a settings file that keeps changing is read again.
+    static let editAttempts = 5
+    /// Called between reading a settings file and writing it, by a test
+    /// that plays the agent writing the file at that moment.
+    static var beforeWriting: ((URL) -> Void)?
 }
 #endif

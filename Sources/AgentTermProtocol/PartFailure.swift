@@ -25,6 +25,9 @@ public struct PartFailure: Codable, Equatable, Identifiable, Sendable {
         /// What Claude Code tells its status line, which the host reads for
         /// the usage of a session (`name`): it could not be saved.
         public static let statusLine = Part(rawValue: "statusLine")
+        /// A run of a schedule (`name`) that did not start, or was stopped
+        /// (#47): `reason` says which and why.
+        public static let schedule = Part(rawValue: "schedule")
     }
 
     /// Names this report, for `dismissFailure`.
@@ -101,6 +104,8 @@ extension PartFailure {
             return "The Mac\(onMac) could not be kept awake \(when)" + (restarted ? ", and is kept awake again." : ".")
         case .statusLine:
             return "The usage of \(named)\(onMac) could not be saved \(when)."
+        case .schedule:
+            return "A run of the schedule \(named)\(onMac) did not go as planned \(when)."
         default:
             // A part this build does not know yet.
             what = "A part of AgentTerm (\(part.rawValue)\(name.map { ", \($0)" } ?? ""))\(mac.map { " on \($0)" } ?? "")"
@@ -116,7 +121,7 @@ extension PartFailure {
     public var details: String {
         var parts: [String] = []
         switch part {
-        case .keepAwake, .statusLine:
+        case .keepAwake, .statusLine, .schedule:
             // Nothing ends with these: what they are for stops.
             break
         case .session:

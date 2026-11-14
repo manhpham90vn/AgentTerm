@@ -89,6 +89,79 @@ final class WorktreeTests: XCTestCase {
         XCTAssertNotEqual(git("branch", "--list", "agentterm/codex-1"), "", "the branch stays when not asked")
     }
 
+    /// WT-13 (#43): a worktree is cut from the branch that is named, of a
+    /// remote too, and its new branch follows nothing; a branch that is
+    /// not there is refused, and nothing is left behind.
+    func testAWorktreeIsCutFromTheBranchPicked() throws {
+        git("checkout", "-q", "-b", "other")
+        try write("b.txt", "other's\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "other")
+        git("update-ref", "refs/remotes/origin/theirs", "HEAD")
+        git("checkout", "-q", "main")
+
+        let made = try GitWorktrees.create(in: project.path, agent: "claude", branch: "from-other", from: "other")
+        XCTAssertEqual(git("rev-parse", "HEAD", in: URL(fileURLWithPath: made.directory)), git("rev-parse", "other"))
+        let remote = try GitWorktrees.create(in: project.path, agent: "claude", branch: "from-theirs", from: "origin/theirs")
+        XCTAssertEqual(git("rev-parse", "HEAD", in: URL(fileURLWithPath: remote.directory)), git("rev-parse", "other"))
+        XCTAssertEqual(git("config", "--get", "branch.from-theirs.merge"), "", "it does not follow the branch it was cut from")
+        // From nothing named: the folder's commit, as before.
+        let plain = try GitWorktrees.create(in: project.path, agent: "claude", branch: "plain", from: " ")
+        XCTAssertEqual(git("rev-parse", "HEAD", in: URL(fileURLWithPath: plain.directory)), git("rev-parse", "main"))
+
+        XCTAssertThrowsError(try GitWorktrees.create(in: project.path, agent: "claude", branch: "lost", from: "no-such")) {
+            XCTAssertEqual($0.localizedDescription, "There is no branch “no-such” to start from.")
+        }
+        XCTAssertEqual(git("branch", "--list", "lost"), "")
+        XCTAssertEqual(GitWorktrees.list(folder: project.path).count, 4)
+    }
+
+    /// WT-14 (#43): a worktree of the repository made inside it by someone
+    /// else, as Claude Code's `.claude/worktrees` are, is listed with the
+    /// others and is not a change of the folder; a repository of another
+    /// kind inside it still is what git says.
+    func testAWorktreeInsideTheRepositoryIsNotAnUntrackedFile() throws {
+        git("worktree", "add", "-q", "-b", "claude-made", ".claude/worktrees/claude-made")
+        let inside = project.appendingPathComponent(".claude/worktrees/claude-made")
+        try write("inside.txt", "in the worktree\n", in: inside)
+        try write("new.txt", "the folder's own\n")
+        XCTAssertTrue(git("status", "--porcelain").contains(".claude/"), "git itself lists it")
+
+        XCTAssertEqual(GitDiff.snapshot(directory: project.path).files.map(\.path), ["new.txt"])
+        let list = GitWorktrees.list(folder: project.path)
+        XCTAssertEqual(list.map(\.branch), ["main", "claude-made"])
+        XCTAssertEqual(list[1].changed, 1)
+        XCTAssertFalse(list[1].isAgentTerm)
+        // Seen from inside that worktree, its own change, and not its neighbours.
+        git("worktree", "add", "-q", "-b", "nested", inside.appendingPathComponent("deeper").path, in: inside)
+        XCTAssertEqual(GitDiff.snapshot(directory: inside.path).files.map(\.path), ["inside.txt"])
+    }
+
+    /// WT-15 (#42, #43): a worktree whose merge conflicts is left merging
+    /// in the folder, to be resolved and continued there, or aborted; the
+    /// worktree is kept.
+    func testAWorktreesMergeThatConflictsIsLeftToBeResolved() throws {
+        let worktree = URL(fileURLWithPath: try GitWorktrees.create(in: project.path, agent: "claude", branch: "work").directory)
+        try write("a.txt", "the worktree's\n", in: worktree)
+        git("commit", "-qam", "work", in: worktree)
+        try write("a.txt", "the folder's\n")
+        git("commit", "-qam", "main")
+
+        XCTAssertThrowsError(try GitWorktrees.finish(folder: project.path, path: worktree.path, finish: .merge, deleteBranch: true)) {
+            XCTAssertTrue($0.localizedDescription.hasPrefix("Merging work stopped on conflicts."), $0.localizedDescription)
+            XCTAssertTrue($0.localizedDescription.contains("The worktree is kept"), $0.localizedDescription)
+        }
+        let state = GitDiff.snapshot(directory: project.path)
+        XCTAssertEqual(state.operation, .merge)
+        XCTAssertEqual(state.conflicts.map(\.path), ["a.txt"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: worktree.path))
+        XCTAssertNil(GitActions.resolve("a.txt", as: .theirs, in: project.path))
+        XCTAssertNil(GitActions.continueOperation(in: project.path))
+        XCTAssertEqual(try String(contentsOf: project.appendingPathComponent("a.txt"), encoding: .utf8), "the worktree's\n")
+        // Merged now: thrown away with nothing lost.
+        XCTAssertFalse(try XCTUnwrap(GitWorktrees.list(folder: project.path).last).hasUnmergedWork)
+    }
+
     /// WT-3 (#33): any worktree is listed, one made by hand outside the
     /// folder too, and one whose folder is gone as missing.
     func testEveryWorktreeIsListedTheMissingToo() throws {
@@ -107,6 +180,41 @@ final class WorktreeTests: XCTestCase {
         XCTAssertTrue(list[1].inUse, "a session runs in a folder inside it")
         XCTAssertTrue(list[2].missing)
         XCTAssertTrue(FileManager.default.fileExists(atPath: project.path), "nothing is removed by listing")
+    }
+
+    /// WT-9: what watches a worktree sees its branches change in the
+    /// repository's own git folder, as a push or a fetch in a terminal
+    /// changes them.
+    func testAWorktreesWatchSeesTheRepositorysBranches() throws {
+        let worktree = try GitWorktrees.create(in: project.path, agent: "claude", branch: nil).directory
+        var changes = 0
+        let watch = FolderWatch(paths: FolderWatch.paths(for: worktree), latency: 0.1, queue: .main) { changes += 1 }
+        XCTAssertNotNil(watch)
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        changes = 0
+        // What a push of its branch writes.
+        git("update-ref", "refs/remotes/origin/agentterm/claude-1", "HEAD")
+        let deadline = Date().addingTimeInterval(5)
+        while changes == 0 && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertGreaterThan(changes, 0, "the push was not seen")
+        withExtendedLifetime(watch) {}
+    }
+
+    /// WT-10: a worktree made from a folder inside one AgentTerm made goes
+    /// next to it, and its session starts in the same folder inside it.
+    func testAWorktreeMadeFromInsideAnotherStartsInTheSameFolder() throws {
+        try FileManager.default.createDirectory(at: project.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        try write("sub/b.txt", "two\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "sub")
+        let first = try GitWorktrees.create(in: project.appendingPathComponent("sub").path, agent: "claude", branch: nil)
+        XCTAssertEqual(first.directory, project.appendingPathComponent(".agentterm/worktrees/agentterm/claude-1/sub").path)
+        let second = try GitWorktrees.create(in: first.directory, agent: "claude", branch: nil)
+        XCTAssertEqual(second.directory, project.appendingPathComponent(".agentterm/worktrees/agentterm/claude-2/sub").path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.directory + "/b.txt"))
+        // From the top of one, the top of the next.
+        let top = project.appendingPathComponent(".agentterm/worktrees/agentterm/claude-1").path
+        XCTAssertEqual(try GitWorktrees.create(in: top, agent: "claude", branch: nil).directory, project.appendingPathComponent(".agentterm/worktrees/agentterm/claude-3").path)
     }
 
     func testWhereAWorktreesSessionBelongs() {
@@ -132,12 +240,14 @@ final class WorktreeHostTests: XCTestCase {
 
         var sessions: [SessionInfo] { messages.compactMap { if case .sessions(let list) = $0 { return list } else { return nil } }.last ?? [] }
         var worktrees: [WorktreeInfo] { messages.compactMap { if case .worktrees(_, let list, _) = $0 { return list } else { return nil } }.last ?? [] }
+        var setups: [String: String]? { messages.compactMap { if case .worktreeSetups(let all) = $0 { return all } else { return nil } }.last }
         var errors: [String] { messages.compactMap { if case .error(let text) = $0 { return text } else { return nil } } }
     }
 
     private var root: URL!
     private var server: HostServer!
     private var client: Client!
+    private var port: UInt16 = 0
     private let token = "test-token-0123456789abcdef0123456789"
     private var project: URL { root.appendingPathComponent("project") }
 
@@ -155,7 +265,8 @@ final class WorktreeHostTests: XCTestCase {
         configuration.agentsDirectory = agents.path
         configuration.foldersFile = root.appendingPathComponent("state/folders.json")
         server = HostServer(configuration: configuration)
-        client = Client(port: try server.start(), token: token)
+        port = try server.start()
+        client = Client(port: port, token: token)
         waitUntil("connected") { !self.client.messages.isEmpty }
     }
 
@@ -174,7 +285,7 @@ final class WorktreeHostTests: XCTestCase {
     /// after the folder's setup command ran there.
     func testASessionInANewWorktreeRunsThereWithItsBranch() throws {
         client.connection.send(.setWorktreeSetup(folder: project.path, command: "touch set-up"))
-        client.connection.send(.createInWorktree(request: CreateRequest(command: "claude", cwd: project.path, title: "Claude Code"), branch: nil))
+        client.connection.send(.createInWorktree(request: CreateRequest(command: "claude", cwd: project.path, title: "Claude Code"), branch: nil, from: nil))
         waitUntil("the session") { self.client.sessions.count == 1 && self.client.sessions[0].branch != nil }
         let session = try XCTUnwrap(client.sessions.first)
         let path = project.appendingPathComponent(".agentterm/worktrees/agentterm/claude-1").path
@@ -187,10 +298,49 @@ final class WorktreeHostTests: XCTestCase {
         XCTAssertTrue(client.worktrees[1].inUse)
     }
 
+    /// WT-16 (#34, #43): the setup commands are sent to a client that
+    /// connects, before it asked for any folder's worktrees, and again
+    /// when one changes; a session is started in a worktree cut from the
+    /// branch named.
+    func testSetupCommandsAreSentOnConnectingAndASessionStartsFromABranch() throws {
+        waitUntil("the setup commands, none yet") { self.client.setups == [:] }
+        client.connection.send(.setWorktreeSetup(folder: project.path, command: " touch set-up "))
+        waitUntil("the change") { self.client.setups == [self.project.path: "touch set-up"] }
+        let second = Client(port: port, token: token)
+        waitUntil("sent to one that connects") { second.setups == [self.project.path: "touch set-up"] }
+        second.connection.close()
+
+        _ = Subprocess.run("/usr/bin/git", ["-C", project.path, "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "second"], timeout: 30)
+        _ = Subprocess.run("/usr/bin/git", ["-C", project.path, "branch", "older", "HEAD~1"], timeout: 30)
+        client.connection.send(.createInWorktree(request: CreateRequest(command: nil, cwd: project.path), branch: "from-older", from: "older"))
+        waitUntil("the session") { self.client.sessions.first?.branch == "from-older" }
+        let cwd = try XCTUnwrap(client.sessions.first?.cwd)
+        func head(_ arguments: String...) -> String {
+            String(decoding: Subprocess.run("/usr/bin/git", ["-C", cwd, "rev-parse"] + arguments, timeout: 30)?.output ?? Data(), as: UTF8.self)
+        }
+        XCTAssertEqual(head("HEAD"), head("older"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cwd + "/set-up"))
+        // One that cannot be made says why at once.
+        client.connection.send(.createInWorktree(request: CreateRequest(command: nil, cwd: project.path), branch: "x", from: "no-such"))
+        waitUntil("refused") { self.client.errors.contains { $0.contains("There is no branch “no-such” to start from.") } }
+    }
+
+    /// WT-11: under the tests, the login shell a worktree's setup command
+    /// runs in reads none of the startup files of the person running them:
+    /// it reads them where a session's shell does (TEST-1).
+    func testASetupCommandUnderTheTestsReadsNoneOfTheUsersStartupFiles() throws {
+        let expected = try XCTUnwrap(HostEnvironment.sessionEnvironment()["ZDOTDIR"], "a session's shell is kept off them")
+        client.connection.send(.setWorktreeSetup(folder: project.path, command: "printf %s \"$ZDOTDIR\" > zdotdir"))
+        client.connection.send(.createInWorktree(request: CreateRequest(command: "claude", cwd: project.path), branch: nil, from: nil))
+        waitUntil("the session") { self.client.sessions.count == 1 }
+        let path = project.appendingPathComponent(".agentterm/worktrees/agentterm/claude-1/zdotdir").path
+        XCTAssertEqual(try String(contentsOfFile: path, encoding: .utf8), expected)
+    }
+
     /// WT-5: a worktree a session runs in is not removed; one with unmerged
     /// work is removed only when asked to throw it away.
     func testAWorktreeInUseIsNotRemoved() throws {
-        client.connection.send(.createInWorktree(request: CreateRequest(command: "claude", cwd: project.path), branch: "feature/x"))
+        client.connection.send(.createInWorktree(request: CreateRequest(command: "claude", cwd: project.path), branch: "feature/x", from: nil))
         waitUntil("the session") { self.client.sessions.count == 1 }
         let path = try XCTUnwrap(client.sessions.first?.cwd)
         client.connection.send(.finishWorktree(folder: project.path, path: path, finish: .discard, deleteBranch: true))

@@ -200,6 +200,7 @@ struct ConversationCard: View {
     @EnvironmentObject private var model: AppModel
     let conversation: Conversation
     @State private var copied = false
+    @AppStorage("conversationShows") private var showing = "transcript"
 
     var body: some View {
         let name = model.agents.first { $0.id == conversation.agent }?.name ?? conversation.agent
@@ -241,8 +242,21 @@ struct ConversationCard: View {
                 }
                 .help(conversation.resumeCommand)
             }
-            Theme.hairline.frame(height: 1)
-            HandoffSheet(conversation: conversation, inline: true)
+            // What was said in it, to read before resuming it (#46), or
+            // what handing it off takes: one at a time, each is long.
+            Picker("Show", selection: $showing) {
+                Text("Transcript").tag("transcript")
+                Text("Hand Off").tag("handoff")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .accessibilityIdentifier("conversation-show")
+            if showing == "handoff" {
+                HandoffSheet(conversation: conversation, inline: true)
+            } else {
+                ConversationTranscript(store: model.historyStore, conversation: conversation)
+            }
         }
     }
 }

@@ -280,6 +280,17 @@ final class FilesModel: ObservableObject {
     }
 
     /// Shows a file in the middle pane, opening a tab for it if it has none.
+    /// The line each file was last asked to be shown at (#45).
+    @Published private(set) var lineTargets: [String: LineTarget] = [:]
+    private var lineTokens = 0
+
+    /// Opens a file at a line: the editor scrolls to it and marks it.
+    func open(_ path: String, line: Int) {
+        lineTokens += 1
+        lineTargets[path] = LineTarget(line: line, token: lineTokens)
+        open(path)
+    }
+
     func open(_ path: String) {
         if !documents.contains(where: { $0.path == path }) {
             if isRemote {

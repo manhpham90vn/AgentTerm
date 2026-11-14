@@ -49,7 +49,6 @@ final class LoginItemTests: XCTestCase {
         XCTAssertNoThrow(try item.turnOff())
     }
 
-    /// LOGIN-4.
     /// LOGIN-9: Start at Login is on by default, the first time a host that
     /// can be started at login runs; once the user turned it off, it stays off.
     func testItIsOnByDefaultUntilTheUserChooses() throws {
@@ -72,6 +71,29 @@ final class LoginItemTests: XCTestCase {
         server.stop()
     }
 
+    /// LOGIN-10: Start at Login that could not be turned on by default is
+    /// tried again by the next host, not taken for the user's choice.
+    func testADefaultThatCouldNotBeTurnedOnIsTriedAgain() throws {
+        let item = item()
+        // The launch agent's folder cannot be made: a file is in its place.
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try Data().write(to: item.file.deletingLastPathComponent())
+        var configuration = HostServer.Configuration(port: 0, token: "test-token-0123456789abcdef0123456789", listenOnTailscale: false, detectAgents: { [] })
+        configuration.foldersFile = folder.appendingPathComponent("state/folders.json")
+        configuration.loginItem = item
+        var server = HostServer(configuration: configuration)
+        _ = try server.start()
+        XCTAssertFalse(item.isOn, "could not be turned on")
+        server.stop()
+
+        try FileManager.default.removeItem(at: item.file.deletingLastPathComponent())
+        server = HostServer(configuration: configuration)
+        _ = try server.start()
+        XCTAssertTrue(item.isOn, "tried again by the next host")
+        server.stop()
+    }
+
+    /// LOGIN-4.
     func testAnAppThatMovedIsStartedFromWhereItIsNow() throws {
         try item().turnOn()
         let moved = item(executable: "/Users/me/Applications/AgentTerm.app/Contents/MacOS/agenttermd")

@@ -33,12 +33,13 @@ struct AgentTermApp: App {
             .preferredColorScheme(.dark)
             .tint(Palette.tint)
             .environmentObject(privacy)
-            // Asked once, at the first launch of a build that can send them.
-            .alert(TelemetryPreferences.Wording.question, isPresented: $privacy.needsAsking) {
-                Button("Send Crash Reports") { privacy.answer(sendCrashReports: true) }
-                Button("Don't Send", role: .cancel) { privacy.answer(sendCrashReports: false) }
-            } message: {
-                Text(TelemetryPreferences.Wording.questionDetail + "\n\nYou can change this, and usage statistics, in the Settings tab.")
+            // Shown once, at the first launch of a build that can send
+            // anything (#48): the app's own screen, a switch for each kind
+            // of report, both on. Until it is answered nothing is sent.
+            .sheet(isPresented: $privacy.needsAsking) {
+                ReportingChoices(preferences: privacy)
+                    .interactiveDismissDisabled()
+                    .preferredColorScheme(.dark)
             }
             .onOpenURL { url in if !model.openFromLink(url) { model.pair(with: url) } }
             .onChange(of: scenePhase) { _, phase in
@@ -57,4 +58,40 @@ enum Palette {
     static let tint = Color(red: 0.45, green: 0.62, blue: 0.98)
     static let danger = Color(red: 0.96, green: 0.45, blue: 0.47)
     static let added = Color(red: 0.36, green: 0.80, blue: 0.52)
+}
+
+/// What may be sent to the developer, a switch for each kind, and
+/// Continue: the same words as on the Mac.
+private struct ReportingChoices: View {
+    @ObservedObject var preferences: TelemetryPreferences
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(TelemetryPreferences.Wording.screenIntro).font(.callout)
+                }
+                Section {
+                    Toggle(TelemetryPreferences.Wording.crashTitle, isOn: $preferences.offersCrashReports)
+                        .accessibilityIdentifier("reporting-crash")
+                } footer: {
+                    Text(TelemetryPreferences.Wording.questionDetail)
+                }
+                Section {
+                    Toggle(TelemetryPreferences.Wording.usageTitle, isOn: $preferences.offersUsageStatistics)
+                        .accessibilityIdentifier("reporting-usage")
+                } footer: {
+                    Text(TelemetryPreferences.Wording.usageDetail + "\n\n" + TelemetryPreferences.Wording.screenFooter)
+                }
+                Section {
+                    Button(TelemetryPreferences.Wording.screenButton) { preferences.answer() }
+                        .frame(maxWidth: .infinity)
+                        .font(.headline)
+                        .accessibilityIdentifier("reporting-continue")
+                }
+            }
+            .navigationTitle("Reports")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+    }
 }

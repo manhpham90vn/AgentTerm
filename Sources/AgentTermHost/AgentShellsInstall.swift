@@ -11,9 +11,16 @@ import Foundation
 /// What was installed, and with which command, is kept in the state folder
 /// (`agent-shells.json`): only that is ever removed, and an agent is asked
 /// again when the host's program moved (the app was moved or updated).
+///
+/// A released build and a development build each install a server under a
+/// name of their own (`AppChannel.mcpServerName`, #57), and each installs,
+/// repairs and removes only its own.
 public final class AgentShellsInstall {
+    /// The name servers had before each build had its own.
+    static let formerName = "agentterm"
+
     /// The name the server has in each agent's configuration.
-    public static let name = "agentterm"
+    public let name: String
 
     /// Runs an agent's command line and says whether it worked.
     public typealias Run = (_ arguments: [String]) -> Bool
@@ -23,6 +30,9 @@ public final class AgentShellsInstall {
         var on: Bool?
         /// The agents it is installed in, with the program it names.
         var installed: [String: String] = [:]
+        /// The name they were installed under; nil for one from before each
+        /// build had its own (`formerName`).
+        var name: String?
     }
 
     private let file: URL
@@ -33,18 +43,29 @@ public final class AgentShellsInstall {
     /// - Parameters:
     ///   - directory: The host's state folder.
     ///   - tool: The host's program, which the server runs as `<tool> mcp`.
+    ///   - name: The server's name in the agents' configuration; this
+    ///     build's unless a test's.
     ///   - codexConfig: Codex's configuration; its own unless a test's.
     ///   - run: Runs an agent's command line; through the user's login shell
     ///     unless a test stands in for it.
-    public init(directory: URL, tool: String, codexConfig: URL? = nil, run: Run? = nil) {
+    public init(directory: URL, tool: String, name: String = AppChannel.current.mcpServerName, codexConfig: URL? = nil, run: Run? = nil) {
         file = directory.appendingPathComponent("agent-shells.json")
         self.tool = tool
+        self.name = name
         self.codexConfig = codexConfig ?? Self.codexConfigFile
         self.run = run ?? AgentShellsInstall.throughLoginShell
     }
 
     private var record: Record {
-        get { (FileManager.default.contents(atPath: file.path)).flatMap { try? JSONDecoder().decode(Record.self, from: $0) } ?? Record() }
+        get {
+            var record = (FileManager.default.contents(atPath: file.path)).flatMap { try? JSONDecoder().decode(Record.self, from: $0) } ?? Record()
+            // What a build from before installed under the name every build
+            // shared is not this build's any more: it is left where it is,
+            // for the build that has that name, and not counted as installed.
+            if (record.name ?? Self.formerName) != name { record.installed = [:] }
+            record.name = name
+            return record
+        }
         set {
             try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? JSONEncoder().encode(newValue).write(to: file, options: .atomic)
@@ -56,36 +77,55 @@ public final class AgentShellsInstall {
 
     /// Installs it in every agent that is installed and does not have this
     /// host's yet, when it is on. Blocks while the agents run.
-    public func ensure(agents: [AgentInfo]) {
-        guard isOn else { return }
+    ///
+    /// - Returns: The agents it could not be installed in (#58).
+    @discardableResult
+    public func ensure(agents: [AgentInfo]) -> [AgentInfo] {
+        guard isOn else { return [] }
         var record = self.record
+        var failed: [AgentInfo] = []
         for agent in agents {
-            guard let path = agent.path, record.installed[agent.id] != tool, let add = Self.add(agent: agent.id, path: path, tool: tool) else { continue }
+            guard let path = agent.path, record.installed[agent.id] != tool, let add = Self.add(agent: agent.id, path: path, tool: tool, name: name) else {
+                continue
+            }
             // One left by a host that has moved since is replaced.
-            if record.installed[agent.id] != nil { _ = run(Self.remove(agent: agent.id, path: path)) }
-            if run(add) { record.installed[agent.id] = tool }
+            if record.installed[agent.id] != nil { _ = run(Self.remove(agent: agent.id, path: path, name: name)) }
+            if run(add) {
+                record.installed[agent.id] = tool
+            } else if run(Self.remove(agent: agent.id, path: path, name: name)), run(add) {
+                // An agent refuses a name it has already: one under this
+                // build's name that it did not record (the record was lost,
+                // or the entry was written by hand) is replaced by its own.
+                record.installed[agent.id] = tool
+            } else {
+                failed.append(agent)
+            }
         }
         // Also mends what a host from before installed without it.
-        if record.installed["codex"] != nil { Self.forwardSessionVariable(in: codexConfig) }
+        if record.installed["codex"] != nil { Self.forwardSessionVariable(in: codexConfig, name: name) }
         self.record = record
+        return failed
     }
 
     /// Turns it on (and installs it) or off (and removes what was installed).
-    public func set(on: Bool, agents: [AgentInfo]) {
+    ///
+    /// - Returns: The agents it could not be installed in, when turned on.
+    @discardableResult
+    public func set(on: Bool, agents: [AgentInfo]) -> [AgentInfo] {
         var record = self.record
         record.on = on
         if !on {
             for agent in agents {
                 guard let path = agent.path, record.installed[agent.id] != nil else { continue }
-                if run(Self.remove(agent: agent.id, path: path)) { record.installed[agent.id] = nil }
+                if run(Self.remove(agent: agent.id, path: path, name: name)) { record.installed[agent.id] = nil }
             }
         }
         self.record = record
-        if on { ensure(agents: agents) }
+        return on ? ensure(agents: agents) : []
     }
 
     /// `<agent> mcp add`, as each agent takes it.
-    static func add(agent: String, path: String, tool: String) -> [String]? {
+    static func add(agent: String, path: String, tool: String, name: String) -> [String]? {
         switch agent {
         case "claude": return [path, "mcp", "add", "--scope", "user", name, "--", tool, "mcp"]
         case "codex", "copilot", "agy": return [path, "mcp", "add", name, "--", tool, "mcp"]
@@ -93,7 +133,7 @@ public final class AgentShellsInstall {
         }
     }
 
-    static func remove(agent: String, path: String) -> [String] {
+    static func remove(agent: String, path: String, name: String) -> [String] {
         agent == "claude" ? [path, "mcp", "remove", "--scope", "user", name] : [path, "mcp", "remove", name]
     }
 
@@ -103,7 +143,7 @@ public final class AgentShellsInstall {
     /// offers no tools. `codex mcp add` cannot name them, so the line is
     /// written into the server's table, next to what the user may have
     /// named there.
-    static func forwardSessionVariable(in config: URL) {
+    static func forwardSessionVariable(in config: URL, name: String) {
         guard let text = try? String(contentsOf: config, encoding: .utf8) else { return }
         var lines = text.components(separatedBy: "\n")
         guard let header = lines.firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "[mcp_servers.\(name)]" }) else { return }

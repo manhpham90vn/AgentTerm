@@ -26,24 +26,72 @@ final class TelemetryTests: XCTestCase {
         defaults.removePersistentDomain(forName: suite)
     }
 
-    func testUsageIsOnAndCrashReportsAreOffUntilTheUserSaysYes() {
+    /// TEL-1 (#48): nothing is sent, of either kind, before the user has
+    /// answered the first-launch screen; then what its two switches say.
+    func testNothingIsSentUntilTheFirstLaunchScreenIsAnswered() {
         let telemetry = Telemetry()
         let sink = Recorder()
         telemetry.start(sink: sink, defaults: defaults)
-        XCTAssertEqual(sink.usage, true)
+        XCTAssertEqual(sink.usage, false, "not before the user has been asked")
         XCTAssertEqual(sink.crashes, false, "not before the user has been asked")
         XCTAssertTrue(telemetry.shouldAskAboutCrashReports)
 
         telemetry.record(.sessionStart(agent: .claude))
         telemetry.recordProblem(.hostExitedUnexpectedly)
-        XCTAssertEqual(sink.events, [.sessionStart(agent: .claude)])
-        XCTAssertEqual(sink.problems, [], "a problem is a crash report, and those are not allowed yet")
+        XCTAssertEqual(sink.events, [], "usage statistics wait for the answer too")
+        XCTAssertEqual(sink.problems, [])
 
-        telemetry.settings.crashReports = true
+        // Answered as the screen comes: both on.
+        let preferences = TelemetryPreferences(telemetry: telemetry)
+        XCTAssertTrue(preferences.needsAsking)
+        XCTAssertTrue(preferences.offersCrashReports && preferences.offersUsageStatistics, "both switches start on")
+        preferences.answer()
+        XCTAssertFalse(preferences.needsAsking)
+        XCTAssertEqual(telemetry.settings, TelemetrySettings(usageStatistics: true, crashReports: true))
+        XCTAssertEqual(sink.usage, true)
         XCTAssertEqual(sink.crashes, true)
         XCTAssertFalse(telemetry.shouldAskAboutCrashReports)
+        telemetry.record(.sessionStart(agent: .claude))
         telemetry.recordProblem(.hostExitedUnexpectedly)
+        XCTAssertEqual(sink.events, [.sessionStart(agent: .claude)])
         XCTAssertEqual(sink.problems, [.hostExitedUnexpectedly])
+    }
+
+    /// TEL-2 (#48): the screen answered with a switch off keeps that kind
+    /// off, and is not shown again at the next launch.
+    func testTheFirstLaunchScreenAnsweredWithSwitchesOff() {
+        let telemetry = Telemetry()
+        let sink = Recorder()
+        telemetry.start(sink: sink, defaults: defaults)
+        let preferences = TelemetryPreferences(telemetry: telemetry)
+        preferences.offersUsageStatistics = false
+        XCTAssertEqual(sink.usage, false, "a switch of the screen sends nothing by itself")
+        XCTAssertTrue(preferences.needsAsking, "nor does it answer the screen")
+        preferences.answer()
+        XCTAssertEqual(telemetry.settings, TelemetrySettings(usageStatistics: false, crashReports: true))
+        XCTAssertEqual(sink.usage, false)
+        XCTAssertEqual(sink.crashes, true)
+        telemetry.record(.appOpen)
+        XCTAssertEqual(sink.events, [])
+
+        let later = Telemetry()
+        later.start(sink: Recorder(), defaults: defaults)
+        let again = TelemetryPreferences(telemetry: later)
+        XCTAssertFalse(again.needsAsking)
+        XCTAssertFalse(again.usageStatistics)
+        XCTAssertTrue(again.crashReports)
+
+        // Both off: answered all the same.
+        let other = UserDefaults(suiteName: suite + "-other")!
+        defer { other.removePersistentDomain(forName: suite + "-other") }
+        let none = Telemetry()
+        none.start(sink: Recorder(), defaults: other)
+        let refusing = TelemetryPreferences(telemetry: none)
+        refusing.offersCrashReports = false
+        refusing.offersUsageStatistics = false
+        refusing.answer()
+        XCTAssertEqual(none.settings, TelemetrySettings(usageStatistics: false, crashReports: false))
+        XCTAssertFalse(none.shouldAskAboutCrashReports)
     }
 
     func testSwitchedOffNothingIsRecordedAndTheChoiceIsKept() {

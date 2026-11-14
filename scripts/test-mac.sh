@@ -19,11 +19,15 @@ swift build --build-tests
 export AGENTTERM_MAC_UI=1
 if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export AGENTTERM_SHOT_DIR="$SHOTS"; fi
 if [ -n "${ALL_SHOTS:-}" ]; then export AGENTTERM_SHOT_ALWAYS=1; fi
+# MEASURE=1 runs the measurements of the app's main thread (#21), which the
+# tests otherwise skip, and prints their figures: nothing fails on a figure.
+if [ -n "${MEASURE:-}" ]; then export AGENTTERM_MEASURE_UI=1; fi
 FILTER="AgentTermMacUITests"
 if [ -n "${1:-}" ]; then FILTER="AgentTermMacUITests\..*$1"; fi
 # The half of the test with the iPhone app is run by test-both.sh.
 LOG="$(mktemp)"
 if swift test --skip-build --filter "$FILTER" --skip "CrossTests" > "$LOG" 2>&1; then
+    grep -E "^MEASURE " "$LOG" | sed 's/^MEASURE //' || true
     grep -E "Test Case .* (passed|skipped)|Executed [1-9][0-9]* test" "$LOG" | sed 's/^Test Case .-\[AgentTermMacUITests\.//; s/\]. / /' | uniq
     echo "Mac UI tests passed."
     rm -f "$LOG"

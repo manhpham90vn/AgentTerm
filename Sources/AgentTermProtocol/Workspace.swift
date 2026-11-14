@@ -24,13 +24,35 @@ public struct FileDiff: Codable, Identifiable, Equatable, Sendable {
     /// of each kind.
     public var isStaged: Bool
     public var status: Status
+    /// How the file conflicts, while a merge, a rebase, a cherry-pick or a
+    /// revert is stopped on it (#42): git's two letters, "UU" when both
+    /// sides changed it. Nil for a file that does not conflict.
+    public var conflict: String?
+    /// The entry is a submodule and the change is its commit: another one
+    /// is checked out in it than the folder records (#44). The files
+    /// changed inside it are a list of their own, `DiffSnapshot.submodules`.
+    public var isSubmodule: Bool = false
+
+    /// What an earlier build wrote, without what was added since, still reads.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        path = try values.decode(String.self, forKey: .path)
+        added = try values.decode(Int.self, forKey: .added)
+        deleted = try values.decode(Int.self, forKey: .deleted)
+        isUntracked = try values.decode(Bool.self, forKey: .isUntracked)
+        patch = try values.decode(String.self, forKey: .patch)
+        isStaged = try values.decode(Bool.self, forKey: .isStaged)
+        status = try values.decode(Status.self, forKey: .status)
+        conflict = try values.decodeIfPresent(String.self, forKey: .conflict)
+        isSubmodule = try values.decodeIfPresent(Bool.self, forKey: .isSubmodule) ?? false
+    }
 
     /// Staged and unstaged entries of one file are different rows.
-    public var id: String { (isStaged ? "staged:" : "") + path }
+    public var id: String { (conflict != nil ? "conflict:" : isStaged ? "staged:" : "") + path }
 
     public init(
         path: String, added: Int, deleted: Int, isUntracked: Bool, patch: String,
-        isStaged: Bool = false, status: Status = .modified
+        isStaged: Bool = false, status: Status = .modified, conflict: String? = nil
     ) {
         self.path = path
         self.added = added
@@ -39,10 +61,510 @@ public struct FileDiff: Codable, Identifiable, Equatable, Sendable {
         self.patch = patch
         self.isStaged = isStaged
         self.status = status
+        self.conflict = conflict
     }
 
-    /// One letter for a list: git's letter, or "U" for a file git does not track yet.
-    public var marker: String { isUntracked ? "U" : status.rawValue }
+    /// One letter for a list: git's letter, "U" for a file git does not
+    /// track yet, "!" for one that conflicts.
+    public var marker: String { conflict != nil ? "!" : isUntracked ? "U" : status.rawValue }
+
+    /// The two commits of a submodule whose commit moved, shortened: the
+    /// one the folder records and the one checked out. Nil for a file.
+    public var submoduleCommits: (from: String?, to: String?)? {
+        guard isSubmodule else { return nil }
+        func commit(_ sign: Character) -> String? {
+            patch.split(separator: "\n").first { $0.first == sign && $0.dropFirst().hasPrefix("Subproject commit ") }
+                .map { String($0.dropFirst("+Subproject commit ".count).prefix(7)) }
+        }
+        return (commit("-"), commit("+"))
+    }
+
+    /// What is said of a submodule's row in place of a directory: which
+    /// commit it moved from and to.
+    public var submoduleWords: String? {
+        guard let commits = submoduleCommits else { return nil }
+        switch (commits.from, commits.to) {
+        case (let from?, let to?): return "submodule, \(from) → \(to)"
+        case (nil, let to?): return "submodule, added at \(to)"
+        case (let from?, nil): return "submodule, removed at \(from)"
+        default: return "submodule"
+        }
+    }
+
+    /// How a file that conflicts does, in a few words: which side did what.
+    /// "Ours" is the side that is checked out, "theirs" what is brought in.
+    public var conflictWords: String? {
+        switch conflict {
+        case nil: return nil
+        case "UU": return "both sides changed it"
+        case "AA": return "both sides added it"
+        case "DD": return "both sides deleted it"
+        case "DU": return "ours deleted it, theirs changed it"
+        case "UD": return "ours changed it, theirs deleted it"
+        case "AU": return "only ours added it"
+        case "UA": return "only theirs added it"
+        default: return "it conflicts"
+        }
+    }
+}
+
+/// What git is in the middle of when it stopped on conflicts (#42).
+public enum GitOperation: String, Codable, Sendable {
+    case merge
+    case rebase
+    case cherryPick = "cherry-pick"
+    case revert
+
+    /// "Merging", "Rebasing": what is going on, for a banner.
+    public var doing: String {
+        switch self {
+        case .merge: return "Merging"
+        case .rebase: return "Rebasing"
+        case .cherryPick: return "Cherry-picking"
+        case .revert: return "Reverting"
+        }
+    }
+
+    /// What "ours" and "theirs" are while it goes on, which differs.
+    public var sides: String {
+        switch self {
+        case .merge: return "Ours is the branch that is checked out; theirs is what is merged into it."
+        case .rebase: return "Ours is the branch being rebased onto; theirs is the commit of this branch that is being put on top of it."
+        case .cherryPick: return "Ours is the branch that is checked out; theirs is the commit being picked."
+        case .revert: return "Ours is the branch that is checked out; theirs is the state before the commit being reverted."
+        }
+    }
+}
+
+/// What is said and asked while git is stopped on conflicts (#42), the
+/// same on every device.
+public struct ConflictWords: Equatable, Sendable {
+    /// "Merging: 2 files conflict", or that all are resolved.
+    public var headline: String
+    public var advice: String
+    public var abortTitle: String
+    public var abortMessage: String
+
+    public init(operation: GitOperation?, conflicts: Int) {
+        let what = operation?.doing ?? "Conflicts"
+        if conflicts > 0 {
+            headline = "\(what): \(conflicts) \(conflicts == 1 ? "file conflicts" : "files conflict")"
+            advice =
+                "Resolve each by taking one side or by editing it, on the Mac."
+                + (operation.map { " \($0.sides)" } ?? " Ours is what was in the folder; theirs is what was brought in.")
+        } else {
+            headline = "\(what): every conflict is resolved"
+            advice = "Continue finishes it; Abort puts everything back as it was before."
+        }
+        let name = operation.map { "the \($0.rawValue)" } ?? "it"
+        abortTitle = "Abort \(name)?"
+        abortMessage = "The folder and the branch go back to where they were before \(name) began. What was resolved so far is lost."
+    }
+}
+
+/// The commit a branch is at, as far as amending or undoing it needs to
+/// know it (#41).
+public struct LastCommit: Codable, Equatable, Sendable {
+    public var commit: CommitInfo
+    /// Its whole message, first line and the rest.
+    public var message: String
+    /// A branch of a remote has it already: changing it here leaves the
+    /// two apart, and the next push needs force.
+    public var isPushed: Bool
+
+    public init(commit: CommitInfo, message: String, isPushed: Bool = false) {
+        self.commit = commit
+        self.message = message
+        self.isPushed = isPushed
+    }
+}
+
+/// What is asked before the last commit is undone or amended (#41), the
+/// same on every device. One that a remote has already is asked about
+/// once more, saying what follows from changing it.
+public struct RewriteCommitQuestion: Equatable, Sendable {
+    public enum Action: String, Sendable {
+        case undo
+        case amend
+    }
+
+    public var title: String
+    public var message: String
+    public var confirm: String
+
+    /// - Parameter again: The second question, for a commit that is pushed.
+    public init(_ action: Action, last: LastCommit, again: Bool = false) {
+        let pushed = "A remote has this commit already. Changed here, the branch and the remote are apart: the next push has to be forced, and anyone who pulled the commit keeps it."
+        switch (action, again) {
+        case (.undo, false):
+            title = "Undo the commit “\(last.commit.subject)”?"
+            message =
+                "The branch goes back to the commit before it. What it changed stays staged, so nothing is lost."
+                + (last.isPushed ? " It is pushed already: you are asked once more." : "")
+            confirm = last.isPushed ? "Undo…" : "Undo Commit"
+        case (.undo, true):
+            title = "Undo a commit that is already pushed?"
+            message = pushed
+            confirm = "Undo Anyway"
+        case (.amend, _):
+            title = "Amend a commit that is already pushed?"
+            message = pushed
+            confirm = "Amend Anyway"
+        }
+    }
+}
+
+/// Changes put aside in a repository's stash (#38).
+public struct StashInfo: Codable, Equatable, Hashable, Identifiable, Sendable {
+    /// The hash of the commit git keeps the stash as: what names it here,
+    /// since its place in the list ("stash@{1}") moves when another is
+    /// dropped.
+    public var hash: String
+    /// Its place in the list as git names it: "stash@{0}" is the newest.
+    public var ref: String
+    /// What it was called when it was made, or git's own words for it.
+    public var message: String
+    /// The branch it was made on, when git's words say so.
+    public var branch: String?
+    public var date: Date
+
+    public var id: String { hash }
+
+    public init(hash: String, ref: String, message: String, branch: String? = nil, date: Date = Date(timeIntervalSince1970: 0)) {
+        self.hash = hash
+        self.ref = ref
+        self.message = message
+        self.branch = branch
+        self.date = date
+    }
+
+    /// From what git notes of a stash: "On main: half of the login" has a
+    /// name; "WIP on main: abc1234 the last commit" has none, and is told
+    /// by the commit it was made on.
+    public init(hash: String, ref: String, noted: String, date: Date) {
+        var message = noted
+        var branch: String?
+        for prefix in ["WIP on ", "On "] where noted.hasPrefix(prefix) {
+            let rest = noted.dropFirst(prefix.count)
+            if let colon = rest.range(of: ": ") {
+                branch = String(rest[..<colon.lowerBound])
+                message = prefix == "On " ? String(rest[colon.upperBound...]) : "Changes on " + String(rest[colon.upperBound...])
+            }
+            break
+        }
+        self.init(hash: hash, ref: ref, message: message, branch: branch, date: date)
+    }
+}
+
+/// What is asked before a stash is dropped (#38): it is the only copy of
+/// what it holds.
+public struct DropStashQuestion: Equatable, Sendable {
+    public var title: String
+    public var message: String
+    public var confirm: String
+
+    public init(stash: StashInfo) {
+        title = "Drop the stash “\(stash.message)”?"
+        message = "What it holds is in no commit and no file: once dropped it cannot be brought back from AgentTerm."
+        confirm = "Drop Stash"
+    }
+}
+
+/// One commit of a repository's history (#36).
+public struct CommitInfo: Codable, Equatable, Hashable, Identifiable, Sendable {
+    public var hash: String
+    /// The commits it follows: one, two or more for a merge, none for the first.
+    public var parents: [String]
+    public var subject: String
+    public var author: String
+    public var date: Date
+    /// The branches and tags that point at it: "main", "origin/main", "tag: v1".
+    public var refs: [String]
+
+    public var id: String { hash }
+    /// The hash as it is shown: its first seven letters.
+    public var short: String { String(hash.prefix(7)) }
+    public var isMerge: Bool { parents.count > 1 }
+
+    public init(hash: String, parents: [String] = [], subject: String, author: String = "", date: Date = Date(timeIntervalSince1970: 0), refs: [String] = []) {
+        self.hash = hash
+        self.parents = parents
+        self.subject = subject
+        self.author = author
+        self.date = date
+        self.refs = refs
+    }
+}
+
+/// A commit with the rest of its message and what it changed, each file
+/// with its diff: against its first parent, for a merge.
+public struct CommitDetails: Codable, Equatable, Sendable {
+    public var commit: CommitInfo
+    /// The message after its first line.
+    public var body: String
+    public var files: [FileDiff]
+    /// The diffs were left out: together they were too large to send.
+    public var diffsLeftOut: Bool
+
+    public init(commit: CommitInfo, body: String = "", files: [FileDiff] = [], diffsLeftOut: Bool = false) {
+        self.commit = commit
+        self.body = body
+        self.files = files
+        self.diffsLeftOut = diffsLeftOut
+    }
+}
+
+/// Where each commit of a list is drawn in the graph beside it (#36): a
+/// lane for every line of history that is open at that row, so that where
+/// branches part and meet shows.
+public struct CommitGraphRow: Equatable, Sendable {
+    /// The lane the commit's dot is in.
+    public var lane: Int
+    /// The lanes that come in from the row above, by where each goes at
+    /// this row: its own lane to pass through, or the commit's to end at it.
+    public var incoming: [Int: Int]
+    /// The lanes that go on to the row below, by where each starts at
+    /// this row: its own lane, or the commit's when it is one of its parents.
+    public var outgoing: [Int: Int]
+
+    /// How many lanes this row needs room for.
+    public var width: Int { (Array(incoming.keys) + Array(outgoing.keys) + [lane]).reduce(0, max) + 1 }
+
+    /// A row for each commit, in the order given (newest first, as `git
+    /// log` lists them).
+    public static func rows(for commits: [CommitInfo]) -> [CommitGraphRow] {
+        // What each open lane waits for: the hash of the commit that
+        // continues it. Nil for a lane that is free.
+        var lanes: [String?] = []
+        var rows: [CommitGraphRow] = []
+        for commit in commits {
+            // Every lane that waits for this commit ends at it; it sits in the first.
+            let waiting = lanes.indices.filter { lanes[$0] == commit.hash }
+            let lane = waiting.first ?? lanes.firstIndex(where: { $0 == nil }) ?? lanes.count
+            if lane == lanes.count { lanes.append(nil) }
+            var incoming: [Int: Int] = [:]
+            for index in lanes.indices where lanes[index] != nil { incoming[index] = waiting.contains(index) ? lane : index }
+            for index in waiting { lanes[index] = nil }
+            // Its first parent goes on in its lane; the others take a lane
+            // that already waits for them, or a free one.
+            var outgoing: [Int: Int] = [:]
+            for (number, parent) in commit.parents.enumerated() {
+                if number == 0 {
+                    lanes[lane] = parent
+                    outgoing[lane] = lane
+                } else if let there = lanes.firstIndex(where: { $0 == parent }) {
+                    outgoing[there] = there == lane ? lane : outgoing[there] ?? lane
+                } else {
+                    let free = lanes.firstIndex(where: { $0 == nil }) ?? lanes.count
+                    if free == lanes.count { lanes.append(parent) } else { lanes[free] = parent }
+                    outgoing[free] = lane
+                }
+            }
+            for index in lanes.indices where lanes[index] != nil && outgoing[index] == nil { outgoing[index] = index }
+            while lanes.last == .some(nil) { lanes.removeLast() }
+            rows.append(CommitGraphRow(lane: lane, incoming: incoming, outgoing: outgoing))
+        }
+        return rows
+    }
+}
+
+/// What is asked before a commit is reverted or picked onto the checked
+/// out branch (#36), the same on every device.
+public struct CommitActionQuestion: Equatable, Sendable {
+    public enum Action: String, Sendable {
+        case revert
+        case cherryPick
+    }
+
+    public var title: String
+    public var message: String
+    public var confirm: String
+
+    public init(_ action: Action, commit: CommitInfo, onto branch: String?) {
+        let onto = branch.map { "“\($0)”" } ?? "the checked out commit"
+        switch action {
+        case .revert:
+            title = "Revert \(commit.short)?"
+            message = "A new commit on \(onto) takes back what “\(commit.subject)” changed. Nothing is removed from the history."
+            confirm = "Revert"
+        case .cherryPick:
+            title = "Pick \(commit.short) onto \(onto)?"
+            message = "A new commit on \(onto) makes the change of “\(commit.subject)” there too."
+            confirm = "Cherry-Pick"
+        }
+    }
+}
+
+/// What is asked before a push is forced (#37), the same on every device:
+/// which commits on the remote would be gone from the branch there.
+public struct ForcePushQuestion: Equatable, Sendable {
+    public var title: String
+    public var message: String
+    public var confirm: String
+    /// Nothing would be overwritten: a plain push does it.
+    public var isNeeded: Bool
+
+    /// How many of the commits are named before the rest are counted.
+    public static let shown = 8
+
+    public init(branch: String, upstream: String, loses: [String]) {
+        isNeeded = !loses.isEmpty
+        title = "Force push “\(branch)” to \(upstream)?"
+        confirm = "Force Push"
+        guard isNeeded else {
+            message = "\(upstream) has no commit that “\(branch)” does not have: a push without force does the same."
+            return
+        }
+        let count = loses.count == 1 ? "This commit on \(upstream) is" : "These \(loses.count) commits on \(upstream) are"
+        var lines = loses.prefix(Self.shown).map { "• " + $0 }
+        if loses.count > Self.shown { lines.append("… and \(loses.count - Self.shown) more") }
+        message =
+            "\(count) not in “\(branch)” and will be gone from it there:\n\n" + lines.joined(separator: "\n")
+            + "\n\nAnyone who has them is not asked. The push is refused if the remote changed again since it was looked at just now."
+    }
+}
+
+/// A branch of a repository (#35): one of its own, or one of a remote's as
+/// of the last time the remote was asked.
+public struct BranchInfo: Codable, Equatable, Hashable, Identifiable, Sendable {
+    /// "main", or "origin/main" for a remote's.
+    public var name: String
+    public var isRemote: Bool
+    /// Checked out in the folder that was asked about.
+    public var isCurrent: Bool
+    /// The branch on a remote it follows, "origin/main". Nil when none.
+    public var upstream: String?
+    /// Commits it has that its upstream has not, and the other way round.
+    /// Nil without an upstream, or when the upstream is gone.
+    public var ahead: Int?
+    public var behind: Int?
+    /// The branch it followed has been deleted on the remote.
+    public var upstreamGone: Bool
+    /// Everything on it is on the checked out branch too: deleting it
+    /// loses nothing. Always false for a remote's.
+    public var isMerged: Bool
+    /// When its last commit was made, and what that commit says.
+    public var committedAt: Date?
+    public var subject: String
+    /// The folder of another worktree it is checked out in, which is why
+    /// it cannot be switched to here. Nil when in none, or in this one.
+    public var worktree: String?
+
+    public var id: String { (isRemote ? "remote:" : "") + name }
+
+    public init(
+        name: String, isRemote: Bool = false, isCurrent: Bool = false, upstream: String? = nil, ahead: Int? = nil, behind: Int? = nil,
+        upstreamGone: Bool = false, isMerged: Bool = false, committedAt: Date? = nil, subject: String = "", worktree: String? = nil
+    ) {
+        self.name = name
+        self.isRemote = isRemote
+        self.isCurrent = isCurrent
+        self.upstream = upstream
+        self.ahead = ahead
+        self.behind = behind
+        self.upstreamGone = upstreamGone
+        self.isMerged = isMerged
+        self.committedAt = committedAt
+        self.subject = subject
+        self.worktree = worktree
+    }
+
+    /// The name a branch of the repository's own has when it is made from
+    /// this one: "feature" for "origin/feature", its own name otherwise.
+    public var localName: String {
+        guard isRemote, let slash = name.firstIndex(of: "/") else { return name }
+        return String(name[name.index(after: slash)...])
+    }
+
+    /// How far it is from the branch it follows, in a few words for a row:
+    /// "2 ahead, 1 behind", "its remote branch is gone", or nothing.
+    public var tracking: String {
+        if upstreamGone { return "its remote branch is gone" }
+        var parts: [String] = []
+        if let ahead, ahead > 0 { parts.append("\(ahead) ahead") }
+        if let behind, behind > 0 { parts.append("\(behind) behind") }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// What is asked before a branch is deleted (#35), the same on every
+/// device. A branch whose commits are on the checked out branch too is
+/// asked about once; one that has commits of its own is asked about twice,
+/// the second time saying what would be lost.
+public struct DeleteBranchQuestion: Equatable, Sendable {
+    public var title: String
+    public var message: String
+    public var confirm: String
+
+    /// - Parameter again: The second question, for a branch that is not merged.
+    public init(branch: BranchInfo, into current: String?, again: Bool = false) {
+        let onto = current.map { "“\($0)”" } ?? "the checked out commit"
+        if again {
+            title = "Delete “\(branch.name)” and lose its commits?"
+            message = "Its commits are on no other branch here. Once it is deleted, git forgets them after a while, and nothing in AgentTerm brings them back."
+            confirm = "Delete and Lose Its Commits"
+        } else if branch.isMerged {
+            title = "Delete the branch “\(branch.name)”?"
+            message = "Everything on it is on \(onto) too, so nothing is lost."
+            confirm = "Delete Branch"
+        } else {
+            title = "Delete the branch “\(branch.name)”?"
+            message = "It has commits that are not on \(onto). You are asked once more before they are lost."
+            confirm = "Delete…"
+        }
+    }
+}
+
+/// What the user is asked before changes are discarded (#39), the same on
+/// the Mac and the iPhone: discarding cannot be taken back for a file git
+/// tracks, and moves one it does not track to the Trash.
+public struct DiscardQuestion: Equatable, Sendable {
+    public var title: String
+    public var message: String
+    /// The button that does it.
+    public var confirm: String
+
+    /// - Parameter files: The changes to discard, none of them staged.
+    public init(files: [FileDiff]) {
+        let new = files.filter(\.isUntracked).count
+        let tracked = files.count - new
+        if files.count == 1, let file = files.first {
+            let name = (file.path as NSString).lastPathComponent
+            if file.isSubmodule {
+                // Not the files in it: the commit that is checked out there (#44).
+                title = "Put \(name) back to its recorded commit?"
+                message =
+                    "The submodule is checked out at the commit this folder records for it\(file.submoduleCommits?.from.map { ", \($0)" } ?? ""). Commits made in it are not deleted, but stay only on a branch of the submodule, if one was checked out there."
+                confirm = "Check Out Recorded Commit"
+            } else if file.isUntracked {
+                title = "Move \(name) to the Trash?"
+                message = "git does not track it yet, so nothing else keeps it. It can be put back from the Trash of the Mac."
+                confirm = "Move to Trash"
+            } else {
+                title = "Discard the changes to \(name)?"
+                message = "It goes back to what is staged of it, or to the last commit. This cannot be undone."
+                confirm = "Discard Changes"
+            }
+            return
+        }
+        title = "Discard all \(files.count) changes?"
+        var parts: [String] = []
+        if tracked > 0 {
+            parts.append(
+                "\(tracked) \(tracked == 1 ? "file goes" : "files go") back to what is staged or to the last commit, which cannot be undone.")
+        }
+        if new > 0 { parts.append("\(new) new \(new == 1 ? "file is" : "files are") moved to the Trash of the Mac.") }
+        message = parts.joined(separator: " ")
+        confirm = "Discard All"
+    }
+}
+
+extension FileDiff {
+    /// What discarding this change is called on its row.
+    public var discardLabel: String {
+        let name = (path as NSString).lastPathComponent
+        return isUntracked ? "Move \(name) to the Trash" : "Discard changes to \(name)"
+    }
 }
 
 public struct DiffSnapshot: Codable, Equatable, Sendable {
@@ -59,11 +581,36 @@ public struct DiffSnapshot: Codable, Equatable, Sendable {
     /// The remote a first push would go to, for a branch without an
     /// upstream. Nil when there is an upstream, or no remote at all.
     public var pushRemote: String?
+    /// What git stopped in the middle of, waiting for conflicts to be
+    /// resolved and then to be continued or aborted (#42). Nil when nothing.
+    public var operation: GitOperation?
+    /// The submodules with changes of their own inside them (#44), each
+    /// with those changes as a folder's are. One whose commit only moved is
+    /// not here: that is a change of the folder, among `files`.
+    public var submodules: [SubmoduleChanges] = []
+
+    /// What an earlier build wrote, without what was added since, still reads.
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        isRepository = try values.decode(Bool.self, forKey: .isRepository)
+        branch = try values.decodeIfPresent(String.self, forKey: .branch)
+        files = try values.decode([FileDiff].self, forKey: .files)
+        upstream = try values.decodeIfPresent(String.self, forKey: .upstream)
+        ahead = try values.decodeIfPresent(Int.self, forKey: .ahead)
+        behind = try values.decodeIfPresent(Int.self, forKey: .behind)
+        pushRemote = try values.decodeIfPresent(String.self, forKey: .pushRemote)
+        operation = try values.decodeIfPresent(GitOperation.self, forKey: .operation)
+        submodules = try values.decodeIfPresent([SubmoduleChanges].self, forKey: .submodules) ?? []
+    }
+
+    /// The files that conflict.
+    public var conflicts: [FileDiff] { files.filter { $0.conflict != nil } }
 
     public init(
         isRepository: Bool, branch: String?, files: [FileDiff],
-        upstream: String? = nil, ahead: Int? = nil, behind: Int? = nil, pushRemote: String? = nil
+        upstream: String? = nil, ahead: Int? = nil, behind: Int? = nil, pushRemote: String? = nil, operation: GitOperation? = nil
     ) {
+        self.operation = operation
         self.isRepository = isRepository
         self.branch = branch
         self.files = files
@@ -82,8 +629,9 @@ public struct DiffSnapshot: Codable, Equatable, Sendable {
 
     /// What the next commit would contain.
     public var staged: [FileDiff] { files.filter(\.isStaged) }
-    /// Changes that are not staged, files git does not track yet included.
-    public var unstaged: [FileDiff] { files.filter { !$0.isStaged } }
+    /// Changes that are not staged, files git does not track yet included;
+    /// not the files that conflict, which are a list of their own.
+    public var unstaged: [FileDiff] { files.filter { !$0.isStaged && $0.conflict == nil } }
 
     /// The same list without the diffs themselves, which can be megabytes.
     public var withoutPatches: DiffSnapshot {
@@ -93,8 +641,41 @@ public struct DiffSnapshot: Codable, Equatable, Sendable {
             file.patch = ""
             return file
         }
+        copy.submodules = submodules.map { SubmoduleChanges(path: $0.path, changes: $0.changes.withoutPatches) }
         return copy
     }
+}
+
+/// A submodule with changes inside it (#44): where it is, from the folder
+/// whose changes list it, and what is changed there, which is staged,
+/// committed and discarded in the submodule itself.
+public struct SubmoduleChanges: Codable, Equatable, Identifiable, Sendable {
+    public var path: String
+    public var changes: DiffSnapshot
+
+    public var id: String { path }
+
+    public init(path: String, changes: DiffSnapshot) {
+        self.path = path
+        self.changes = changes
+    }
+
+    /// The folder to act in: the submodule's own, inside `folder`.
+    public func directory(in folder: String) -> String { (folder as NSString).appendingPathComponent(path) }
+
+    /// What its header says after its path: the branch checked out in it,
+    /// or that none is, as is usual in a submodule.
+    public var branchWords: String { changes.branch ?? "detached HEAD" }
+
+    /// What is said before committing in a submodule with no branch
+    /// checked out; nil when one is.
+    public var detachedWarning: String? {
+        changes.branch == nil
+            ? "No branch is checked out in \(path): the commit will be on no branch. The folder can still record it, but check out a branch there to keep it."
+            : nil
+    }
+
+    public static let commitAdvice = "Commits what is staged in the submodule. The folder then shows the submodule's new commit as a change of its own, to be committed in the folder."
 }
 
 /// A past conversation with an agent, found in that agent's own files.
@@ -188,4 +769,57 @@ public enum FileContent: Codable, Equatable, Sendable {
     /// A text file over the size the editor opens by itself is opened when
     /// asked, up to this size (#21).
     public static let largestOpenedAnyway = 20 * 1024 * 1024
+}
+
+/// A line of a file that holds what was searched for (#45).
+public struct TextMatch: Codable, Equatable, Hashable, Sendable {
+    /// The file, named from the folder that was searched.
+    public var file: String
+    /// The line's number, from 1.
+    public var line: Int
+    /// The line, without the blanks in front of it, and cut around the
+    /// text when it is very long.
+    public var text: String
+    /// Where the text is in `text`, and how long, in characters.
+    public var start: Int
+    public var length: Int
+
+    public init(file: String, line: Int, text: String, start: Int, length: Int) {
+        self.file = file
+        self.line = line
+        self.text = text
+        self.start = start
+        self.length = length
+    }
+}
+
+extension TextMatch {
+    /// The lines found, file by file in the order the files were first
+    /// found, each file's lines by their number.
+    public static func byFile(_ matches: [TextMatch]) -> [(file: String, lines: [TextMatch])] {
+        var order: [String] = []
+        var lines: [String: [TextMatch]] = [:]
+        for match in matches {
+            if lines[match.file] == nil { order.append(match.file) }
+            lines[match.file, default: []].append(match)
+        }
+        return order.map { ($0, (lines[$0] ?? []).sorted { $0.line < $1.line }) }
+    }
+
+    /// What is said under the lines found: how many, in how many files,
+    /// and that there were more than are shown.
+    public static func summary(of matches: [TextMatch], truncated: Bool, searching: Bool) -> String {
+        let files = Set(matches.map(\.file)).count
+        if matches.isEmpty { return searching ? "Searching…" : "Nothing found." }
+        var text = "\(matches.count) \(matches.count == 1 ? "line" : "lines") in \(files) \(files == 1 ? "file" : "files")"
+        if truncated { text += ". There are more: only the first \(matches.count) are shown, so make the search narrower" }
+        return text + (searching ? ", searching…" : ".")
+    }
+
+    /// What is said of a search by name: how many of the folder's files match.
+    public static func summary(ofFiles found: Int, among: Int, query: String) -> String {
+        if query.trimmingCharacters(in: .whitespaces).isEmpty { return "Type part of a file's name. \(among) \(among == 1 ? "file" : "files") in this folder." }
+        if found == 0 { return "No file's name matches." }
+        return found >= 100 ? "The best 100 of \(among) files." : "\(found) of \(among) files."
+    }
 }

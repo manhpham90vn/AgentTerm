@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 7
+public let agenttermProtocolVersion = 12
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -203,15 +203,96 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case gitStage(path: String, files: [String])
     /// Takes files out of the next commit. No files means all of them.
     case gitUnstage(path: String, files: [String])
+    /// Throws away changes that are not staged (#39): a file git tracks goes
+    /// back to what is staged or to the last commit, one it does not track
+    /// yet goes to the Mac's Trash. No files means every such change.
+    case gitDiscard(path: String, files: [String])
+    /// Asks for the repository's branches, its own and its remotes' (#35).
+    /// Answered with `gitBranches`.
+    case gitBranches(path: String)
+    /// Checks a branch out. A remote's (`origin/feature`) is checked out as
+    /// a branch of the repository's own that follows it, made if there is
+    /// none. Refused, in words, when changes that are not committed would
+    /// be lost. Answered with `gitBranches` and the folder's changes.
+    case gitSwitch(path: String, branch: String)
+    /// Makes a branch from another branch or a commit (`from`, the checked
+    /// out commit when nil), and checks it out when asked.
+    case gitCreateBranch(path: String, name: String, from: String?, checkout: Bool)
+    case gitRenameBranch(path: String, from: String, to: String)
+    /// Deletes a branch of the repository's own. One with commits that are
+    /// on no other branch is deleted only with `force`.
+    case gitDeleteBranch(path: String, name: String, force: Bool)
+    /// Resolves a file that conflicts (#42) by taking what one side has
+    /// ("ours", "theirs") or as it is now, edited by hand ("edited").
+    case gitResolve(path: String, file: String, take: String)
+    /// Goes on with the merge, rebase, cherry-pick or revert that stopped
+    /// on conflicts, once every file is resolved.
+    case gitContinue(path: String)
+    /// Gives it up: everything is put back as it was before it began.
+    case gitAbort(path: String)
+    /// Stages, unstages or discards a part of one file's change (#40): one
+    /// hunk of its diff, or lines of one. `patch` is that part as a patch
+    /// (`PatchParts.patch`), and `use` what it is applied for: "stage",
+    /// "unstage" or "discard". Answered with the folder's changes.
+    case gitApplyPart(path: String, file: String, patch: String, use: String)
+    /// Asks for the commit the checked out branch is at (#41). Answered
+    /// with `gitLastCommit`.
+    case gitLastCommit(path: String)
+    /// Replaces the last commit by one with this message and with what is
+    /// staged now added to it. An empty message keeps the one it has.
+    case gitAmend(path: String, message: String)
+    /// Takes the last commit back and leaves what it changed staged.
+    case gitUndoCommit(path: String)
+    /// Asks for what is in the repository's stash (#38), newest first.
+    /// Answered with `gitStashes`.
+    case gitStashes(path: String)
+    /// Puts the changes aside: what is staged and what is not, and with
+    /// `untracked` the files git does not track yet. `message` names it;
+    /// empty, git names it after the last commit.
+    case gitStash(path: String, message: String, untracked: Bool)
+    /// Asks what a stash holds: its files, each with its diff. `hash`
+    /// names the stash (`StashInfo.hash`). Answered with `gitStashShow`.
+    case gitStashShow(path: String, hash: String)
+    /// Brings what a stash holds back into the folder. With `pop` the
+    /// stash is dropped once that worked; when it conflicts, it is kept.
+    case gitStashApply(path: String, hash: String, pop: Bool)
+    /// Throws a stash away. Sent only after the user was asked.
+    case gitStashDrop(path: String, hash: String)
+    /// Asks for commits of a branch (#36), the checked out one when nil,
+    /// newest first: `limit` of them after the first `skip`. Answered with
+    /// `gitLog`.
+    case gitLog(path: String, branch: String?, skip: Int, limit: Int)
+    /// Asks for a commit's message and what it changed. Answered with `gitShow`.
+    case gitShow(path: String, hash: String)
+    /// Makes a commit on the checked out branch that takes back what the
+    /// named one changed. One that conflicts is undone, and says so.
+    case gitRevert(path: String, hash: String)
+    /// Makes the change of the named commit on the checked out branch too.
+    /// One that conflicts is undone, and says so.
+    case gitCherryPick(path: String, hash: String)
     /// Commits what is staged.
     case gitCommit(path: String, message: String)
     /// Pushes the branch that is checked out to its upstream. A branch
     /// without one is pushed to the remote the folder's changes name
     /// (`DiffSnapshot.pushRemote`), which becomes its upstream. Answered
     /// with the folder's changes, as `diff` is.
-    case gitPush(path: String)
-    /// Brings in what the upstream has. A pull that conflicts is undone.
-    case gitPull(path: String)
+    ///
+    /// With `force` true, what the upstream has and the branch has not is
+    /// overwritten (`--force-with-lease`): sent only after the user was
+    /// told what that is (`gitForcePushPreview`).
+    case gitPush(path: String, force: Bool? = nil)
+    /// Brings in what the upstream has: the way the repository is set up
+    /// to (`mode` nil or "default"), by "merge" or by "rebase" (#37). A
+    /// pull that conflicts is undone.
+    case gitPull(path: String, mode: String? = nil)
+    /// Asks the remotes for what is new, without changing the branch or the
+    /// files (#37). `automatic` when no one asked: the app does it every
+    /// few minutes while the folder is shown. Answered with `gitFetched`,
+    /// then the folder's changes.
+    case gitFetch(path: String, automatic: Bool)
+    /// Asks what a forced push would overwrite. Answered with
+    /// `gitForcePushPreview`.
+    case gitForcePushPreview(path: String)
     /// Asks an agent to write the commit message for what is staged.
     /// Answered with `commitMessage`. It never commits.
     case writeCommitMessage(path: String)
@@ -260,6 +341,29 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Asks for the conversations agents had in a folder, or everywhere on
     /// the host when `path` is nil.
     case history(path: String?)
+    /// The conversations before the oldest that `history` gave (#46): a
+    /// page of those last changed before `before`. Answered with `historyOlder`.
+    case historyOlder(path: String?, before: Date)
+    /// Reads a conversation from its agent's own file: what was said and
+    /// run in it, and what the file tells about it. Answered with
+    /// `conversationRead`.
+    case readConversation(agent: String, sessionID: String, cwd: String)
+    /// The conversations of a folder, or of the host when `path` is nil,
+    /// whose title or what was said in them holds `query`. Answered with
+    /// any number of `historyFound` and one `historySearchEnded`. A
+    /// client's search ends the one before it.
+    case searchHistory(search: Int, path: String?, query: String)
+    /// Pins a conversation or takes its pin away, hides it or shows it
+    /// again; what is nil is left as it is. `id` is `Conversation.id`. The
+    /// host keeps both, and tells every device with `historyMarks`.
+    case markConversation(id: String, pinned: Bool?, hidden: Bool?)
+    /// Deletes a conversation: its agent's own record of it goes to the
+    /// Trash. Sent once the user was asked twice. Answered with
+    /// `conversationDeleted`, or with `error` and why not.
+    case deleteConversation(agent: String, sessionID: String, cwd: String)
+    /// Writes a conversation out as a Markdown file on the host, to be
+    /// opened as any file. Answered with `conversationExported`.
+    case exportConversation(agent: String, sessionID: String, cwd: String)
     /// Reopens a conversation in its agent, in a new session the sender is attached to.
     case resume(agent: String, sessionID: String, cwd: String, size: TermSize)
     /// Asks what the receiving agent would be told when a conversation of
@@ -291,6 +395,11 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case answer(session: SessionID, to: AgentState, text: String)
     /// The Mac app is in front, or is no longer: then the Mac is in use.
     case appInFront(Bool)
+    /// The user opened this session on this device while its agent was
+    /// done or waited, in `state`: what it was told about is seen (#60).
+    /// The host passes it on to the other devices, which hide their notice
+    /// of it.
+    case noticeSeen(session: SessionID, state: AgentState)
     /// Someone used the Mac app: a key or a click in its window. The Mac
     /// is then in use again after a device was used.
     case used
@@ -298,10 +407,35 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// skips permissions is refused unless its warning was accepted.
     case saveSchedule(Schedule)
     case removeSchedule(id: String)
+    /// Starts a run of a schedule now (#47), whatever its time; it waits
+    /// or is skipped as any run while the one before it is going.
+    case runSchedule(id: String)
+    /// Stops the run of a schedule that came due at `at`, if it is going on.
+    case stopScheduleRun(id: String, at: Date)
+    /// What a run printed, kept when it ended. Answered with `scheduleRunOutput`.
+    case scheduleRunOutput(id: String, at: Date)
+    /// Makes a copy of a schedule, turned off, to be changed.
+    case duplicateSchedule(id: String)
+    /// Holds every schedule back, or lets them run again: none comes due
+    /// while they are paused, and none is caught up afterwards.
+    case pauseSchedules(Bool)
+    /// The files of a folder whose name or path holds the letters of
+    /// `query`, the best first (#45). Answered with `filesFound` carrying
+    /// the same `search`, a number the client picks, so that an answer to
+    /// what was typed before is told from the answer to what is typed now.
+    /// An empty query has the host read the folder's files again.
+    case findFiles(search: Int, path: String, query: String)
+    /// The lines of a folder's files that hold `query`, as written, not as
+    /// a pattern. Answered with any number of `textFound` and then one
+    /// `searchEnded`. A client's search for text ends the one before it.
+    case findText(search: Int, path: String, query: String, caseSensitive: Bool)
+    /// Stops a search that is going on. It is still answered with `searchEnded`.
+    case stopSearch(search: Int)
     /// Starts a session in a new git worktree of `request.cwd`, on a branch
-    /// of its own cut from the folder's current commit (#23). Nil `branch`
-    /// names it after the agent.
-    case createInWorktree(request: CreateRequest, branch: String?)
+    /// of its own (#23) cut from the branch `from` names, or from the
+    /// folder's current commit when it is nil (#43). Nil `branch` names it
+    /// after the agent.
+    case createInWorktree(request: CreateRequest, branch: String?, from: String?)
     /// The worktrees of a folder's repository (#23, #33). Answered with `worktrees`.
     case listWorktrees(folder: String)
     /// Merges, opens a pull request for, or throws away a worktree, and
@@ -342,9 +476,45 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// The paired devices. Sent to the host's own machine when they change.
     case devices([DeviceInfo])
     case diff(path: String, snapshot: DiffSnapshot)
+    /// The commit the checked out branch is at; nil for a repository
+    /// without a commit.
+    case gitLastCommit(path: String, last: LastCommit?)
+    /// What is in the repository's stash, newest first.
+    case gitStashes(path: String, stashes: [StashInfo])
+    /// The files a stash holds, each with its diff. `files` nil when the
+    /// stash is no longer there.
+    case gitStashShow(path: String, hash: String, files: [FileDiff]?)
+    /// Commits of `branch` (the checked out one when nil), newest first,
+    /// after the first `skip`; `more` when there are older ones still.
+    case gitLog(path: String, branch: String?, skip: Int, commits: [CommitInfo], more: Bool)
+    /// A commit's message and what it changed. `details` nil when there is
+    /// no such commit.
+    case gitShow(path: String, hash: String, details: CommitDetails?)
+    /// A fetch is over: `problem` is what git said when it failed. One that
+    /// was `automatic` is not to interrupt anyone with it.
+    case gitFetched(path: String, problem: String?, automatic: Bool)
+    /// What a forced push of the checked out branch would overwrite on
+    /// `upstream`: the commits it has and the branch has not, newest
+    /// first, as of now. `upstream` nil when there is nothing to push to,
+    /// or the remote could not be asked.
+    case gitForcePushPreview(path: String, upstream: String?, loses: [String])
+    /// The repository's branches: its own, the checked out one first, then
+    /// its remotes'. None for a folder that is not a repository.
+    case gitBranches(path: String, branches: [BranchInfo])
     /// `file` is nil when it no longer has changes.
     case diffFile(path: String, file: FileDiff?)
     case history(path: String?, conversations: [Conversation])
+    /// A page of older conversations, and whether there are older ones still.
+    case historyOlder(path: String?, conversations: [Conversation], more: Bool)
+    /// A conversation as it was read; `details` is nil when it is no longer there.
+    case conversationRead(id: String, details: ConversationDetails?)
+    case historyFound(search: Int, hits: [HistoryHit])
+    case historySearchEnded(search: Int)
+    /// The conversations that are pinned, and those that are hidden, by `Conversation.id`.
+    case historyMarks(pinned: [String], hidden: [String])
+    case conversationDeleted(id: String)
+    /// Where a conversation was written out as a file, on the host.
+    case conversationExported(id: String, path: String)
     case directory(DirectoryListing)
     /// Answer to `handoffPlan`: the prompt, and an id to hand off with.
     case handoffPlan(id: String, prompt: String)
@@ -396,17 +566,42 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case agentShells(Bool)
     /// Whether the agents are asked to run their commands in shells the user sees.
     case agentsUseShells(Bool)
+    /// What keeps the agents from opening shells although that is on
+    /// (#58); none when nothing does. Sent on connecting and whenever it
+    /// changes.
+    case agentShellsFaults([AgentShellsFault])
     /// Whether someone is at the Mac (#22, #24): its app in front, or a key
     /// or the pointer used in the last five minutes; and not since a device
     /// (an iPhone, another Mac) was used, until the Mac app is used again.
     case macInUse(Bool)
+    /// What this session's agent said or asks, in `state`, was seen on
+    /// another device (#60): a notice of it is hidden here too. Also sent
+    /// on connecting, for what was seen while this device was away.
+    case noticeSeen(session: SessionID, state: AgentState)
     /// Every schedule, with its last runs and when it runs next.
     case schedules([Schedule])
+    /// Whether every schedule is held back (#47).
+    case schedulesPaused(Bool)
+    /// What a run printed: its screen and what scrolled by, as text; nil
+    /// when nothing was kept of it.
+    case scheduleRunOutput(id: String, at: Date, text: String?)
     /// A folder's worktrees, the folder's own first, and its setup command.
     case worktrees(folder: String, list: [WorktreeInfo], setup: String?)
     /// What became of `finishWorktree`: a pull request's address, or that
     /// it was merged or removed.
     case worktreeFinished(folder: String, path: String, said: String)
+    /// The files that match a `findFiles`, best first, at most a hundred,
+    /// and how many files the folder has that were looked through.
+    case filesFound(search: Int, files: [String], among: Int)
+    /// More lines found by a `findText`.
+    case textFound(search: Int, matches: [TextMatch])
+    /// A `findText` is over: whether there were more lines than were
+    /// given, and why it could not be done, when it could not.
+    case searchEnded(search: Int, truncated: Bool, problem: String?)
+    /// The setup command of every folder that has one (#34): sent when a
+    /// client connects and whenever one changes, so that it is known
+    /// before a folder's worktrees were ever asked for.
+    case worktreeSetups([String: String])
 }
 
 public enum MessageCoding {

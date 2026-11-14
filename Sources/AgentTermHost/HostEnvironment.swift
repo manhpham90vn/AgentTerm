@@ -78,8 +78,51 @@ public enum HostEnvironment {
         // files, as `LoginShellPath` does not start their shell: a test
         // touches nothing of theirs, and their .zshrc took long enough on a
         // busy machine for tests waiting on a session's program to give up.
-        // A test that gives its host a home of its own does so with ZDOTDIR.
-        if LoginShellPath.underTests, env["ZDOTDIR"] == nil { env["ZDOTDIR"] = testShellHome.path }
+        // Also over a ZDOTDIR the person running the tests has set: under
+        // XCTest it can only be theirs. A host a test script starts, with a
+        // home of its own as ZDOTDIR, is not under XCTest.
+        if LoginShellPath.underTests { env["ZDOTDIR"] = testShellHome.path }
+        keepGitOffTheirConfiguration(&env)
+        return env
+    }
+
+    /// Under XCTest, git reads no global configuration: the identity, hooks
+    /// and signing of the person running the tests are theirs, and a test
+    /// sets in its repository what it needs.
+    static func keepGitOffTheirConfiguration(_ env: inout [String: String]) {
+        if LoginShellPath.underTests { env["GIT_CONFIG_GLOBAL"] = "/dev/null" }
+    }
+
+    /// What every command the host starts by itself is given, a session's
+    /// program not among them: the gits it starts take no lock they can do
+    /// without (`GIT_OPTIONAL_LOCKS=0`). Asked for a status, git otherwise
+    /// rewrites the index when a file's time changed, holding `index.lock`
+    /// meanwhile; the host asks whenever a file changes, and a commit made
+    /// in a terminal in that moment, by the user or by an agent, failed
+    /// with "Unable to create index.lock". A git that has to write, a
+    /// commit or an add the user asked for, still takes its lock.
+    ///
+    /// `git diff` rewrites the index too, whatever that says, when it finds
+    /// files whose time changed and whose text did not: it is told not to
+    /// (`diff.autoRefreshIndex=false`), after whatever settings the
+    /// environment already carries.
+    static func forTheHostsOwnCommands(_ env: inout [String: String]) {
+        keepGitOffTheirConfiguration(&env)
+        env["GIT_OPTIONAL_LOCKS"] = "0"
+        let count = env["GIT_CONFIG_COUNT"].flatMap(Int.init) ?? 0
+        env["GIT_CONFIG_KEY_\(count)"] = "diff.autoRefreshIndex"
+        env["GIT_CONFIG_VALUE_\(count)"] = "false"
+        env["GIT_CONFIG_COUNT"] = String(count + 1)
+    }
+
+    /// What a command the host runs for the user through their login shell
+    /// is given, as a worktree's setup command or `gh`: the host's own
+    /// environment, and under XCTest none of the user's startup files, as
+    /// a session's shell (`sessionEnvironment`). Nil: the host's own.
+    static var loginShellCommandEnvironment: [String: String]? {
+        guard LoginShellPath.underTests else { return nil }
+        var env = ProcessInfo.processInfo.environment
+        env["ZDOTDIR"] = testShellHome.path
         return env
     }
 
@@ -122,6 +165,204 @@ public enum HostEnvironment {
 
 /// Runs a short helper command and returns its standard output.
 enum Subprocess {
+    /// How a command ended (#52): three facts that one number cannot tell
+    /// apart, since exit 15 and SIGTERM, which the timeout sends, are both 15.
+    enum Ending: Equatable {
+        /// It exited by itself, with this status.
+        case exited(Int32)
+        /// Something else killed it, with this signal.
+        case signalled(Int32)
+        /// It took longer than its timeout and was stopped.
+        case timedOut
+    }
+
+    /// What a command printed and how it ended.
+    struct Result {
+        var ending: Ending
+        var output: Data
+
+        /// Its exit status, or -1 when it did not exit by itself: a check
+        /// for a status is never met by a signal of the same number.
+        var status: Int32 {
+            if case .exited(let status) = ending { return status }
+            return -1
+        }
+    }
+
+    /// Asks a command to end. One that the terminal stopped (a shell that
+    /// reached for the terminal the host was started from) does not get the
+    /// signal until it is let go on, so it is.
+    static func end(_ pid: pid_t) {
+        kill(pid, SIGTERM)
+        kill(pid, SIGCONT)
+    }
+
+    /// The programs running in the session a program leads, itself among them.
+    static func session(of leader: pid_t) -> [pid_t] {
+        let room = proc_listallpids(nil, 0)
+        guard room > 0 else { return [leader] }
+        var pids = [pid_t](repeating: 0, count: Int(room) + 64)
+        let found = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        guard found > 0 else { return [leader] }
+        return pids.prefix(Int(found)).filter { $0 > 0 && getsid($0) == leader }
+    }
+
+    /// A command that was started and runs by itself, to be stopped or
+    /// waited for: an agent that writes a commit message, which takes as
+    /// long as it takes and can be given up on.
+    ///
+    /// It runs in a session of its own, without the terminal the host may
+    /// have been started from. A login shell that is interactive and finds
+    /// itself at the head of a process group with a terminal takes that
+    /// terminal for its own; from the background it is stopped for it, and
+    /// neither runs its command nor ends.
+    final class Started {
+        let pid: pid_t
+        private let lock = NSLock()
+        private var status: Int32?
+
+        fileprivate init(pid: pid_t) { self.pid = pid }
+
+        /// Whether it has not ended yet.
+        var isRunning: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard status == nil else { return false }
+            var found: Int32 = 0
+            if waitpid(pid, &found, WNOHANG) == pid { status = found }
+            return status == nil
+        }
+
+        /// Asks it to end, unless it has: its number may be another
+        /// program's once it was waited for.
+        ///
+        /// With everything it started: it is the first of a session of its
+        /// own, and every program of that session is asked to end. An
+        /// interactive shell takes no notice of being asked, and where it
+        /// stays the parent of the program it runs, that program would
+        /// otherwise go on to its own end. A shell that is still there a
+        /// moment later is told its terminal is gone, which it does heed,
+        /// and what is there after three seconds is killed.
+        func stop() {
+            lock.lock()
+            defer { lock.unlock() }
+            guard status == nil else { return }
+            for member in Subprocess.session(of: pid) where member != pid { Subprocess.end(member) }
+            Subprocess.end(pid)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [self] in
+                guard isRunning else { return }
+                kill(pid, SIGHUP)
+                kill(pid, SIGCONT)
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 3) { [self] in
+                guard isRunning else { return }
+                for member in Subprocess.session(of: pid) { kill(member, SIGKILL) }
+            }
+        }
+
+        /// Waits for it to end, and says how it did.
+        @discardableResult
+        func wait() -> Ending {
+            // Seen to end before it is reaped, so that `stop` never signals
+            // a number the system has given to another program.
+            var info = siginfo_t()
+            while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) < 0 && errno == EINTR {}
+            lock.lock()
+            defer { lock.unlock() }
+            if status == nil {
+                var found: Int32 = 0
+                while waitpid(pid, &found, 0) < 0 && errno == EINTR {}
+                status = found
+            }
+            let signal = (status ?? 0) & 0x7f
+            return signal == 0 ? .exited(((status ?? 0) >> 8) & 0xff) : .signalled(signal)
+        }
+    }
+
+    /// Starts a command by itself, with nothing to read and nowhere to
+    /// write, in a session of its own. Nil when it could not be started.
+    static func start(_ executable: String, _ arguments: [String], cwd: String? = nil, environment: [String: String]? = nil) -> Started? {
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0)
+        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0)
+        if let cwd { posix_spawn_file_actions_addchdir_np(&actions, cwd) }
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSID))
+        let argv: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map { strdup($0) } + [nil]
+        var given = environment ?? ProcessInfo.processInfo.environment
+        HostEnvironment.forTheHostsOwnCommands(&given)
+        let envp: [UnsafeMutablePointer<CChar>?] = given.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer {
+            argv.forEach { free($0) }
+            envp.forEach { free($0) }
+        }
+        var pid: pid_t = 0
+        guard posix_spawn(&pid, executable, &actions, &attributes, argv, envp) == 0 else { return nil }
+        return Started(pid: pid)
+    }
+
+    /// Runs a command and hands over what it prints as it prints it, a
+    /// piece at a time, on the calling thread (#45): a search gives its
+    /// first results while it goes on. `taken` returns false to have the
+    /// command ended there. Nil when it could not be started.
+    @discardableResult
+    static func stream(
+        _ executable: String, _ arguments: [String], cwd: String? = nil, environment: [String: String]? = nil, taken: (Data) -> Bool
+    ) -> Ending? {
+        var pipe: [Int32] = [0, 0]
+        guard Darwin.pipe(&pipe) == 0 else { return nil }
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_adddup2(&actions, pipe[1], STDOUT_FILENO)
+        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0)
+        if let cwd { posix_spawn_file_actions_addchdir_np(&actions, cwd) }
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+        let argv: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map { strdup($0) } + [nil]
+        var given = environment ?? ProcessInfo.processInfo.environment
+        HostEnvironment.forTheHostsOwnCommands(&given)
+        let envp: [UnsafeMutablePointer<CChar>?] = given.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer {
+            argv.forEach { free($0) }
+            envp.forEach { free($0) }
+        }
+        var pid: pid_t = 0
+        let spawned = posix_spawn(&pid, executable, &actions, &attributes, argv, envp)
+        close(pipe[1])
+        guard spawned == 0 else {
+            close(pipe[0])
+            return nil
+        }
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        var ended = false
+        while true {
+            let count = read(pipe[0], &buffer, buffer.count)
+            if count < 0, errno == EINTR { continue }
+            guard count > 0 else { break }
+            if !taken(Data(buffer[0..<count])) {
+                // Enough was had: it is not waited on to print the rest.
+                end(pid)
+                ended = true
+                break
+            }
+        }
+        close(pipe[0])
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+        let signal = status & 0x7f
+        if ended { return .signalled(SIGTERM) }
+        return signal == 0 ? .exited((status >> 8) & 0xff) : .signalled(signal)
+    }
+
     /// - Parameter mergeErrors: also capture what the command writes to standard error.
     ///
     /// Started with `posix_spawn` and waited for with `waitpid`: Foundation's
@@ -130,7 +371,7 @@ enum Subprocess {
     static func run(
         _ executable: String, _ arguments: [String], cwd: String? = nil, timeout: TimeInterval = 10, mergeErrors: Bool = false,
         environment: [String: String]? = nil
-    ) -> (status: Int32, output: Data)? {
+    ) -> Result? {
         var pipe: [Int32] = [0, 0]
         guard Darwin.pipe(&pipe) == 0 else { return nil }
         var actions: posix_spawn_file_actions_t?
@@ -151,7 +392,9 @@ enum Subprocess {
         posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
 
         let argv: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map { strdup($0) } + [nil]
-        let envp: [UnsafeMutablePointer<CChar>?] = (environment ?? ProcessInfo.processInfo.environment).map { strdup("\($0.key)=\($0.value)") } + [nil]
+        var given = environment ?? ProcessInfo.processInfo.environment
+        HostEnvironment.forTheHostsOwnCommands(&given)
+        let envp: [UnsafeMutablePointer<CChar>?] = given.map { strdup("\($0.key)=\($0.value)") } + [nil]
         defer {
             argv.forEach { free($0) }
             envp.forEach { free($0) }
@@ -168,10 +411,14 @@ enum Subprocess {
         // its number may be another program's.
         let lock = NSLock()
         var ended = false
+        var stopped = false
         let timer = DispatchWorkItem {
             lock.lock()
             defer { lock.unlock() }
-            if !ended { kill(pid, SIGTERM) }
+            if !ended {
+                stopped = true
+                Subprocess.end(pid)
+            }
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
         // Read before waiting so a full pipe cannot stall the child.
@@ -188,14 +435,22 @@ enum Subprocess {
             }
         }
         close(pipe[0])
-        var status: Int32 = 0
-        while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+        // Seen to end but not reaped, so that its number is still its own
+        // while the timer may yet signal it; reaped once the timer cannot.
+        var info = siginfo_t()
+        while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) < 0 && errno == EINTR {}
         lock.lock()
         ended = true
+        let timedOut = stopped
         lock.unlock()
         timer.cancel()
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
         let signal = status & 0x7f
-        return (signal == 0 ? (status >> 8) & 0xff : signal, output)
+        // Stopped at its timeout whatever it then did with the signal: a
+        // command may catch SIGTERM and exit with a status of its own.
+        if timedOut { return Result(ending: .timedOut, output: output) }
+        return Result(ending: signal == 0 ? .exited((status >> 8) & 0xff) : .signalled(signal), output: output)
     }
 }
 #endif

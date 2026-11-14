@@ -113,6 +113,28 @@ public final class Telemetry: @unchecked Sendable {
         apply(settings, to: sink)
     }
 
+    /// The variable that has a build without a reporting service show the
+    /// first-launch screen all the same (#48), to be looked at and tested:
+    /// its value names the preferences the answer is kept in, which are
+    /// not the app's own. Nothing is sent: there is no service to send to.
+    public static let previewVariable = "AGENTTERM_REPORTING_PREVIEW"
+
+    /// Stands in for a service, and sends nothing.
+    private final class NothingSent: TelemetrySink {
+        func setUsageStatistics(enabled: Bool) {}
+        func setCrashReports(enabled: Bool) {}
+        func record(_ event: TelemetryEvent) {}
+        func recordProblem(_ kind: TelemetryProblem) {}
+    }
+
+    /// Starts as a build with a service would, with nothing behind it and
+    /// preferences of its own. False when the variable is not set.
+    public func startPreview(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        guard let suite = environment[Self.previewVariable], !suite.isEmpty, let defaults = UserDefaults(suiteName: suite) else { return false }
+        start(sink: NothingSent(), defaults: defaults)
+        return true
+    }
+
     /// True when a service is plugged in: only then is there anything to ask
     /// the user about.
     public var isAvailable: Bool {
@@ -137,13 +159,15 @@ public final class Telemetry: @unchecked Sendable {
         }
     }
 
-    /// True when the user has not been asked about crash reports yet and
-    /// there is a service to send them to.
+    /// True when the user has not answered the first-launch screen yet
+    /// (#48) and there is a service to send anything to. Until it is
+    /// answered nothing is sent, of either kind: what is saved for crash
+    /// reports is what says it was answered.
     public var shouldAskAboutCrashReports: Bool { isAvailable && settings.crashReports == nil }
 
     public func record(_ event: TelemetryEvent) {
         lock.lock()
-        let sink = current.usageStatistics ? sink : nil
+        let sink = current.usageStatistics && current.crashReports != nil ? sink : nil
         lock.unlock()
         sink?.record(event)
     }
@@ -156,7 +180,8 @@ public final class Telemetry: @unchecked Sendable {
     }
 
     private func apply(_ settings: TelemetrySettings, to sink: TelemetrySink?) {
-        sink?.setUsageStatistics(enabled: settings.usageStatistics)
+        // Not before the first-launch screen was answered, on as its switch may be.
+        sink?.setUsageStatistics(enabled: settings.usageStatistics && settings.crashReports != nil)
         sink?.setCrashReports(enabled: settings.crashReports == true)
     }
 }

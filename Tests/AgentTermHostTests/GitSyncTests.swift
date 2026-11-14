@@ -103,21 +103,161 @@ final class GitSyncTests: XCTestCase {
         XCTAssertTrue(problem.contains("rejected") || problem.contains("fetch first"), problem)
     }
 
-    func testAPullThatConflictsIsUndone() throws {
+    /// GIT-30 (#37): a fetch asks the remote for what is new and changes
+    /// neither the branch nor the files; a repository without a remote
+    /// says so.
+    func testAFetchSaysWhatTheRemoteHasWithoutChangingAnything() throws {
+        try commit("b.txt", "theirs\n", "theirs", in: theirs)
+        run("push", "-q", in: theirs)
+        try "mine, not committed\n".write(to: mine.appendingPathComponent("c.txt"), atomically: true, encoding: .utf8)
+        let head = run("rev-parse", "HEAD", in: mine)
+        XCTAssertEqual(snapshot(mine).behind, 0)
+
+        XCTAssertNil(GitActions.fetch(in: mine.path))
+        XCTAssertEqual(snapshot(mine).behind, 1, "what the remote has is known")
+        XCTAssertEqual(run("rev-parse", "HEAD", in: mine), head, "the branch is where it was")
+        XCTAssertEqual(try String(contentsOf: mine.appendingPathComponent("c.txt"), encoding: .utf8), "mine, not committed\n")
+
+        // A branch that is gone from the remote is forgotten here too.
+        run("push", "-q", "origin", "main:spare", in: theirs)
+        XCTAssertNil(GitActions.fetch(in: mine.path))
+        XCTAssertTrue(GitActions.branches(in: mine.path).contains { $0.name == "origin/spare" })
+        run("push", "-q", "origin", "--delete", "spare", in: theirs)
+        XCTAssertNil(GitActions.fetch(in: mine.path))
+        XCTAssertFalse(GitActions.branches(in: mine.path).contains { $0.name == "origin/spare" })
+
+        let alone = root.appendingPathComponent("alone")
+        run("init", "-q", "-b", "main", alone.path, in: root)
+        XCTAssertEqual(GitActions.fetch(in: alone.path), "This repository has no remote to fetch from.")
+    }
+
+    /// GIT-31 (#37): a pull brings the upstream in by a merge or by a
+    /// rebase when one is asked for, whatever the repository is set up to.
+    func testAPullByMergeOrByRebase() throws {
+        try commit("b.txt", "theirs\n", "theirs", in: theirs)
+        run("push", "-q", in: theirs)
+        try commit("c.txt", "mine\n", "mine", in: mine)
+        // Set up to merge: asked to rebase, mine comes after theirs, with no merge.
+        XCTAssertNil(GitActions.pull(in: mine.path, mode: .rebase))
+        XCTAssertEqual(run("log", "--format=%s", "-3", in: mine), "mine\ntheirs\ninit")
+        XCTAssertEqual(run("rev-list", "--merges", "--count", "HEAD", in: mine), "0")
+
+        try commit("d.txt", "theirs again\n", "theirs again", in: theirs)
+        run("push", "-q", "--force", in: theirs)
+        try commit("e.txt", "mine again\n", "mine again", in: mine)
+        run("config", "pull.rebase", "true", in: mine)
+        // Set up to rebase: asked to merge, there is a merge commit.
+        XCTAssertNil(GitActions.pull(in: mine.path, mode: .merge))
+        XCTAssertEqual(run("rev-list", "--merges", "--count", "HEAD", in: mine), "1")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mine.appendingPathComponent("d.txt").path))
+    }
+
+    /// GIT-32 (#37): a push the remote refuses says why and what to do; a
+    /// forced push is told what it would overwrite, as of now, and then
+    /// overwrites it.
+    func testAForcedPushSaysWhatItOverwrites() throws {
+        try commit("b.txt", "theirs\n", "theirs: a line", in: theirs)
+        try commit("b.txt", "theirs\nmore\n", "theirs: one more", in: theirs)
+        run("push", "-q", in: theirs)
+        try commit("a.txt", "one\nmine\n", "mine", in: mine)
+
+        let refused = try XCTUnwrap(GitActions.push(in: mine.path))
+        XCTAssertTrue(refused.hasPrefix("The remote has commits this branch does not have, so the push was refused. Pull first, or force the push"), refused)
+        XCTAssertEqual(run("log", "-1", "--format=%s", "main", in: remote), "theirs: one more", "nothing was overwritten")
+
+        // The remote is asked, so what is told is what is there now.
+        let loses = try XCTUnwrap(GitActions.forcePushLoses(in: mine.path))
+        XCTAssertEqual(loses.upstream, "origin/main")
+        XCTAssertEqual(loses.commits.map { String($0.split(separator: " ", maxSplits: 1).last ?? "") }, ["theirs: one more", "theirs: a line"])
+
+        XCTAssertNil(GitActions.push(in: mine.path, force: true))
+        XCTAssertEqual(run("log", "--format=%s", "main", in: remote), "mine\ninit")
+        XCTAssertEqual(GitActions.forcePushLoses(in: mine.path)?.commits, [], "nothing left to overwrite")
+
+        // A branch that follows none has nothing to be told about.
+        run("checkout", "-q", "-b", "alone", in: mine)
+        XCTAssertNil(GitActions.forcePushLoses(in: mine.path))
+    }
+
+    /// GIT-57 (#42): a pull that conflicts is left to be resolved: the file
+    /// that conflicts is listed, one side is taken, and it is continued; or
+    /// it is aborted, and everything is as before.
+    func testAPullThatConflictsIsResolvedAndContinuedOrAborted() throws {
         try commit("a.txt", "theirs\n", "theirs", in: theirs)
         run("push", "-q", in: theirs)
         try commit("a.txt", "mine\n", "mine", in: mine)
+        try commit("other.txt", "untouched\n", "another file of mine", in: mine)
         let head = run("rev-parse", "HEAD", in: mine)
 
         let problem = try XCTUnwrap(GitActions.pull(in: mine.path))
-        XCTAssertTrue(problem.contains("was undone"), problem)
+        XCTAssertTrue(problem.hasPrefix("The pull stopped on conflicts."), problem)
+        var state = snapshot(mine)
+        XCTAssertEqual(state.operation, .merge)
+        XCTAssertEqual(state.conflicts.map(\.path), ["a.txt"])
+        XCTAssertEqual(state.conflicts.first?.conflict, "UU")
+        XCTAssertEqual(state.conflicts.first?.conflictWords, "both sides changed it")
+        XCTAssertEqual(state.conflicts.first?.marker, "!")
+        XCTAssertTrue(state.conflicts.first?.patch.contains("<<<<<<<") == true, "the file as it is, markers and all")
+        XCTAssertEqual(state.unstaged.map(\.path), [], "a file that conflicts is in its own list")
+
+        // Not while a file still conflicts; nor is one with its markers taken for edited.
+        XCTAssertTrue(try XCTUnwrap(GitActions.continueOperation(in: mine.path)).hasPrefix("1 file still conflicts: a.txt."))
+        XCTAssertTrue(try XCTUnwrap(GitActions.resolve("a.txt", as: .edited, in: mine.path)).contains("still has conflict markers"))
+
+        // Aborted: as before the pull.
+        XCTAssertNil(GitActions.abortOperation(in: mine.path))
         XCTAssertEqual(run("rev-parse", "HEAD", in: mine), head)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: mine.appendingPathComponent(".git/MERGE_HEAD").path))
-        XCTAssertEqual(try String(contentsOf: mine.appendingPathComponent("a.txt"), encoding: .utf8), "mine\n")
-        XCTAssertEqual(snapshot(mine).files, [], "nothing is left half merged")
+        XCTAssertNil(snapshot(mine).operation)
+        XCTAssertEqual(snapshot(mine).files, [])
+        XCTAssertEqual(GitActions.abortOperation(in: mine.path), "Nothing is stopped on conflicts here.")
+
+        // Again, and resolved by taking theirs, then continued: a merge commit.
+        _ = GitActions.pull(in: mine.path)
+        XCTAssertNil(GitActions.resolve("a.txt", as: .theirs, in: mine.path))
+        state = snapshot(mine)
+        XCTAssertEqual(state.conflicts, [])
+        XCTAssertEqual(state.operation, .merge, "still to be continued")
+        XCTAssertNil(GitActions.continueOperation(in: mine.path))
+        XCTAssertNil(snapshot(mine).operation)
+        XCTAssertEqual(try String(contentsOf: mine.appendingPathComponent("a.txt"), encoding: .utf8), "theirs\n")
+        XCTAssertEqual(run("rev-list", "--merges", "--count", "HEAD", in: mine), "1")
+        XCTAssertEqual(GitActions.resolve("a.txt", as: .ours, in: mine.path), "a.txt does not conflict, or no longer.")
     }
 
-    func testAPullThatConflictsWhileRebasingIsUndoneToo() throws {
+    /// GIT-57: resolved by taking ours, by hand, and where one side
+    /// deleted the file; a rebase that conflicts is continued too.
+    func testConflictsResolvedEachWay() throws {
+        try commit("a.txt", "theirs\n", "theirs change a", in: theirs)
+        try commit("b.txt", "theirs b\n", "theirs add b", in: theirs)
+        run("rm", "-q", "a.txt", in: theirs)
+        run("commit", "-q", "-m", "theirs delete a", in: theirs)
+        try commit("c.txt", "theirs c\n", "theirs add c", in: theirs)
+        run("push", "-q", in: theirs)
+        try commit("a.txt", "mine\n", "mine change a", in: mine)
+        try commit("b.txt", "mine b\n", "mine add b", in: mine)
+        try commit("c.txt", "mine c\n", "mine add c", in: mine)
+
+        _ = GitActions.pull(in: mine.path, mode: .merge)
+        let state = snapshot(mine)
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: state.conflicts.map { ($0.path, $0.conflict ?? "") }), ["a.txt": "UD", "b.txt": "AA", "c.txt": "AA"])
+        // Theirs deleted a: taking theirs deletes it.
+        XCTAssertNil(GitActions.resolve("a.txt", as: .theirs, in: mine.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: mine.appendingPathComponent("a.txt").path))
+        // Ours for b.
+        XCTAssertNil(GitActions.resolve("b.txt", as: .ours, in: mine.path))
+        XCTAssertEqual(try String(contentsOf: mine.appendingPathComponent("b.txt"), encoding: .utf8), "mine b\n")
+        // c by hand: both lines kept, the markers taken out.
+        try "mine c\ntheirs c\n".write(to: mine.appendingPathComponent("c.txt"), atomically: true, encoding: .utf8)
+        XCTAssertNil(GitActions.resolve("c.txt", as: .edited, in: mine.path))
+        XCTAssertNil(GitActions.continueOperation(in: mine.path))
+        XCTAssertEqual(snapshot(mine).files, [])
+        XCTAssertEqual(run("show", "HEAD:c.txt", in: mine), "mine c\ntheirs c")
+
+    }
+
+    /// GIT-57: a pull that conflicts while rebasing is left as a rebase,
+    /// which is aborted, or resolved and continued.
+    func testAPullThatConflictsWhileRebasingIsResolvedOrAborted() throws {
         run("config", "pull.rebase", "true", in: mine)
         try commit("a.txt", "theirs\n", "theirs", in: theirs)
         run("push", "-q", in: theirs)
@@ -125,8 +265,20 @@ final class GitSyncTests: XCTestCase {
         let head = run("rev-parse", "HEAD", in: mine)
 
         let problem = try XCTUnwrap(GitActions.pull(in: mine.path))
-        XCTAssertTrue(problem.contains("was undone"), problem)
+        XCTAssertTrue(problem.hasPrefix("The pull stopped on conflicts."), problem)
+        XCTAssertEqual(snapshot(mine).operation, .rebase)
+        XCTAssertEqual(snapshot(mine).conflicts.map(\.path), ["a.txt"])
+        XCTAssertNil(GitActions.abortOperation(in: mine.path))
         XCTAssertEqual(run("rev-parse", "HEAD", in: mine), head)
+        XCTAssertEqual(run("branch", "--show-current", in: mine), "main")
+
+        // Again, and resolved: in a rebase "theirs" is this branch's commit being put on top.
+        _ = GitActions.pull(in: mine.path)
+        XCTAssertNil(GitActions.resolve("a.txt", as: .theirs, in: mine.path))
+        XCTAssertNil(GitActions.continueOperation(in: mine.path))
+        XCTAssertNil(snapshot(mine).operation)
+        XCTAssertEqual(run("log", "--format=%s", "-2", in: mine), "mine\ntheirs")
+        XCTAssertEqual(try String(contentsOf: mine.appendingPathComponent("a.txt"), encoding: .utf8), "mine\n")
         XCTAssertEqual(run("branch", "--show-current", in: mine), "main")
     }
 

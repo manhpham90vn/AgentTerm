@@ -35,13 +35,62 @@ public struct AgentNotice: Equatable, Sendable {
     /// What it said or asks, enough to decide without opening it.
     public var detail: String? {
         switch state {
-        case .done(let said): return said.flatMap { $0.isEmpty ? nil : String($0.suffix(300)) }
+        case .done(let said): return said.flatMap { $0.isEmpty ? nil : String($0.suffix(Self.detailLength)) }
         case .waitingForPermission(let question): return question.text.isEmpty ? nil : question.text
         case .waitingForAnswer(let question):
             return question.text + (question.choices.isEmpty ? "" : "\n" + question.choices.joined(separator: " · "))
         case .working: return nil
         }
     }
+
+    /// How much of what an agent said at the end `detail` gives.
+    public static let detailLength = 300
+
+    /// All of what it said or asks, for where there is room to read it:
+    /// the Mac's banner once it is opened out (#62). `detail` is the end of
+    /// it, which is where an agent comes to the point.
+    public var full: String? {
+        switch state {
+        case .done(let said): return said.flatMap { $0.isEmpty ? nil : $0 }
+        case .waitingForPermission, .waitingForAnswer, .working: return detail
+        }
+    }
+
+    /// Whether `detail` leaves out the beginning of what was said.
+    public var detailIsCut: Bool { (full?.count ?? 0) > (detail?.count ?? 0) }
+
+    /// What it said or asks, without the choices: a notification's body,
+    /// of which iOS shows a few lines only. The choices are its buttons
+    /// (#55), which a long question does not push out of sight.
+    public var words: String? {
+        switch state {
+        case .waitingForAnswer(let question): return question.text.isEmpty ? nil : question.text
+        case .done, .waitingForPermission, .working: return detail
+        }
+    }
+
+    /// A choice of a question, as a button where it is told.
+    public struct Button: Equatable, Sendable, Identifiable {
+        /// Names the choice by its place among the question's.
+        public var id: String
+        /// The choice, in the agent's words.
+        public var title: String
+    }
+
+    /// As many buttons as a notification takes with a text reply beside
+    /// them: iOS shows ten actions at most.
+    public static let mostButtons = 9
+
+    /// A question's choices, the first `mostButtons` of them. None for a
+    /// permission, which is answered in the session.
+    public var buttons: [Button] {
+        guard case .waitingForAnswer(let question) = state else { return [] }
+        return question.choices.prefix(Self.mostButtons).enumerated().map { Button(id: "choice-\($0.offset)", title: $0.element) }
+    }
+
+    /// The choice a button stands for, or nil when it is none of this
+    /// notice's.
+    public func choice(ofButton id: String) -> String? { buttons.first { $0.id == id }?.title }
 
     /// Whether the user can answer it in a few words where it is told: a
     /// question, or a finished task's next instruction. A permission is

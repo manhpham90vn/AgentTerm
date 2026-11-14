@@ -11,6 +11,8 @@ struct AgentTermApp: App {
     @AppStorage(MenuBarMode.key) private var staysInMenuBar = MenuBarMode.defaultValue
 
     init() {
+        // Only when measuring (#21): notes when the main thread was held up.
+        MainThreadWatch.startIfAsked()
         // Before anything is shown: the question about crash reports
         // depends on whether this build can report at all.
         FirebaseSink.start()
@@ -46,6 +48,13 @@ struct AgentTermApp: App {
                 Divider()
                 Button("Add Folder…") { model.addFolder() }
                     .keyboardShortcut("o")
+                Divider()
+                Button("Go to File…") { model.showSearch(.names) }
+                    .keyboardShortcut("p")
+                    .disabled(model.panelFolder == nil)
+                Button("Find in Files…") { model.showSearch(.text) }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
+                    .disabled(model.panelFolder == nil)
             }
             // Settings is a place in the window, not a window of its own.
             CommandGroup(replacing: .appSettings) {
@@ -162,18 +171,62 @@ private struct MenuBarMenu: View {
     }
 }
 
-/// Asks once, at the first launch of a build that can send them, whether
-/// crash reports may be sent. Until answered, none are.
+/// Shown once, at the first launch of a build that can send anything
+/// (#48): what may be sent to the developer, a switch for each kind, both
+/// on, and Continue. The app's own sheet, not an alert that could be taken
+/// for a question of the system's. Until it is answered nothing is sent.
 private struct CrashReportQuestion: ViewModifier {
     @StateObject private var preferences = TelemetryPreferences()
 
     func body(content: Content) -> some View {
-        content.alert(TelemetryPreferences.Wording.question, isPresented: $preferences.needsAsking) {
-            Button("Send Crash Reports") { preferences.answer(sendCrashReports: true) }
-            Button("Don't Send", role: .cancel) { preferences.answer(sendCrashReports: false) }
-        } message: {
-            Text(TelemetryPreferences.Wording.questionDetail + "\n\nYou can change this, and usage statistics, in Settings > Privacy.")
+        content.sheet(isPresented: $preferences.needsAsking) {
+            ReportingChoices(preferences: preferences)
+                .interactiveDismissDisabled()
         }
+    }
+}
+
+private struct ReportingChoices: View {
+    @ObservedObject var preferences: TelemetryPreferences
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(spacing: 10) {
+                Image(systemName: "hand.raised.fill").font(.system(size: 22)).foregroundStyle(.blue)
+                Text(TelemetryPreferences.Wording.screenTitle).font(.system(size: 16, weight: .semibold))
+            }
+            Text(TelemetryPreferences.Wording.screenIntro)
+                .font(.system(size: 12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            choice(TelemetryPreferences.Wording.crashTitle, TelemetryPreferences.Wording.questionDetail, $preferences.offersCrashReports, "reporting-crash")
+            choice(TelemetryPreferences.Wording.usageTitle, TelemetryPreferences.Wording.usageDetail, $preferences.offersUsageStatistics, "reporting-usage")
+            Text(TelemetryPreferences.Wording.screenFooter).font(.system(size: 11.5)).foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button(TelemetryPreferences.Wording.screenButton) { preferences.answer() }
+                    .keyboardShortcut(.defaultAction)
+                    .accessibilityIdentifier("reporting-continue")
+            }
+        }
+        .padding(24)
+        .frame(width: 520)
+        // A group of its own, so that what is in it keeps its own names.
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("reporting-choices")
+    }
+
+    private func choice(_ title: String, _ detail: String, _ isOn: Binding<Bool>, _ id: String) -> some View {
+        Toggle(isOn: isOn) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 13, weight: .medium))
+                Text(detail).font(.system(size: 11.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .toggleStyle(.switch)
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.05)))
+        .accessibilityLabel(title)
+        .accessibilityIdentifier(id)
     }
 }
 
@@ -497,6 +550,23 @@ struct GitSettingsView: View {
                     .labelsHidden()
                     .fixedSize()
                 }
+                Divider()
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Fetch automatically").font(.system(size: 13, weight: .medium))
+                        Text(
+                            "Every five minutes, while the side panel shows a folder and the app is in front, its remotes are asked for what is new, so that what is ahead and behind stays true. Nothing in the folder changes. Off, the remotes are asked only by Fetch, Pull and Push."
+                        )
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 12)
+                    Toggle("Fetch automatically", isOn: Binding(get: { model.display.fetchAutomatically }, set: { on in model.setDisplay { $0.fetchAutomatically = on } }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .accessibilityIdentifier("fetch-automatically")
+                }
             }
             Label(
                 "The agent runs once, without a terminal and with no way to change your files, in a folder of AgentTerm's own, so it leaves no conversation in your project. Large changes are cut down before they are sent.",
@@ -532,7 +602,7 @@ struct PrivacySettingsView: View {
             SettingsCard {
                 Toggle(isOn: $preferences.crashReports) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Send crash reports").font(.system(size: 13, weight: .medium))
+                        Text(TelemetryPreferences.Wording.crashTitle).font(.system(size: 13, weight: .medium))
                         Text(TelemetryPreferences.Wording.questionDetail)
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
@@ -540,11 +610,13 @@ struct PrivacySettingsView: View {
                     }
                 }
                 .toggleStyle(.switch)
+                .accessibilityLabel(TelemetryPreferences.Wording.crashTitle)
+                .accessibilityIdentifier("privacy-crash")
             }
             SettingsCard {
                 Toggle(isOn: $preferences.usageStatistics) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Share usage statistics").font(.system(size: 13, weight: .medium))
+                        Text(TelemetryPreferences.Wording.usageTitle).font(.system(size: 13, weight: .medium))
                         Text(TelemetryPreferences.Wording.usageDetail)
                             .font(.system(size: 11.5))
                             .foregroundStyle(.secondary)
@@ -552,6 +624,8 @@ struct PrivacySettingsView: View {
                     }
                 }
                 .toggleStyle(.switch)
+                .accessibilityLabel(TelemetryPreferences.Wording.usageTitle)
+                .accessibilityIdentifier("privacy-usage")
             }
             if !preferences.isAvailable {
                 Label(TelemetryPreferences.Wording.unavailable, systemImage: "info.circle")

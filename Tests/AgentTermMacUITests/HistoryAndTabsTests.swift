@@ -27,11 +27,59 @@ final class HistoryAndTabsTests: MacUITestCase {
         wait("the receiving agent's session") { phone.sessions.count == 2 }
         let receiving = try XCTUnwrap(phone.sessions.first { $0.id != resumed.id })
         XCTAssertEqual(receiving.title, "Codex")
-        phone.send(.attach(session: receiving.id, size: .default))
-        wait("the receiving agent told about the file") { phone.text(receiving.id).contains(".agentterm/handoffs/") }
+        wait("the receiving agent told about the file") { self.agentStarts().contains { $0.hasPrefix("codex: ") && $0.contains(".agentterm/handoffs/") } }
         let handoffs = (try? FileManager.default.contentsOfDirectory(atPath: project.appendingPathComponent(".agentterm/handoffs").path)) ?? []
         XCTAssertEqual(handoffs.count, 1, "no handoff file was written in the project")
         XCTAssertFalse(git("status", "--short", in: project).contains(".agentterm"), "the handoff file shows up as a change")
+    }
+
+    /// HIST-19 (#46): the folder's conversations are searched by what was
+    /// said, one is read as a transcript and pinned, and one is deleted
+    /// after being asked about twice, its file going to the Trash.
+    func testHistoryIsSearchedReadPinnedAndDeleted() throws {
+        let history = home.appendingPathComponent(".claude/projects/" + project.path.map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined())
+        try [
+            #"{"type":"user","timestamp":"2026-11-14T08:00:00.000Z","cwd":"\#(project.path)","message":{"role":"user","content":"rename the token"}}"#,
+            #"{"type":"assistant","timestamp":"2026-11-14T08:20:00.000Z","message":{"id":"m1","model":"claude-fable-5","role":"assistant","content":[{"type":"tool_use","name":"Bash","input":{"command":"swift test"}},{"type":"text","text":"The tokenizer is renamed."}],"usage":{"input_tokens":1200,"output_tokens":40}}}"#,
+        ].joined(separator: "\n").appending("\n").write(to: history.appendingPathComponent("c-2.jsonl"), atomically: true, encoding: .utf8)
+
+        app.press(.id("panel-history"))
+        app.wait(for: .id("conversation-c-2"), timeout: 20)
+        app.wait(for: .text("2 conversations"))
+
+        // Searched by what was said in it: its title does not hold the word.
+        app.write("tokenizer", into: .id("history-search-folder"))
+        app.wait(for: .text("1 found"), timeout: 15)
+        app.wait(for: .containing("The tokenizer is renamed."))
+        XCTAssertFalse(app.exists(.id("conversation-c-1")))
+        shot("search")
+        app.write("", into: .id("history-search-folder"))
+        app.wait(for: .id("conversation-c-1"))
+
+        // Read: what was asked, run and answered, and what the file tells.
+        app.press(.id("conversation-c-2"))
+        app.wait(for: .text("You: rename the token"), timeout: 15)
+        app.wait(for: .text("Bash: swift test"))
+        app.wait(for: .text("Claude Code: The tokenizer is renamed."))
+        app.wait(for: .text("20 min"))
+        app.wait(for: .text("claude-fable-5"))
+        shot("transcript")
+        app.press(.id("conversation-pin"))
+        app.wait(for: .button("Unpin"))
+        app.press(.button("Close"))
+        app.wait(for: .containing("Pinned, 1 conversations"))
+
+        // Deleted: asked twice, and its file goes to the Trash.
+        app.perform("Delete", on: .id("conversation-c-1"))
+        app.wait(for: .containing("Delete this conversation?"))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: history.appendingPathComponent("c-1.jsonl").path))
+        app.press(.button("Delete…"))
+        app.wait(for: .containing("Delete it for good from Claude Code?"), timeout: 10)
+        app.press(.button("Delete Conversation"))
+        app.waitGone(.id("conversation-c-1"), timeout: 15)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: history.appendingPathComponent("c-1.jsonl").path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: home.appendingPathComponent(".Trash-of-the-tests").path), ["c-1.jsonl"])
+        app.wait(for: .id("conversation-c-2"))
     }
 
     func testTabsAreShownPinnedGroupedAndClosed() throws {
@@ -98,6 +146,9 @@ final class HistoryAndTabsTests: MacUITestCase {
         app.press(.id("conversation-c-1"))
         app.wait(for: .button("Resume in Claude Code"))
         app.wait(for: .button("Copy Resume Command"))
+        // What was said in it is what shows first (#46); handing it off is beside it.
+        app.wait(for: .text("You: write tests for the parser"), timeout: 15)
+        app.press(.button("Hand Off"))
         app.wait(for: .text("Hand Off to Another Agent"))
         app.wait(for: .button("Codex"))
         shot("win-4-history")

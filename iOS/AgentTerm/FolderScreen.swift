@@ -6,10 +6,40 @@ import SwiftUI
 /// files: what the Mac shows in its side panel.
 struct FolderScreen: View {
     @EnvironmentObject private var model: PhoneModel
+    /// The folder, or a worktree of one: the screen is then that folder's,
+    /// with the worktree on show (#34).
     let folder: String
     @AppStorage("folderTab") private var tab = "git"
+    /// The worktree picked from the chips; nil for what the screen was opened with.
+    @State private var picked: String?
+
+    /// The folder's worktrees are asked for under its own path; a worktree
+    /// made elsewhere is only known for one once they were listed.
+    private var key: String { model.project(ofWorktree: folder) ?? folder }
+    private var worktrees: [WorktreeInfo] { model.worktrees[key] ?? model.worktrees[folder] ?? [] }
+    /// The repository's own folder: where a worktree is merged into.
+    private var project: String { worktrees.first { $0.isMain }?.path ?? key }
+    /// What Git, History and Files are about.
+    private var shownPath: String {
+        let wanted = picked ?? folder
+        // One that was thrown away meanwhile is not shown any more.
+        return worktrees.isEmpty || worktrees.contains { $0.path == wanted && !$0.missing } ? wanted : project
+    }
 
     var body: some View {
+        content(of: shownPath)
+            .onAppear { model.listWorktrees(key) }
+            // What the chips say of the one on show is then stale.
+            .onChange(of: model.diffs[shownPath]?.files.count) { old, _ in if old != nil { model.listWorktrees(project) } }
+            .onChange(of: project) { _, project in if model.worktrees[project] == nil { model.listWorktrees(project) } }
+            .alert("Worktree", isPresented: Binding(get: { model.worktreeSaid != nil }, set: { if !$0 { model.worktreeSaid = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(model.worktreeSaid ?? "")
+            }
+    }
+
+    private func content(of folder: String) -> some View {
         VStack(spacing: 0) {
             Picker("Show", selection: $tab) {
                 Text("Git").tag("git")
@@ -19,6 +49,7 @@ struct FolderScreen: View {
             .pickerStyle(.segmented)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
+            WorktreeChips(project: project, list: worktrees, picked: $picked, shownPath: folder)
             if tab == "history" {
                 HistoryList(folder: folder)
             } else if tab == "files" {
@@ -28,16 +59,16 @@ struct FolderScreen: View {
             }
         }
         .background(Palette.canvas.ignoresSafeArea())
-        .navigationTitle((folder as NSString).lastPathComponent)
+        .navigationTitle((project as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
         .keyboardDismissButton()
         .toolbar {
-            if model.folders.contains(folder) {
+            if model.folders.contains(project) {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button(role: .destructive) {
-                            model.removeFolder(folder)
+                            model.removeFolder(project)
                             if !model.path.isEmpty { model.path.removeLast() }
                         } label: {
                             Label("Remove from List", systemImage: "minus.circle")
@@ -59,31 +90,93 @@ private struct ChangesList: View {
     /// "list" shows every file in one flat list, "tree" groups them by folder.
     @AppStorage("diffViewMode") private var viewMode = "list"
     @State private var collapsedFolders: Set<String> = []
+    /// The changes the user is asked about before they are discarded (#39).
+    @State private var discarding: [FileDiff]?
+    /// Where they are changed: the folder, or a submodule inside it (#44).
+    @State private var discardingIn: String?
 
     private var isTree: Bool { viewMode == "tree" }
+    private var question: DiscardQuestion? { discarding.map(DiscardQuestion.init(files:)) }
+
+    private func askToDiscard(_ files: [FileDiff], in directory: String) {
+        discardingIn = directory
+        discarding = files
+    }
+
+    /// Discards what was asked about. Every change is asked for as such,
+    /// so that one made since is not left out.
+    private func discardConfirmed() {
+        guard let asked = discarding else { return }
+        discarding = nil
+        let directory = discardingIn ?? folder
+        let all = asked.count > 1 && asked.count == (model.diffs[directory]?.unstaged.count ?? -1)
+        model.discard(all ? [] : asked.map(\.path), in: directory)
+    }
+
+    /// The submodules with changes inside them (#44), each a list of its
+    /// own under the folder's, with its own commit box once something is
+    /// staged in it.
+    @ViewBuilder
+    private func submodules(_ diff: DiffSnapshot) -> some View {
+        ForEach(diff.submodules) { submodule in
+            let directory = submodule.directory(in: folder)
+            let staged = submodule.changes.staged
+            let unstaged = submodule.changes.unstaged
+            VStack(alignment: .leading, spacing: 4) {
+                Label(submodule.path, systemImage: "shippingbox").font(.subheadline.weight(.semibold)).lineLimit(1)
+                Text("Submodule, on \(submodule.branchWords). Its changes are staged, committed and discarded in it.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if !staged.isEmpty, let warning = submodule.detachedWarning {
+                    Text(warning).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 6)
+            .padding(.top, 22)
+            .padding(.bottom, 8)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("submodule-" + submodule.path)
+            if !staged.isEmpty {
+                CommitBox(folder: directory, stagedCount: staged.count).padding(.bottom, 12)
+                SectionHeader(title: "Staged", count: staged.count, action: "Unstage All") { model.unstage([], in: directory) }
+                rows(staged, in: directory)
+            }
+            if !unstaged.isEmpty {
+                SectionHeader(
+                    title: "Changes", count: unstaged.count, action: "Stage All", second: ("Discard All…", { askToDiscard(unstaged, in: directory) })
+                ) { model.stage([], in: directory) }
+                .padding(.top, staged.isEmpty ? 0 : 16)
+                rows(unstaged, in: directory)
+            }
+        }
+    }
 
     var body: some View {
         Group {
             if let diff = model.diffs[folder] {
                 if !diff.isRepository {
                     Placeholder(text: "This folder is not a git repository.")
-                } else if diff.files.isEmpty && !diff.canPush && !diff.canPull {
-                    Placeholder(text: "No uncommitted changes.")
-                } else if diff.files.isEmpty {
+                } else if diff.files.isEmpty && diff.submodules.isEmpty {
                     // Nothing to commit, but a commit that was just made is
-                    // what there is to push.
+                    // what there is to push, and the branch can be another.
                     ScrollView {
                         VStack(spacing: 0) {
-                            if let branch = diff.branch {
-                                Label(branch, systemImage: "arrow.triangle.branch")
-                                    .font(.footnote.weight(.medium))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 6)
-                                    .padding(.bottom, 10)
+                            HStack(spacing: 8) {
+                                BranchButton(folder: folder, branch: diff.branch)
+                                Spacer()
+                                LastCommitMenu(folder: folder)
                             }
-                            SyncBar(folder: folder, diff: diff)
+                            .padding(.horizontal, 6)
+                            .padding(.bottom, 10)
+                            if diff.operation != nil {
+                                ConflictCard(folder: folder, diff: diff).padding(.bottom, 12)
+                            }
+                            if diff.canPush || diff.canPull { SyncBar(folder: folder, diff: diff) }
+                            if model.amending[folder] != nil {
+                                // Amending with nothing staged: its message alone.
+                                CommitBox(folder: folder, stagedCount: 0).padding(.top, 12)
+                            }
+                            CommitsLink(folder: folder).padding(.top, 12)
                             Text("No uncommitted changes.")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
@@ -97,13 +190,9 @@ private struct ChangesList: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             HStack(spacing: 8) {
-                                if let branch = diff.branch {
-                                    Label(branch, systemImage: "arrow.triangle.branch")
-                                        .font(.footnote.weight(.medium))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
+                                BranchButton(folder: folder, branch: diff.branch)
                                 Spacer()
+                                LastCommitMenu(folder: folder)
                                 DiffCount(added: diff.files.reduce(0) { $0 + $1.added }, deleted: diff.files.reduce(0) { $0 + $1.deleted })
                                 Button {
                                     model.setDisplay { $0.changesView = isTree ? "list" : "tree" }
@@ -116,10 +205,15 @@ private struct ChangesList: View {
                             }
                             .padding(.horizontal, 6)
                             .padding(.bottom, 10)
+                            if diff.operation != nil || !diff.conflicts.isEmpty {
+                                // What git is stopped in, above everything else (#42).
+                                ConflictCard(folder: folder, diff: diff).padding(.bottom, 12)
+                            }
                             if diff.canPush || diff.canPull {
                                 SyncBar(folder: folder, diff: diff)
                                     .padding(.bottom, 12)
                             }
+                            CommitsLink(folder: folder).padding(.bottom, 12)
                             CommitBox(folder: folder, stagedCount: diff.staged.count)
                                 .padding(.bottom, 14)
                             if !diff.staged.isEmpty {
@@ -127,10 +221,13 @@ private struct ChangesList: View {
                                 rows(diff.staged)
                             }
                             if !diff.unstaged.isEmpty {
-                                SectionHeader(title: "Changes", count: diff.unstaged.count, action: "Stage All") { model.stage([], in: folder) }
-                                    .padding(.top, diff.staged.isEmpty ? 0 : 16)
+                                SectionHeader(
+                                    title: "Changes", count: diff.unstaged.count, action: "Stage All", second: ("Discard All…", { askToDiscard(diff.unstaged, in: folder) })
+                                ) { model.stage([], in: folder) }
+                                .padding(.top, diff.staged.isEmpty ? 0 : 16)
                                 rows(diff.unstaged)
                             }
+                            submodules(diff)
                         }
                         .padding(.horizontal, 16)
                         .padding(.bottom, 24)
@@ -142,11 +239,35 @@ private struct ChangesList: View {
             }
         }
         .onAppear { model.loadDiff(folder) }
+        // Asked first: what is discarded does not come back (#39).
+        .confirmationDialog(
+            question?.title ?? "", isPresented: Binding(get: { discarding != nil }, set: { if !$0 { discarding = nil } }), titleVisibility: .visible
+        ) {
+            Button(question?.confirm ?? "Discard", role: .destructive) { discardConfirmed() }
+            Button("Cancel", role: .cancel) { discarding = nil }
+        } message: {
+            Text(question?.message ?? "")
+        }
+        // Undoing the last commit, or amending one that is pushed (#41).
+        .confirmationDialog(
+            rewriteQuestion?.title ?? "", isPresented: Binding(get: { model.pendingRewrite?.folder == folder }, set: { if !$0 { model.pendingRewrite = nil } }),
+            titleVisibility: .visible, presenting: model.pendingRewrite
+        ) { pending in
+            Button(rewriteQuestion?.confirm ?? "Go On", role: pending.last.isPushed ? .destructive : nil) { model.rewriteConfirmed(pending) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text(rewriteQuestion?.message ?? "")
+        }
+    }
+
+    private var rewriteQuestion: RewriteCommitQuestion? {
+        model.pendingRewrite.map { RewriteCommitQuestion($0.action, last: $0.last, again: $0.again) }
     }
 
     /// The files of one of the two lists, flat or grouped by folder.
-    private func rows(_ files: [FileDiff]) -> some View {
-        VStack(spacing: 0) {
+    private func rows(_ files: [FileDiff], in directory: String? = nil) -> some View {
+        let folder = directory ?? folder
+        return VStack(spacing: 0) {
             if isTree {
                 let rows = DiffTree.rows(for: files, collapsed: collapsedFolders)
                 ForEach(rows) { row in
@@ -159,7 +280,7 @@ private struct ChangesList: View {
                         }
                         .buttonStyle(.plain)
                     case .file(let file):
-                        fileRow(file, showsDirectory: false, depth: row.depth)
+                        fileRow(file, showsDirectory: false, depth: row.depth, in: folder)
                     }
                     if row.id != rows.last?.id {
                         Palette.hairline.frame(height: 1).padding(.leading, 38 + CGFloat(row.depth) * treeIndent)
@@ -167,7 +288,7 @@ private struct ChangesList: View {
                 }
             } else {
                 ForEach(files) { file in
-                    fileRow(file, showsDirectory: true, depth: 0)
+                    fileRow(file, showsDirectory: true, depth: 0, in: folder)
                     if file.id != files.last?.id {
                         Palette.hairline.frame(height: 1).padding(.leading, 38)
                     }
@@ -178,12 +299,26 @@ private struct ChangesList: View {
     }
 
     /// A file: tapping it shows its diff, the button at its end stages or unstages it.
-    private func fileRow(_ file: FileDiff, showsDirectory: Bool, depth: Int) -> some View {
+    private func fileRow(_ file: FileDiff, showsDirectory: Bool, depth: Int, in folder: String) -> some View {
         HStack(spacing: 0) {
             NavigationLink(value: Route.file(folder: folder, file: file.path, staged: file.isStaged)) {
                 FileRow(file: file, showsDirectory: showsDirectory, depth: depth)
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                Button(file.isStaged ? "Unstage" : "Stage") {
+                    if file.isStaged { model.unstage([file.path], in: folder) } else { model.stage([file.path], in: folder) }
+                }
+                if !file.isStaged {
+                    // Asked about first: what is discarded does not come back.
+                    Button(role: .destructive) {
+                        askToDiscard([file], in: folder)
+                    } label: {
+                        Label(file.isUntracked ? "Move to the Trash…" : "Discard Changes…", systemImage: file.isUntracked ? "trash" : "arrow.uturn.backward")
+                    }
+                    .accessibilityLabel(file.discardLabel)
+                }
+            }
             Button {
                 if file.isStaged { model.unstage([file.path], in: folder) } else { model.stage([file.path], in: folder) }
             } label: {
@@ -212,6 +347,8 @@ private struct SyncBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
+                button("Fetch", symbol: "arrow.triangle.2.circlepath", count: 0, working: busy == "fetch") { model.fetch(in: folder) }
+                    .accessibilityIdentifier("git-fetch")
                 if diff.canPull {
                     button("Pull", symbol: "arrow.down", count: diff.behind ?? 0, working: busy == "pull") { model.pull(in: folder) }
                         .accessibilityIdentifier("git-pull")
@@ -223,16 +360,60 @@ private struct SyncBar: View {
                     }
                     .accessibilityIdentifier("git-push")
                 }
+                if diff.upstream != nil {
+                    // The ways that are not the usual one: asked for by name.
+                    Menu {
+                        Button("Pull by Merge") { model.pull(in: folder, mode: "merge") }
+                        Button("Pull by Rebase") { model.pull(in: folder, mode: "rebase") }
+                        Divider()
+                        Button("Force Push…", role: .destructive) { model.requestForcePush(in: folder) }
+                    } label: {
+                        Image(systemName: "ellipsis.circle").font(.system(size: 20)).frame(width: 36, height: 36)
+                    }
+                    .accessibilityLabel("More ways to pull and push")
+                    .accessibilityIdentifier("git-more")
+                }
             }
-            .disabled(busy != nil || model.status != .connected)
+            .disabled(busy != nil || model.askingForcePush != nil || model.status != .connected)
             Text(diff.upstream.map { "Follows \($0)" } ?? "Not on a remote yet")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .truncationMode(.head)
                 .padding(.horizontal, 6)
+            if let problem = model.fetchProblems[folder] {
+                // A fetch no one asked for failed: said here, not in an alert.
+                Label("The Mac could not ask the remote for what is new: \(problem)", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .padding(.horizontal, 6)
+                    .accessibilityIdentifier("fetch-problem")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // The remotes are asked every few minutes while this is on screen.
+        .task(id: folder) {
+            while !Task.isCancelled {
+                model.fetchIfDue(folder)
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+            }
+        }
+        // A forced push is asked about first, saying what it overwrites.
+        .confirmationDialog(
+            model.pendingForcePush?.question.title ?? "",
+            isPresented: Binding(get: { model.pendingForcePush?.folder == folder }, set: { if !$0 { model.pendingForcePush = nil } }),
+            titleVisibility: .visible, presenting: model.pendingForcePush
+        ) { push in
+            if push.question.isNeeded {
+                Button(push.question.confirm, role: .destructive) { model.forcePushConfirmed(push) }
+            } else {
+                Button("Push") { model.push(in: folder) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { push in
+            Text(push.question.message)
+        }
         .confirmationDialog(
             "Push “\(diff.branch ?? "")” to \(diff.pushRemote ?? "the remote")?", isPresented: $confirmingFirstPush, titleVisibility: .visible
         ) {
@@ -278,14 +459,35 @@ private struct CommitBox: View {
 
     private var isCommitting: Bool { model.committing == folder }
 
+    /// The commit being amended, when one is (#41).
+    private var amending: LastCommit? { model.amending[folder] }
+
     private var canCommit: Bool {
-        stagedCount > 0 && model.committing == nil && !message.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        (stagedCount > 0 || amending != nil) && model.committing == nil && !message.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var commitTitle: String {
+        if amending != nil { return stagedCount > 0 ? "Amend with \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Amend Message" }
+        return stagedCount > 0 ? "Commit \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Stage Changes to Commit"
     }
 
     private var isWriting: Bool { model.writingCommitMessage.contains(folder) }
 
     var body: some View {
         VStack(spacing: 8) {
+            if let amending {
+                HStack(spacing: 6) {
+                    Image(systemName: "pencil.line").font(.footnote.weight(.semibold))
+                    Text("Amending \(amending.commit.short): what is staged is added to it").font(.footnote).lineLimit(2)
+                    Spacer(minLength: 4)
+                    Button("Cancel") { model.cancelAmend(in: folder) }
+                        .font(.footnote.weight(.medium))
+                        .accessibilityIdentifier("amend-cancel")
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+                .accessibilityIdentifier("amending")
+            }
             HStack(alignment: .top, spacing: 8) {
                 TextField("Commit message", text: message, axis: .vertical)
                     .lineLimit(1...5)
@@ -321,7 +523,7 @@ private struct CommitBox: View {
             } label: {
                 HStack(spacing: 8) {
                     if isCommitting { ProgressView().controlSize(.small) }
-                    Text(stagedCount > 0 ? "Commit \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Stage Changes to Commit")
+                    Text(commitTitle)
                         .font(.body.weight(.semibold))
                 }
                 .frame(maxWidth: .infinity)
@@ -339,7 +541,17 @@ private struct SectionHeader: View {
     let title: String
     let count: Int
     let action: String
+    /// One more thing to do with all of them, before the first.
+    var second: (title: String, perform: () -> Void)?
     let perform: () -> Void
+
+    init(title: String, count: Int, action: String, second: (String, () -> Void)? = nil, perform: @escaping () -> Void) {
+        self.title = title
+        self.count = count
+        self.action = action
+        self.second = second.map { (title: $0.0, perform: $0.1) }
+        self.perform = perform
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -350,6 +562,11 @@ private struct SectionHeader: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.tertiary)
             Spacer()
+            if let second {
+                Button(second.title, role: .destructive, action: second.perform)
+                    .font(.footnote.weight(.medium))
+                    .padding(.trailing, 10)
+            }
             Button(action, action: perform)
                 .font(.footnote.weight(.medium))
         }
@@ -405,8 +622,9 @@ private struct FileRow: View {
                 Text((file.path as NSString).lastPathComponent)
                     .font(.body)
                     .lineLimit(1)
-                let directory = (file.path as NSString).deletingLastPathComponent
-                if showsDirectory, !directory.isEmpty {
+                // For a submodule whose commit moved: from which commit to which (#44).
+                let directory = file.submoduleWords ?? (file.path as NSString).deletingLastPathComponent
+                if showsDirectory || file.isSubmodule, !directory.isEmpty {
                     Text(directory)
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -415,7 +633,7 @@ private struct FileRow: View {
                 }
             }
             Spacer(minLength: 8)
-            DiffCount(added: file.added, deleted: file.deleted)
+            if !file.isSubmodule { DiffCount(added: file.added, deleted: file.deleted) }
         }
         .padding(.leading, 12 + CGFloat(depth) * treeIndent)
         .padding(.trailing, 2)
@@ -557,95 +775,165 @@ struct HistoryList: View {
     @EnvironmentObject private var model: PhoneModel
     let folder: String?
     @State private var selected: Conversation?
-    @State private var collapsedAgents: Set<String> = []
+    @State private var collapsed: Set<String> = []
+    /// Searching, grouping and filtering (#46), as on the Mac.
+    @State private var query = ""
+    @State private var filter = HistoryFilter()
+    @State private var deleting: Conversation?
 
     private var showsAll: Bool { folder == nil }
     private var key: String { showsAll ? "" : (folder ?? "") }
 
-    private var sections: [(id: String, name: String, conversations: [Conversation])] {
-        let all = model.histories[key] ?? []
-        return model.agents.compactMap { agent in
-            let own = all.filter { $0.agent == agent.id }
-            return own.isEmpty ? nil : (agent.id, agent.name, own)
-        }
+    /// The first page and the older ones asked for since.
+    private var conversations: [Conversation] {
+        let first = model.histories[key] ?? []
+        let known = Set(first.map(\.id))
+        return first + (model.olderHistory[key] ?? []).filter { !known.contains($0.id) }
+    }
+    private var groups: [HistoryFilter.Group] {
+        filter.groups(conversations, pinned: model.pinnedConversations, hidden: model.hiddenConversations, agentNames: model.agents.map { ($0.id, $0.name) })
+    }
+    private var hits: [HistoryHit]? {
+        model.historyHits[key]?.filter { filter.allows($0.conversation, hidden: model.hiddenConversations) }.sorted { $0.conversation.updatedAt > $1.conversation.updatedAt }
+    }
+    private var isSearching: Bool { model.historySearching.contains(key) }
+    /// The first page is full: there may be older ones.
+    private var mayHaveOlder: Bool { (model.histories[key]?.count ?? 0) >= (showsAll ? 300 : 200) && !model.historyEnded.contains(key) }
+
+    private var summary: String {
+        if let hits { return isSearching ? "Searching… \(hits.count) found" : (hits.count == 1 ? "1 found" : "\(hits.count) found") }
+        let count = groups.reduce(0) { $0 + $1.conversations.count }
+        let words = count == 1 ? "1 conversation" : "\(count) conversations"
+        return filter.isActive ? words + ", filtered" : words
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if folder != nil {
-                HStack(spacing: 10) {
-                    if let count = model.histories[key]?.count {
-                        Text(count == 1 ? "1 conversation" : "\(count) conversations")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+            HistoryControls(query: $query, filter: $filter, folder: folder)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+            if model.histories[key] != nil {
+                HStack {
+                    Text(summary).font(.footnote).foregroundStyle(.secondary).lineLimit(1).accessibilityIdentifier("history-summary")
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 10)
-            }
-            if let history = model.histories[key] {
-                if history.isEmpty {
-                    Placeholder(text: showsAll ? "No agent has a conversation on this Mac yet." : "No agent has a conversation in this folder yet.")
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 18) {
-                            ForEach(sections, id: \.id) { section in
-                                let expanded = !collapsedAgents.contains(section.id)
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Button {
-                                        if expanded { collapsedAgents.insert(section.id) } else { collapsedAgents.remove(section.id) }
-                                    } label: {
-                                        HStack(spacing: 7) {
-                                            Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                                                .font(.system(size: 10, weight: .bold))
-                                                .foregroundStyle(.secondary)
-                                            Image(systemName: AgentStyle.symbol(for: section.id))
-                                                .font(.system(size: 12, weight: .semibold))
-                                                .foregroundStyle(AgentStyle.accent(for: section.id))
-                                            Text(section.name).font(.subheadline.weight(.semibold))
-                                            Spacer(minLength: 0)
-                                        }
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .padding(.horizontal, 6)
-                                    .accessibilityLabel("\(section.name), \(expanded ? "expanded" : "collapsed")")
-                                    if expanded {
-                                        VStack(spacing: 0) {
-                                            ForEach(section.conversations) { conversation in
-                                                Button {
-                                                    selected = conversation
-                                                } label: {
-                                                    ConversationRow(conversation: conversation, showsFolder: showsAll)
-                                                }
-                                                .buttonStyle(.plain)
-                                                if conversation.id != section.conversations.last?.id {
-                                                    Palette.hairline.frame(height: 1).padding(.leading, 14)
-                                                }
-                                            }
-                                        }
-                                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
-                                    }
-                                }
+                .padding(.horizontal, 22)
+                .padding(.bottom, 8)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 18) {
+                        if let hits {
+                            if hits.isEmpty {
+                                Text(isSearching ? "Searching…" : "No conversation holds “\(query)”.")
+                                    .font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.top, 40)
+                            } else {
+                                card(hits.map(\.conversation), hits: hits, showsAgent: true)
+                            }
+                        } else if groups.isEmpty {
+                            Text(
+                                conversations.isEmpty
+                                    ? (showsAll ? "No agent has a conversation on this Mac yet." : "No agent has a conversation in this folder yet.")
+                                    : "No conversation passes the filter."
+                            )
+                            .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.top, 40)
+                        } else {
+                            ForEach(groups) { group in groupView(group) }
+                            if mayHaveOlder {
+                                Button("Show Older Conversations") { model.loadOlderHistory(folder) }
+                                    .font(.subheadline)
+                                    .padding(.leading, 6)
+                                    .accessibilityIdentifier("history-older")
                             }
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 24)
                     }
-                    .refreshable { load() }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 24)
                 }
+                .refreshable { load() }
             } else {
                 LoadingView("Loading the history…") { load() }
             }
         }
         .onAppear(perform: load)
+        // Searched a moment after the last key.
+        .task(id: query) {
+            if !query.isEmpty { try? await Task.sleep(for: .milliseconds(350)) }
+            if !Task.isCancelled { model.searchHistory(query, in: folder) }
+        }
         .sheet(item: $selected) { conversation in
             ConversationSheet(conversation: conversation)
                 .environmentObject(model)
                 .preferredColorScheme(.dark)
         }
+        .modifier(DeleteConversationAsk(asked: $deleting))
+    }
+
+    private func groupView(_ group: HistoryFilter.Group) -> some View {
+        let expanded = !collapsed.contains(group.id)
+        let agent = group.id.hasPrefix("agent:") ? String(group.id.dropFirst("agent:".count)) : nil
+        return VStack(alignment: .leading, spacing: 8) {
+            Button {
+                if expanded { collapsed.insert(group.id) } else { collapsed.remove(group.id) }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                    if let agent {
+                        Image(systemName: AgentStyle.symbol(for: agent)).font(.system(size: 12, weight: .semibold)).foregroundStyle(AgentStyle.accent(for: agent))
+                    } else {
+                        Image(systemName: group.id == "pinned" ? "pin.fill" : "calendar").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                    }
+                    Text(group.title).font(.subheadline.weight(.semibold))
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 6)
+            .accessibilityLabel("\(group.title), \(expanded ? "expanded" : "collapsed")")
+            if expanded { card(group.conversations, hits: nil, showsAgent: agent == nil) }
+        }
+    }
+
+    /// Rows of conversations in one panel, each with its menu.
+    private func card(_ list: [Conversation], hits: [HistoryHit]?, showsAgent: Bool) -> some View {
+        VStack(spacing: 0) {
+            ForEach(list) { conversation in
+                let pinned = model.pinnedConversations.contains(conversation.id)
+                let hidden = model.hiddenConversations.contains(conversation.id)
+                Button {
+                    selected = conversation
+                } label: {
+                    ConversationRow(
+                        conversation: conversation, showsFolder: showsAll, agentName: showsAgent ? model.agents.first { $0.id == conversation.agent }?.name : nil,
+                        isPinned: pinned, isHidden: hidden, hit: hits?.first { $0.id == conversation.id })
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("conversation-" + conversation.sessionID)
+                .contextMenu {
+                    Button {
+                        model.markConversation(conversation, pinned: !pinned)
+                    } label: {
+                        Label(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin")
+                    }
+                    Button {
+                        model.markConversation(conversation, hidden: !hidden)
+                    } label: {
+                        Label(hidden ? "Show Again" : "Hide", systemImage: hidden ? "eye" : "eye.slash")
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        deleting = conversation
+                    } label: {
+                        Label("Delete…", systemImage: "trash")
+                    }
+                }
+                if conversation.id != list.last?.id {
+                    Palette.hairline.frame(height: 1).padding(.leading, 14)
+                }
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
     }
 
     private func load() {
@@ -656,16 +944,36 @@ struct HistoryList: View {
 private struct ConversationRow: View {
     let conversation: Conversation
     let showsFolder: Bool
+    /// Whose it is, where the rows are not under their agent.
+    var agentName: String?
+    var isPinned = false
+    var isHidden = false
+    /// What a search found in it.
+    var hit: HistoryHit?
 
     var body: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(conversation.title)
-                    .font(.body)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    if isPinned { Image(systemName: "pin.fill").font(.system(size: 10)).foregroundStyle(.orange) }
+                    Text(conversation.title)
+                        .font(.body)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .foregroundStyle(isHidden ? .secondary : .primary)
+                }
+                if let snippet = hit?.snippet {
+                    Text(snippet).font(.footnote).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.leading)
+                }
                 HStack(spacing: 5) {
+                    if let agentName {
+                        Circle().fill(AgentStyle.accent(for: conversation.agent)).frame(width: 6, height: 6)
+                        Text(agentName).lineLimit(1)
+                        Text("·")
+                    }
                     Text(relativeTime(conversation.updatedAt))
+                    if let hit, hit.count > 1 { Text("· \(hit.count) places") }
+                    if isHidden { Text("· hidden") }
                     if showsFolder {
                         Text("·")
                         Image(systemName: "folder").font(.system(size: 10))
@@ -754,6 +1062,22 @@ struct ConversationSheet: View {
                             .lineLimit(1)
                             .truncationMode(.head)
                     }
+
+                    // What was said in it, to read before resuming it (#46).
+                    NavigationLink {
+                        TranscriptScreen(conversation: conversation) { dismiss() }
+                    } label: {
+                        HStack {
+                            Label("Read the Transcript", systemImage: "text.bubble")
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.panel))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("conversation-transcript")
 
                     if showsResume {
                         VStack(spacing: 10) {
@@ -909,6 +1233,597 @@ struct ConversationSheet: View {
             }
             .onChange(of: model.handoffPlan) { _, plan in
                 if let plan { prompt = plan.prompt }
+            }
+        }
+    }
+}
+
+/// What git on the Mac is stopped in the middle of (#42): the files that
+/// conflict, and Abort. Resolving them takes the Mac; once they are
+/// resolved there, Continue finishes it from here too.
+private struct ConflictCard: View {
+    @EnvironmentObject private var model: PhoneModel
+    let folder: String
+    let diff: DiffSnapshot
+    @State private var aborting = false
+
+    private var words: ConflictWords { ConflictWords(operation: diff.operation, conflicts: diff.conflicts.count) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(words.headline, systemImage: diff.conflicts.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(diff.conflicts.isEmpty ? Color.green : Color.yellow)
+            Text(words.advice).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ForEach(diff.conflicts) { file in
+                NavigationLink(value: Route.file(folder: folder, file: file.path, staged: false)) {
+                    HStack(spacing: 8) {
+                        Text(file.marker).font(.caption.weight(.bold).monospaced()).foregroundStyle(.yellow).frame(width: 14)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text((file.path as NSString).lastPathComponent).font(.subheadline).lineLimit(1)
+                            Text(file.conflictWords ?? "").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("conflict-" + file.path)
+            }
+            if diff.operation != nil {
+                HStack(spacing: 10) {
+                    Button("Abort…", role: .destructive) { aborting = true }
+                        .accessibilityIdentifier("conflicts-abort")
+                    if diff.conflicts.isEmpty {
+                        Button("Continue") { model.continueOperation(in: folder) }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("conflicts-continue")
+                    }
+                }
+                .font(.subheadline.weight(.medium))
+                .disabled(model.syncing[folder] != nil || model.status != .connected)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.yellow.opacity(0.12)))
+        .accessibilityIdentifier("conflicts")
+        .confirmationDialog(words.abortTitle, isPresented: $aborting, titleVisibility: .visible) {
+            Button("Abort", role: .destructive) { model.abortOperation(in: folder) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(words.abortMessage)
+        }
+    }
+}
+
+/// What is done to the last commit rather than made anew (#41): amending
+/// it, and undoing it.
+private struct LastCommitMenu: View {
+    @EnvironmentObject private var model: PhoneModel
+    let folder: String
+
+    var body: some View {
+        Menu {
+            Button("Amend Last Commit…") { model.requestAmend(in: folder) }
+            Button("Undo Last Commit…") { model.requestUndoCommit(in: folder) }
+        } label: {
+            Image(systemName: "ellipsis.circle").font(.system(size: 17)).frame(width: 30, height: 30)
+        }
+        .disabled(model.status != .connected || model.amending[folder] != nil)
+        .accessibilityLabel("Amend or undo the last commit")
+        .accessibilityIdentifier("commit-more")
+    }
+}
+
+/// The ways from a folder's changes to its history (#36) and its stash (#38).
+private struct CommitsLink: View {
+    let folder: String
+
+    private func row(_ title: String, symbol: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol).foregroundStyle(Palette.tint).frame(width: 22)
+            Text(title).font(.subheadline.weight(.medium))
+            Spacer()
+            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            NavigationLink(value: Route.commits(folder: folder)) { row("Commits", symbol: "clock.arrow.circlepath") }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("git-commits")
+            Palette.hairline.frame(height: 1).padding(.leading, 44)
+            NavigationLink(value: Route.stashes(folder: folder)) { row("Stashes", symbol: "tray.full") }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("git-stashes")
+        }
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.panel))
+    }
+}
+
+/// A folder's stash on the Mac: putting the changes aside under a name,
+/// and what was put aside, newest first.
+struct StashesScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+    let folder: String
+    @State private var naming = false
+    @State private var name = ""
+    @State private var includeNew = true
+
+    private static let ago: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    private var hasChanges: Bool { !(model.diffs[folder]?.files.isEmpty ?? true) }
+
+    var body: some View {
+        List {
+            if naming {
+                Section("Stash Changes") {
+                    TextField("A name, to find it again (optional)", text: $name)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("stash-name")
+                    Toggle("Include new files", isOn: $includeNew)
+                    Button("Stash") {
+                        model.stash(named: name, untracked: includeNew, in: folder)
+                        naming = false
+                    }
+                    .accessibilityIdentifier("stash-confirm")
+                }
+            }
+            Section {
+                let list = model.stashes[folder] ?? []
+                if list.isEmpty {
+                    Text("Nothing is stashed. Stash Changes puts what is not committed aside, to bring back later.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(list) { stash in
+                    NavigationLink(value: Route.stash(folder: folder, hash: stash.hash)) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(stash.message).lineLimit(2)
+                            Text((stash.branch.map { "on \($0) · " } ?? "") + Self.ago.localizedString(for: stash.date, relativeTo: Date()))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityIdentifier("stash-" + stash.ref)
+                }
+            }
+        }
+        .navigationTitle("Stashes")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    name = ""
+                    naming.toggle()
+                } label: {
+                    Label("Stash Changes", systemImage: "tray.and.arrow.down")
+                }
+                .disabled(!hasChanges)
+                .accessibilityIdentifier("stash-changes")
+            }
+        }
+        .refreshable { model.loadStashes(folder) }
+        .onAppear {
+            model.loadStashes(folder)
+            model.loadDiff(folder)
+        }
+    }
+}
+
+/// One stash: what it holds, and bringing it back or dropping it.
+struct StashScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+    @Environment(\.dismiss) private var dismiss
+    let folder: String
+    let hash: String
+    @State private var dropping = false
+
+    private var stash: StashInfo? { model.stashes[folder]?.first { $0.hash == hash } }
+
+    var body: some View {
+        List {
+            if let stash {
+                Section {
+                    Text(stash.message).font(.headline)
+                    Button("Apply") {
+                        model.applyStash(hash, pop: false, in: folder)
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("stash-apply")
+                    Button("Pop") {
+                        model.applyStash(hash, pop: true, in: folder)
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("stash-pop")
+                    Button("Drop…", role: .destructive) { dropping = true }
+                        .accessibilityIdentifier("stash-drop")
+                } footer: {
+                    Text("Apply brings it back into the folder and keeps it in the stash; Pop takes it out of the stash once it is back.")
+                }
+                Section("Files") {
+                    if let files = model.stashFiles[hash] {
+                        if files.isEmpty { Text("It holds no file.").foregroundStyle(.secondary) }
+                        ForEach(files) { file in
+                            NavigationLink(value: Route.stashFile(folder: folder, hash: hash, file: file.path)) {
+                                HStack(spacing: 8) {
+                                    Text(file.marker).font(.caption.weight(.bold).monospaced()).frame(width: 14)
+                                    Text((file.path as NSString).lastPathComponent).lineLimit(1)
+                                    Spacer(minLength: 4)
+                                    DiffCount(added: file.added, deleted: file.deleted)
+                                }
+                            }
+                            .disabled(file.patch.isEmpty)
+                            .accessibilityIdentifier("stash-file-" + file.path)
+                        }
+                    } else {
+                        ProgressView()
+                    }
+                }
+            } else {
+                Text("That stash is no longer there.").foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Stash")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { model.loadStash(hash, in: folder) }
+        // Asked first: the stash is the only copy of what it holds.
+        .confirmationDialog(
+            stash.map { DropStashQuestion(stash: $0).title } ?? "", isPresented: $dropping, titleVisibility: .visible
+        ) {
+            Button(stash.map { DropStashQuestion(stash: $0).confirm } ?? "Drop Stash", role: .destructive) {
+                model.dropStash(hash, in: folder)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(stash.map { DropStashQuestion(stash: $0).message } ?? "")
+        }
+    }
+}
+
+/// What a stash holds of one file.
+struct StashFileScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+    let hash: String
+    let file: String
+    @AppStorage("diffLayout") private var layout = "unified"
+
+    var body: some View {
+        Group {
+            if let diff = model.stashFiles[hash]?.first(where: { $0.path == file }), !diff.patch.isEmpty {
+                if layout == "split" {
+                    SplitDiffView(patch: diff.patch, fontSize: 11)
+                } else {
+                    PatchLines(patch: diff.patch)
+                }
+            } else {
+                Placeholder(text: "Nothing to show for this file: it is empty or not text.")
+            }
+        }
+        .background(Palette.canvas.ignoresSafeArea())
+        .navigationTitle((file as NSString).lastPathComponent)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
+    }
+}
+
+/// The commits of the checked out branch, newest first, with the graph of
+/// where branches part and meet, as on the Mac. Reverting and picking a
+/// commit are on the Mac.
+struct CommitsScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+    let folder: String
+
+    private static let ago: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    var body: some View {
+        let commits = model.commits[folder] ?? []
+        let rows = CommitGraphRow.rows(for: commits)
+        let lanes = min(rows.map(\.width).max() ?? 1, CommitGraphLines.mostLanes)
+        return Group {
+            if commits.isEmpty && model.loadingCommits.contains(folder) {
+                LoadingView("Reading the history…")
+            } else if commits.isEmpty {
+                Placeholder(text: "No commits yet.")
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(commits.enumerated()), id: \.element.hash) { index, commit in
+                            NavigationLink(value: Route.commit(folder: folder, hash: commit.hash)) {
+                                HStack(alignment: .top, spacing: 8) {
+                                    CommitGraphLines(row: rows[index], lanes: lanes)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(commit.subject).font(.subheadline).lineLimit(2).multilineTextAlignment(.leading)
+                                        Text(commit.author + " · " + Self.ago.localizedString(for: commit.date, relativeTo: Date()))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        if !commit.refs.isEmpty {
+                                            Text(commit.refs.joined(separator: " · ")).font(.caption2.weight(.medium)).foregroundStyle(Palette.tint).lineLimit(1)
+                                        }
+                                    }
+                                    .padding(.vertical, 8)
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 14)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("commit-" + commit.short)
+                        }
+                        if model.commitsMore[folder] == true {
+                            // Coming into view, it asks for the next page.
+                            ProgressView().frame(maxWidth: .infinity).padding(.vertical, 12).onAppear { model.loadMoreCommits(folder) }
+                        }
+                    }
+                }
+                .refreshable { model.loadCommits(folder) }
+            }
+        }
+        .background(Palette.canvas.ignoresSafeArea())
+        .navigationTitle("Commits")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { model.loadCommits(folder) }
+    }
+}
+
+/// The lines and the dot of one row of the graph, as the Mac draws them.
+private struct CommitGraphLines: View {
+    let row: CommitGraphRow
+    let lanes: Int
+    static let dotY: CGFloat = 18
+    static let laneWidth: CGFloat = 12
+    static let mostLanes = 5
+    static let colors: [Color] = [.blue, .orange, .green, .purple, .pink, .teal]
+
+    private func x(_ lane: Int) -> CGFloat { (CGFloat(min(lane, Self.mostLanes - 1)) + 0.5) * Self.laneWidth }
+
+    var body: some View {
+        Canvas { context, size in
+            func line(from: CGPoint, to: CGPoint, lane: Int) {
+                var path = Path()
+                path.move(to: from)
+                if from.x == to.x {
+                    path.addLine(to: to)
+                } else {
+                    let middle = (from.y + to.y) / 2
+                    path.addCurve(to: to, control1: CGPoint(x: from.x, y: middle), control2: CGPoint(x: to.x, y: middle))
+                }
+                context.stroke(path, with: .color(Self.colors[lane % Self.colors.count].opacity(0.85)), lineWidth: 1.5)
+            }
+            for (from, to) in row.incoming { line(from: CGPoint(x: x(from), y: 0), to: CGPoint(x: x(to), y: Self.dotY), lane: from) }
+            for (to, from) in row.outgoing { line(from: CGPoint(x: x(from), y: Self.dotY), to: CGPoint(x: x(to), y: size.height), lane: to) }
+            let dot = CGRect(x: x(row.lane) - 4, y: Self.dotY - 4, width: 8, height: 8)
+            context.fill(Path(ellipseIn: dot), with: .color(Self.colors[row.lane % Self.colors.count]))
+        }
+        .frame(width: CGFloat(lanes) * Self.laneWidth)
+        .accessibilityHidden(true)
+    }
+}
+
+/// One commit: its message, and the files it changed.
+struct CommitScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+    let folder: String
+    let hash: String
+
+    var body: some View {
+        Group {
+            if let details = model.commitDetails[hash] {
+                List {
+                    Section {
+                        Text(details.commit.subject).font(.headline)
+                        if !details.body.isEmpty { Text(details.body).font(.callout).foregroundStyle(.secondary).textSelection(.enabled) }
+                        LabeledContent("Author", value: details.commit.author)
+                        LabeledContent("When", value: details.commit.date.formatted(date: .abbreviated, time: .shortened))
+                        Button {
+                            UIPasteboard.general.string = details.commit.hash
+                        } label: {
+                            LabeledContent("Hash") {
+                                HStack(spacing: 6) {
+                                    Text(details.commit.short).font(.callout.monospaced())
+                                    Image(systemName: "doc.on.doc").font(.footnote)
+                                }
+                            }
+                        }
+                        .accessibilityLabel("Copy the hash \(details.commit.short)")
+                        .accessibilityIdentifier("copy-hash")
+                    }
+                    Section(details.files.isEmpty ? "It changed no file" : "\(details.files.count) \(details.files.count == 1 ? "file" : "files")") {
+                        if details.diffsLeftOut { Text("Its diffs are too large to show here.").font(.footnote).foregroundStyle(.secondary) }
+                        ForEach(details.files) { file in
+                            NavigationLink(value: Route.commitFile(folder: folder, hash: hash, file: file.path)) {
+                                HStack(spacing: 8) {
+                                    Text(file.marker).font(.caption.weight(.bold).monospaced()).frame(width: 14)
+                                    Text((file.path as NSString).lastPathComponent).lineLimit(1)
+                                    Spacer(minLength: 4)
+                                    DiffCount(added: file.added, deleted: file.deleted)
+                                }
+                            }
+                            .disabled(file.patch.isEmpty)
+                            .accessibilityIdentifier("commit-file-" + file.path)
+                        }
+                    }
+                }
+            } else {
+                LoadingView("Reading the commit…")
+            }
+        }
+        .navigationTitle(String(hash.prefix(7)))
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { model.loadCommit(hash, in: folder) }
+    }
+}
+
+/// What a commit did to one file.
+struct CommitFileScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+    let folder: String
+    let hash: String
+    let file: String
+    @AppStorage("diffLayout") private var layout = "unified"
+
+    private var isSplit: Bool { layout == "split" }
+
+    var body: some View {
+        Group {
+            if let diff = model.commitDetails[hash]?.files.first(where: { $0.path == file }), !diff.patch.isEmpty {
+                if isSplit {
+                    SplitDiffView(patch: diff.patch, fontSize: 11)
+                } else {
+                    PatchLines(patch: diff.patch)
+                }
+            } else {
+                Placeholder(text: "Nothing to show for this file: it is empty or not text.")
+            }
+        }
+        .background(Palette.canvas.ignoresSafeArea())
+        .navigationTitle((file as NSString).lastPathComponent)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    model.setDisplay { $0.diffLayout = isSplit ? "unified" : "split" }
+                } label: {
+                    Image(systemName: isSplit ? "rectangle" : "rectangle.split.2x1")
+                }
+                .accessibilityLabel(isSplit ? "Show in one panel" : "Show side by side")
+            }
+        }
+    }
+}
+
+/// The checked out branch (#35). Touched, it lists the repository's
+/// branches, to switch to one or make one; renaming and deleting are on
+/// the Mac.
+struct BranchButton: View {
+    let folder: String
+    /// Nil for a detached HEAD.
+    let branch: String?
+    @State private var showing = false
+
+    var body: some View {
+        Button {
+            showing = true
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.triangle.branch")
+                Text(branch ?? "detached HEAD").lineLimit(1).truncationMode(.middle)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
+            }
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Branch \(branch ?? "detached HEAD")")
+        .accessibilityIdentifier("branch-menu")
+        .sheet(isPresented: $showing) {
+            BranchesSheet(folder: folder)
+        }
+    }
+}
+
+/// The branches of a folder on the Mac: touch one to check it out, or make
+/// a new one.
+private struct BranchesSheet: View {
+    @EnvironmentObject private var model: PhoneModel
+    @Environment(\.dismiss) private var dismiss
+    let folder: String
+    @State private var filter = ""
+    @State private var making = false
+    @State private var newName = ""
+    @State private var from = ""
+    @State private var checkout = true
+
+    private var all: [BranchInfo] { model.branches[folder] ?? [] }
+
+    private func shown(remote: Bool) -> [BranchInfo] {
+        let wanted = filter.trimmingCharacters(in: .whitespaces).lowercased()
+        return all.filter { $0.isRemote == remote && (wanted.isEmpty || $0.name.lowercased().contains(wanted)) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if making {
+                    Section("New Branch") {
+                        TextField("Name", text: $newName)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("new-branch-name")
+                        Picker("From", selection: $from) {
+                            ForEach(all) { branch in Text(branch.name).tag(branch.name) }
+                        }
+                        Toggle("Switch to it", isOn: $checkout)
+                        Button("Create Branch") {
+                            model.createBranch(named: newName.trimmingCharacters(in: .whitespaces), from: from.isEmpty ? nil : from, checkout: checkout, in: folder)
+                            making = false
+                            if checkout { dismiss() }
+                        }
+                        .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .accessibilityIdentifier("new-branch-create")
+                    }
+                }
+                section("Branches", shown(remote: false))
+                section("Remote Branches", shown(remote: true))
+                if all.isEmpty { Text("Reading the branches…").foregroundStyle(.secondary) }
+            }
+            .searchable(text: $filter, prompt: "Find a branch")
+            .navigationTitle("Branches")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        from = all.first(where: \.isCurrent)?.name ?? ""
+                        making.toggle()
+                    } label: {
+                        Label("New Branch", systemImage: "plus")
+                    }
+                    .accessibilityIdentifier("new-branch")
+                }
+            }
+        }
+        .onAppear { model.loadBranches(folder) }
+    }
+
+    @ViewBuilder
+    private func section(_ title: String, _ list: [BranchInfo]) -> some View {
+        if !list.isEmpty {
+            Section(title) {
+                ForEach(list) { branch in
+                    Button {
+                        model.switchBranch(branch, in: folder)
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark").font(.footnote.weight(.bold)).opacity(branch.isCurrent ? 1 : 0)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(branch.name).font(.body.weight(branch.isCurrent ? .semibold : .regular)).lineLimit(1).truncationMode(.middle)
+                                let detail = [branch.tracking, branch.worktree == nil ? "" : "in a worktree", branch.subject].filter { !$0.isEmpty }.joined(separator: " · ")
+                                if !detail.isEmpty { Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                            }
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                    // The one that is checked out, and one another worktree holds, stay where they are.
+                    .disabled(branch.isCurrent || branch.worktree != nil)
+                    .accessibilityIdentifier("branch-" + branch.id)
+                }
             }
         }
     }

@@ -21,6 +21,35 @@ final class FlowTests: XCTestCase {
     /// The main screens with the phone on its side, from a session's terminal.
     /// PERF-6: how smoothly a terminal of 5,000 lines scrolls, as the time
     /// frames were late while it coasted after a fast swipe.
+    /// Makes a gesture until what it is for has happened, three times at
+    /// most. A touch or a drag was now and then lost in the grouping steps:
+    /// the picture taken after "Orange" was touched showed the menu still
+    /// open, with nothing chosen. That was seen while each step around a
+    /// menu waited a minute for the app to settle (#65); whether it still
+    /// happens now that they do not is not known, so this stays. What the
+    /// gesture is for is still asserted by the caller.
+    /// Opens an element's menu with a long press and picks an entry of it,
+    /// without the minute the test would wait before and after each of the
+    /// two while the menu is open (#65, `IdleWaits`). The entry is waited
+    /// for by itself; what picking it is for is the caller's to check.
+    /// - Parameter open: Looked at while the menu is open, before the pick.
+    private func pick(_ entry: String, fromMenuOf element: XCUIElement, in app: XCUIApplication, open: () -> Void = {}, file: StaticString = #filePath, line: UInt = #line) {
+        IdleWaits.skipped {
+            element.press(forDuration: 1.2)
+            let item = app.buttons[entry].firstMatch
+            XCTAssertTrue(item.waitForExistence(timeout: 10), "the menu has no “\(entry)”", file: file, line: line)
+            open()
+            item.tap()
+        }
+    }
+
+    private func gesture(until done: () -> Bool, _ make: () -> Void) {
+        for _ in 0..<3 {
+            make()
+            if done() { return }
+        }
+    }
+
     private func measureScrolling(_ app: XCUIApplication, compose: XCUIElement) {
         compose.tap()
         compose.typeText("seq 1 5000")
@@ -46,6 +75,43 @@ final class FlowTests: XCTestCase {
     /// HIST-6: a long session opened again comes with the screen and 500
     /// lines above it; scrolled to their top, a strip says earlier lines
     /// load, and they come, a page at a time.
+    /// PERF-9 (#65): how long each step waits for the app to be idle
+    /// around a session's menu. XCUITest waits for that before every step,
+    /// up to a minute; a step that takes about that long found the app
+    /// busy all the while. Printed as `MEASURE`, and nothing fails on it.
+    private func measureIdle(_ app: XCUIApplication, launchButton: String, compose: XCUIElement) {
+        // Two sessions in the list.
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 10))
+        app.buttons[launchButton].firstMatch.tap()
+        XCTAssertTrue(compose.waitForExistence(timeout: 10))
+        app.navigationBars.buttons.firstMatch.tap()
+        XCTAssertTrue(app.buttons[launchButton].firstMatch.waitForExistence(timeout: 10))
+        let rows = app.staticTexts.matching(identifier: "zsh")
+        XCTAssertEqual(rows.count, 2)
+
+        func timed(_ what: String, _ step: () -> Void) {
+            let started = Date()
+            step()
+            print(String(format: "MEASURE idle, %@: %.1f s", what, Date().timeIntervalSince(started)))
+        }
+        timed("a tap with no menu about (the tab bar)") { app.tabBars.buttons["Sessions"].tap() }
+        timed("the press that opens a row's menu") { rows.element(boundBy: 0).press(forDuration: 1.2) }
+        timed("finding an entry of the open menu") { XCTAssertTrue(app.buttons["Pin"].waitForExistence(timeout: 90)) }
+        timed("touching the entry") { app.buttons["Pin"].tap() }
+        timed("the first look at the list afterwards") { XCTAssertEqual(rows.count, 2) }
+
+        // The same without waiting for the app to be idle while its menu is open.
+        print("MEASURE idle, the waits that can be skipped: \(IdleWaits.isAvailable ? IdleWaits.found.joined(separator: ", ") : "none found")")
+        IdleWaits.skipped {
+            timed("not waiting: the press that opens the menu") { rows.element(boundBy: 0).press(forDuration: 1.2) }
+            timed("not waiting: finding its entry") { XCTAssertTrue(app.buttons["Unpin"].waitForExistence(timeout: 90)) }
+            timed("not waiting: touching it") { app.buttons["Unpin"].tap() }
+        }
+        timed("a look at the list after it") { XCTAssertEqual(rows.count, 2) }
+        XCTAssertFalse(app.buttons["Unpin"].exists, "the menu is still open")
+    }
+
     private func pagedHistory(_ app: XCUIApplication, compose: XCUIElement) {
         compose.tap()
         compose.typeText("seq 1 3000")
@@ -209,6 +275,10 @@ final class FlowTests: XCTestCase {
             pagedHistory(app, compose: compose)
             return
         }
+        if environment["AGENTTERM_ONLY_IDLE"] != nil {
+            measureIdle(app, launchButton: launchButton, compose: compose)
+            return
+        }
 
         // Text written in the compose field, Vietnamese included, is sent as typed.
         // When the Mac takes the session, the phone shows the Mac's larger
@@ -315,10 +385,7 @@ final class FlowTests: XCTestCase {
         let session = app.staticTexts["zsh"].firstMatch
         XCTAssertTrue(session.waitForExistence(timeout: 5))
         // SES-25: ending it from its row's menu asks first.
-        session.press(forDuration: 1.2)
-        let endItem = app.buttons["End Session…"].firstMatch
-        XCTAssertTrue(endItem.waitForExistence(timeout: 5), "the row's menu has no End Session")
-        endItem.tap()
+        pick("End Session…", fromMenuOf: session, in: app)
         let confirm = app.buttons["End Session"].firstMatch
         XCTAssertTrue(confirm.waitForExistence(timeout: 5), "ending the session from its row did not ask first")
         // Put away without answering: Cancel where the question has one,
@@ -614,36 +681,46 @@ final class FlowTests: XCTestCase {
             let wanted = NSPredicate(format: "label CONTAINS %@", text)
             return XCTWaiter().wait(for: [XCTNSPredicateExpectation(predicate: wanted, object: group)], timeout: 6) == .completed
         }
-        rows.element(boundBy: 0).press(forDuration: 1.2)
-        app.buttons["Add to New Group"].tap()
+        pick("Add to New Group", fromMenuOf: rows.element(boundBy: 0), in: app)
         XCTAssertTrue(group.waitForExistence(timeout: 5), "no group was made")
         XCTAssertTrue(groupSays("1 sessions"), group.label)
         // Dropped on the group's label, a session joins it. Dropped on a
         // session of the group, it joins too.
-        rows.element(boundBy: 2).press(forDuration: 0.7, thenDragTo: group, withVelocity: .slow, thenHoldForDuration: 0.6)
+        gesture(until: { groupSays("2 sessions") }) {
+            rows.element(boundBy: 2).press(forDuration: 0.7, thenDragTo: group, withVelocity: .slow, thenHoldForDuration: 0.6)
+        }
         XCTAssertTrue(groupSays("2 sessions"), "dropping on the label did not add the session: \(group.label)")
-        rows.element(boundBy: 2).press(forDuration: 0.7, thenDragTo: rows.element(boundBy: 0), withVelocity: .slow, thenHoldForDuration: 0.6)
+        gesture(until: { groupSays("3 sessions") }) {
+            rows.element(boundBy: 2).press(forDuration: 0.7, thenDragTo: rows.element(boundBy: 0), withVelocity: .slow, thenHoldForDuration: 0.6)
+        }
         XCTAssertTrue(groupSays("3 sessions"), "dropping on a grouped session did not add the session: \(group.label)")
         capture("11-grouped")
         // A pinned session leaves its group and goes first.
-        rows.element(boundBy: 1).press(forDuration: 1.2)
-        app.buttons["Pin"].tap()
+        pick("Pin", fromMenuOf: rows.element(boundBy: 1), in: app)
         XCTAssertTrue(groupSays("2 sessions"), "pinning did not take the session out of the group: \(group.label)")
         // The group is renamed, recolored and folded away.
-        group.press(forDuration: 1.2)
-        app.buttons["Rename Group…"].tap()
+        pick("Rename Group…", fromMenuOf: group, in: app)
         let name = app.alerts.textFields.firstMatch
         XCTAssertTrue(name.waitForExistence(timeout: 5))
         name.typeText(" api")
         app.alerts.buttons["Rename"].tap()
         XCTAssertTrue(groupSays("Group 1 api"), group.label)
-        group.press(forDuration: 1.2)
-        app.buttons["Color"].tap()
-        XCTAssertTrue(app.buttons["Orange"].waitForExistence(timeout: 5), "the colors are not offered")
-        capture("12-colors")
-        app.buttons["Orange"].tap()
+        // Chosen, the menu goes. The colors are a menu inside the menu:
+        // open all the while, so none of these steps waits for the app.
+        let orange = app.buttons["Orange"]
+        func menuIsGone() -> Bool {
+            let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: orange)
+            return XCTWaiter().wait(for: [gone], timeout: 4) == .completed
+        }
+        pick("Color", fromMenuOf: group, in: app)
+        IdleWaits.skipped {
+            XCTAssertTrue(orange.waitForExistence(timeout: 5), "the colors are not offered")
+            capture("12-colors")
+            gesture(until: menuIsGone) { if orange.exists { orange.tap() } }
+        }
+        XCTAssertFalse(orange.exists, "the color was not chosen: its menu is still open")
         capture("13-arranged")
-        group.tap()
+        gesture(until: { groupSays("collapsed") }) { group.tap() }
         XCTAssertTrue(groupSays("collapsed"), group.label)
         XCTAssertEqual(rows.count, 2, "a collapsed group still shows its sessions")
         capture("14-collapsed")
@@ -676,10 +753,7 @@ final class FlowTests: XCTestCase {
         }
         // The project, the folder just added, then the unlisted one a session runs in.
         XCTAssertTrue(orderBecomes(["project", "home", "demo"]), "\(order())")
-        names.element(boundBy: 0).press(forDuration: 1.2)
-        XCTAssertTrue(app.buttons["Move Down"].waitForExistence(timeout: 5), "a folder's name has no menu")
-        capture("15-folder-menu")
-        app.buttons["Move Down"].tap()
+        pick("Move Down", fromMenuOf: names.element(boundBy: 0), in: app) { capture("15-folder-menu") }
         XCTAssertTrue(orderBecomes(["home", "project", "demo"]), "Move Down did not move the folder: \(order())")
         // Back to the top of the list, so both names are on screen and
         // clear of the bars: one is dragged onto the other.

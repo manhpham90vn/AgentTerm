@@ -337,8 +337,9 @@ final class AgentStateHostTests: XCTestCase {
         waitUntil("not known after Escape") { mac.sessions.first { $0.id == agent.id }.map { $0.state == nil } ?? false }
     }
 
-    /// AGENT-8: a Codex session says how to have its state shown, until it
-    /// says something; an Antigravity session always says what it cannot.
+    /// AGENT-8: a Codex session says nothing of its hooks, which Codex runs
+    /// without being asked to trust them (#59); an Antigravity session
+    /// always says what it cannot tell.
     func testWhatIsSaidOfAnAgentWhoseStateCannotAllBeKnown() throws {
         let client = Client(port: port, token: token, name: "mac")
         waitUntil("connected") { !client.messages.isEmpty }
@@ -349,7 +350,7 @@ final class AgentStateHostTests: XCTestCase {
             client.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: agent)))
         }
         waitUntil("both sessions") { client.sessions.count == 2 }
-        XCTAssertEqual(client.sessions.first { $0.title == "codex" }?.stateNote?.contains("Trust all and continue"), true)
+        XCTAssertNil(client.sessions.first { $0.title == "codex" }?.stateNote)
         XCTAssertEqual(client.sessions.first { $0.title == "agy" }?.stateNote?.contains("does not say when it waits for permission"), true)
     }
 
@@ -423,6 +424,96 @@ final class AgentStateHostTests: XCTestCase {
         waitUntil("the agent to go on") { phone.sessions.first?.state?.isWorking == true }
     }
 
+    /// NOTE-14 (#55): an answer to a question with choices is typed as the
+    /// agent's list of them takes it, not as text into a prompt, which
+    /// every agent answers with its first choice.
+    func testAnAnswerPicksItsChoiceInTheAgentsList() {
+        let asked = AgentState.waitingForAnswer(AgentQuestion(text: "Which color?", choices: ["Red", "Green", "Blue"]))
+        let down = "\u{1b}[B"
+        for agent in ["claude", "copilot", "agy"] {
+            XCTAssertEqual(AgentAnswer.steps(agent: agent, state: asked, text: "Red"), ["\r"], agent)
+            XCTAssertEqual(AgentAnswer.steps(agent: agent, state: asked, text: "Green"), [down, "\r"], agent)
+            XCTAssertEqual(AgentAnswer.steps(agent: agent, state: asked, text: " blue\n"), [down + down, "\r"], agent)
+        }
+        // The user's own words go to the row after the choices.
+        XCTAssertEqual(AgentAnswer.steps(agent: "claude", state: asked, text: "Purple"), [down + down + down, "Purple", "\r"])
+        XCTAssertEqual(AgentAnswer.steps(agent: "copilot", state: asked, text: "Purple"), [down + down + down, "Purple", "\r"])
+        XCTAssertEqual(AgentAnswer.steps(agent: "agy", state: asked, text: "Purple"), [down + down + down, "\r", "Purple", "\r"])
+        // A prompt takes text and Return: a question without choices, a
+        // finished task's next instruction, any other program.
+        XCTAssertEqual(AgentAnswer.steps(agent: "claude", state: .waitingForAnswer(AgentQuestion(text: "Why?")), text: "Because"), ["Because", "\r"])
+        XCTAssertEqual(AgentAnswer.steps(agent: "claude", state: .done(said: "ok"), text: "Green"), ["Green", "\r"])
+        XCTAssertEqual(AgentAnswer.steps(agent: nil, state: asked, text: "Green"), ["Green", "\r"])
+    }
+
+    /// NOTE-14: what the host types for a choice reaches the agent's
+    /// terminal as those keys.
+    func testAChoiceIsTypedAsKeysIntoTheSession() throws {
+        let typed = root.appendingPathComponent("typed")
+        let script = root.appendingPathComponent("claude")
+        let hook = Handoff.shellQuote(tool.path) + " hook claude"
+        let asks =
+            #"{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":"Which color?","options":[{"label":"Red"},{"label":"Green"},{"label":"Blue"}]}]}}"#
+        // It asks, then writes down the next four bytes typed into it.
+        try """
+        #!/bin/sh
+        printf '%s' '\(asks)' | \(hook) PreToolUse
+        stty raw -echo
+        head -c 4 > '\(typed.path)'
+        exec sleep 600
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        let phone = Client(port: port, token: token, name: "phone")
+        waitUntil("connected") { !phone.messages.isEmpty }
+        phone.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: "agent")))
+        let asked = AgentState.waitingForAnswer(AgentQuestion(text: "Which color?", choices: ["Red", "Green", "Blue"]))
+        waitUntil("the question") { phone.sessions.first?.state == asked }
+        let agent = try XCTUnwrap(phone.sessions.first)
+        phone.connection.send(.answer(session: agent.id, to: asked, text: "Green"))
+        waitUntil("the keys to be typed") { (try? Data(contentsOf: typed))?.count == 4 }
+        XCTAssertEqual(try Data(contentsOf: typed), Data("\u{1b}[B\r".utf8), "Down, then Return: the second choice")
+    }
+
+    /// NOTE-10 (#60): what an agent says, seen on one device, is told to
+    /// the others, and to one that connects later, while the agent still
+    /// says it.
+    func testANoticeSeenOnOneDeviceIsToldToTheOthers() throws {
+        let script = try standIn()
+        let phone = Client(port: port, token: token, name: "phone")
+        let mac = Client(port: port, token: token, name: "mac")
+        waitUntil("connected") { !phone.messages.isEmpty && !mac.messages.isEmpty }
+        func seen(_ client: Client) -> [AgentState] {
+            client.messages.compactMap { if case .noticeSeen(_, let state) = $0 { return state } else { return nil } }
+        }
+        phone.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: "agent")))
+        waitUntil("the session") { phone.sessions.count == 1 }
+        let agent = try XCTUnwrap(phone.sessions.first)
+        phone.connection.send(.attach(session: agent.id, size: TermSize(cols: 80, rows: 24)))
+        phone.connection.sendInput(Data("\n".utf8), to: agent.id)
+        waitUntil("working") { phone.sessions.first?.state?.isWorking == true }
+        phone.connection.sendInput(Data("\n".utf8), to: agent.id)
+        let waiting = AgentState.waitingForPermission(AgentQuestion(text: "make test"))
+        waitUntil("waiting") { phone.sessions.first?.state == waiting && mac.sessions.first?.state == waiting }
+
+        // What it said before is seen by no one any more: not passed on.
+        mac.connection.send(.noticeSeen(session: agent.id, state: .done(said: "earlier")))
+        // The Mac's user opens the session: the phone hides its notice.
+        mac.connection.send(.noticeSeen(session: agent.id, state: waiting))
+        waitUntil("the phone to be told") { seen(phone) == [waiting] }
+        XCTAssertEqual(seen(mac), [], "the device it was seen on is not told")
+        // A device that was away is told when it connects.
+        let tablet = Client(port: port, token: token, name: "tablet")
+        waitUntil("the tablet to be told") { seen(tablet) == [waiting] }
+
+        // Once the agent says something else, that is no longer what was seen.
+        phone.connection.send(.answer(session: agent.id, to: waiting, text: "yes"))
+        waitUntil("the agent to go on") { phone.sessions.first?.state?.isWorking == true }
+        let later = Client(port: port, token: token, name: "later")
+        waitUntil("the later device connected") { later.sessions.count == 1 }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(seen(later), [])
+    }
+
     /// NOTE-3: the Mac is in use while its app is in front, or a key or the
     /// pointer was used in the last five minutes; every client is told.
     func testWhetherSomeoneIsAtTheMac() throws {
@@ -440,5 +531,72 @@ final class AgentStateHostTests: XCTestCase {
         holdLock.lock(); idle = 10; holdLock.unlock()
         waitUntil("in use once a key is pressed") { told(phone) == true }
         XCTAssertEqual(told(mac), true, "every client is told")
+    }
+}
+
+/// AGENT-11: a state is known when the agent's hook saves it, through the
+/// host's watch of the folder the hooks write in, not at its next refresh.
+final class AgentStateWatchTests: XCTestCase {
+    private final class Client {
+        let connection: AgentTermConnection
+        var messages: [ServerMessage] = []
+
+        init(port: UInt16, token: String) {
+            connection = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "mac")
+            connection.onMessage = { [weak self] in self?.messages.append($0) }
+            connection.connect()
+        }
+
+        var sessions: [SessionInfo] { messages.compactMap { if case .sessions(let list) = $0 { return list } else { return nil } }.last ?? [] }
+    }
+
+    private var root: URL!
+    private var server: HostServer!
+
+    override func tearDown() {
+        server?.stop()
+        if let root { try? FileManager.default.removeItem(at: root) }
+    }
+
+    private func waitUntil(_ what: String, timeout: TimeInterval = 10, _ condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+        XCTAssertTrue(condition(), "timed out waiting for: \(what)")
+    }
+
+    func testAStateIsKnownWhenItIsSavedNotAtTheNextRefresh() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-watch-\(UUID().uuidString)").standardizedFileURL
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let token = "test-token-0123456789abcdef0123456789"
+        var configuration = HostServer.Configuration(
+            port: 0, token: token, listenOnTailscale: false, detectAgents: { [] }, statusLineTool: "/usr/bin/true",
+            usageDirectory: root.appendingPathComponent("usage"))
+        configuration.hooksDirectory = root.appendingPathComponent("hooks")
+        configuration.home = root.path
+        // No refresh within the test: only the watch can tell.
+        configuration.refreshInterval = 600
+        server = HostServer(configuration: configuration)
+        let client = Client(port: try server.start(), token: token)
+        waitUntil("connected") { !client.messages.isEmpty }
+
+        // A stand-in for Claude Code: on each line, what its hook saves.
+        let script = root.appendingPathComponent("claude")
+        try """
+        #!/bin/sh
+        read line; printf '{"agent":"claude","event":"UserPromptSubmit","at":%s,"input":{}}' "$(date +%s)" > "$AGENTTERM_EVENTS.new"; mv "$AGENTTERM_EVENTS.new" "$AGENTTERM_EVENTS"
+        read line; printf '{"agent":"claude","event":"Stop","at":%s,"input":{}}' "$(date +%s)" > "$AGENTTERM_EVENTS.new"; mv "$AGENTTERM_EVENTS.new" "$AGENTTERM_EVENTS"
+        exec sleep 600
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        client.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: "agent")))
+        waitUntil("the session") { client.sessions.count == 1 }
+        let agent = try XCTUnwrap(client.sessions.first)
+        // Past the host's first refresh, three seconds after it started.
+        RunLoop.main.run(until: Date().addingTimeInterval(3.5))
+
+        client.connection.sendInput(Data("\n".utf8), to: agent.id)
+        waitUntil("working, well before a refresh", timeout: 2) { client.sessions.first?.state?.isWorking == true }
+        client.connection.sendInput(Data("\n".utf8), to: agent.id)
+        waitUntil("done, well before a refresh", timeout: 2) { client.sessions.first?.state == .done(said: nil) }
     }
 }

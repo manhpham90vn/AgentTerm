@@ -1,6 +1,6 @@
 # AgentTerm Privacy Policy
 
-_Effective date: November 12, 2026_
+_Effective date: November 14, 2026_
 
 ## 1. Introduction
 
@@ -25,8 +25,11 @@ advertising.
 The released apps can send two things to the developer through Google's Firebase, and you control
 both:
 
-- **Crash reports**, only if you say yes when the app asks at its first launch.
-- **Usage statistics**, counts of which features are used. On by default; one switch turns it off.
+- **Crash reports**, when the app crashes.
+- **Usage statistics**, counts of which features are used.
+
+At its first launch the app shows what each is, with a switch for each. Both switches are on; turn
+off what you do not agree to, then continue. Nothing is sent before you have done that.
 
 Neither ever contains what a terminal showed, a prompt, a file name or a folder. Section 6 lists
 exactly what is sent. Both apps are open source, so this can be checked, and an app you build from
@@ -51,10 +54,17 @@ the source yourself sends nothing at all.
   over your local network or your own Tailscale network. The developer is not part of that
   connection. Tailscale is a separate service with its own privacy policy.
 - **To the services of the coding agents you use.** To show what your account has left (the figures
-  the agents show under `/usage` or `/status`), the Mac app asks the agent's own service: Anthropic,
+  the agents show under `/usage` or `/status`), and to know when a schedule set for when your limit
+  starts over is to run, the Mac app asks the agent's own service: Anthropic,
   OpenAI (ChatGPT), Google or GitHub. For this it reads the sign-in that the agent keeps on your Mac
   and sends it only to the service that issued it. It is not stored, logged, sent to the iPhone or
   sent to the developer. Starting the host with `agenttermd --no-account-usage` turns this off.
+- **To the remotes of your git repositories.** While a folder's Git tab is shown, the Mac asks the
+  remotes of that repository for what is new (`git fetch`) every five minutes, so that what is ahead
+  and behind stays true. It is git on your Mac that connects, to the remotes your repository names,
+  with the sign-in git already has for them; nothing in your folder changes, and nothing about it
+  goes to the developer. "Fetch automatically" in Settings turns it off, on the Mac and on the
+  iPhone alike; the remotes are then asked only when you fetch, pull or push.
 - **The agents themselves.** Claude Code, Codex, Antigravity and Copilot CLI are separate programs
   that you install and sign in to. What they send to their providers is governed by those providers'
   policies, not by this one.
@@ -70,7 +80,8 @@ The apps released by the developer (the disk image, the Homebrew cask, TestFligh
 include Google's Firebase. Google processes the data below on the developer's behalf; see
 [Firebase's privacy information](https://firebase.google.com/support/privacy).
 
-**Usage statistics (Firebase Analytics).** On unless you switch it off.
+**Usage statistics (Firebase Analytics).** Sent once you have continued past the first-launch screen
+with its switch on, which is how it comes.
 
 - The events, and all of them: the app was opened; a session was started, and with which agent
   (Claude Code, Codex, Antigravity, Copilot CLI or a shell); a phone was paired; a conversation was
@@ -85,15 +96,17 @@ include Google's Firebase. Google processes the data below on the developer's be
   of your Macs, or anything from the sign-ins of the coding agents. An event has no field that could
   hold such text.
 
-**Crash reports (Firebase Crashlytics).** Off until you say yes.
+**Crash reports (Firebase Crashlytics).** Sent once you have continued past the first-launch screen
+with its switch on, which is how it comes.
 
 - When the app crashes: where in the app's code it happened, the app's version, your device's model
   and system version, and the installation identifier.
 - When the host on the Mac stops unexpectedly: only the fact that it did.
 
-**Your choices.** The app asks about crash reports once, the first time it is opened. Both switches
-are in **Settings > Privacy** on the Mac and under **Privacy** in the menu of the iPhone app, and a
-change takes effect at once.
+**Your choices.** The first time it is opened, the app shows a screen of its own with the two
+switches, both on, and one button, Continue. Until you continue, neither kind is sent. Afterwards
+both switches are in **Settings > Privacy** on the Mac and under **Privacy** in the Settings tab of
+the iPhone app, and a change takes effect at once.
 
 **Builds that send nothing.** An app built from the source code, and the development build
 "AgentTerm Dev", contain no Firebase configuration and send nothing, whatever the switches say.

@@ -28,6 +28,30 @@ final class ProtocolTests: XCTestCase {
             .diffFile(path: "/Users/me/app", file: "src/a b.swift", staged: true),
             .gitStage(path: "/Users/me/app", files: ["src/a b.swift", "tên.txt"]),
             .gitStage(path: "/Users/me/app", files: []),
+            .gitDiscard(path: "/Users/me/app", files: ["src/a b.swift"]),
+            .gitDiscard(path: "/Users/me/app", files: []),
+            .gitFetch(path: "/Users/me/app", automatic: true),
+            .gitPull(path: "/Users/me/app", mode: "rebase"),
+            .gitPush(path: "/Users/me/app", force: true),
+            .gitForcePushPreview(path: "/Users/me/app"),
+            .gitLog(path: "/Users/me/app", branch: nil, skip: 50, limit: 50),
+            .gitShow(path: "/Users/me/app", hash: "abc1234"),
+            .gitRevert(path: "/Users/me/app", hash: "abc1234"),
+            .gitCherryPick(path: "/Users/me/app", hash: "abc1234"),
+            .gitApplyPart(path: "/Users/me/app", file: "a.txt", patch: "@@ -1 +1 @@\n-a\n+b\n", use: "stage"),
+            .gitLastCommit(path: "/Users/me/app"),
+            .gitAmend(path: "/Users/me/app", message: "feat: better"),
+            .gitUndoCommit(path: "/Users/me/app"),
+            .gitStashes(path: "/Users/me/app"),
+            .gitStash(path: "/Users/me/app", message: "half of it", untracked: true),
+            .gitStashShow(path: "/Users/me/app", hash: "abc"),
+            .gitStashApply(path: "/Users/me/app", hash: "abc", pop: true),
+            .gitStashDrop(path: "/Users/me/app", hash: "abc"),
+            .gitBranches(path: "/Users/me/app"),
+            .gitSwitch(path: "/Users/me/app", branch: "origin/feature/login"),
+            .gitCreateBranch(path: "/Users/me/app", name: "feature/x", from: nil, checkout: true),
+            .gitRenameBranch(path: "/Users/me/app", from: "a", to: "b"),
+            .gitDeleteBranch(path: "/Users/me/app", name: "old", force: false),
             .gitUnstage(path: "/Users/me/app", files: ["src/a b.swift"]),
             .gitCommit(path: "/Users/me/app", message: "feat: thêm dòng\n\nchi tiết"),
             .accountUsage(refresh: true),
@@ -235,6 +259,34 @@ final class ProtocolTests: XCTestCase {
         XCTAssertTrue(told.isEmpty)
     }
 
+    /// NOTE-8 (#55): a notification's body is the question alone, and each
+    /// choice is a button of its own, so that iOS, which shows a few lines,
+    /// does not cut the choices off after a long question.
+    func testAQuestionsChoicesAreButtonsOfItsNotification() {
+        let asked = AgentQuestion(text: "Which colour?", choices: ["Red", "Blue"])
+        let question = AgentNotice(session: 1, name: "s", folder: "/p", state: .waitingForAnswer(asked))
+        XCTAssertEqual(question.words, "Which colour?", "the choices are not in the body")
+        XCTAssertEqual(question.buttons.map(\.title), ["Red", "Blue"])
+        XCTAssertEqual(question.buttons.map { question.choice(ofButton: $0.id) }, ["Red", "Blue"])
+        XCTAssertNil(question.choice(ofButton: "choice-2"), "not one of its choices")
+        XCTAssertNil(question.choice(ofButton: "reply"))
+
+        // More choices than a notification has room for: the first ones,
+        // the text reply taking the place that is left.
+        let many = AgentNotice(session: 1, name: "s", folder: "/p", state: .waitingForAnswer(AgentQuestion(text: "?", choices: (1...20).map(String.init))))
+        XCTAssertEqual(many.buttons.count, AgentNotice.mostButtons)
+        XCTAssertEqual(many.buttons.last?.title, String(AgentNotice.mostButtons))
+
+        // Only a question has them.
+        let done = AgentNotice(session: 1, name: "s", folder: "/p", state: .done(said: "All tests pass."))
+        XCTAssertEqual(done.words, "All tests pass.")
+        XCTAssertTrue(done.buttons.isEmpty)
+        let permission = AgentNotice(session: 1, name: "s", folder: "/p", state: .waitingForPermission(AgentQuestion(text: "make test", choices: ["Yes"])))
+        XCTAssertEqual(permission.words, "make test")
+        XCTAssertTrue(permission.buttons.isEmpty, "a permission is answered in the session")
+        XCTAssertNil(permission.choice(ofButton: "choice-0"))
+    }
+
     /// LIVE-1: the Live Activity shows only while the phone is connected, no
     /// one is at the Mac, and an agent works or waits; it ends at once when
     /// the connection ends or the Mac is used, and shows "done" at the end.
@@ -269,5 +321,380 @@ final class ProtocolTests: XCTestCase {
         var second: Data?
         for frame in other { second = joiner.add(frame) ?? second }
         XCTAssertEqual(second, Data(repeating: 1, count: 300_000))
+    }
+
+    /// MCP-19: what keeps the agents from opening shells, in words, and a
+    /// cause this build does not know still read.
+    func testAnAgentShellsFaultInWords() throws {
+        let install = AgentShellsFault(cause: .install, agents: ["Codex", "Copilot CLI"])
+        XCTAssertEqual(install.headline(), "AgentTerm's shells could not be set up in Codex and Copilot CLI.")
+        XCTAssertEqual(install.headline(on: "Studio"), "AgentTerm's shells could not be set up in Codex and Copilot CLI on Studio.")
+        XCTAssertEqual(AgentShellsFault(cause: .signIn).headline(), "An agent's MCP server was refused by the AgentTerm host.")
+        XCTAssertTrue(AgentShellsFault(cause: .signIn).advice.contains("Start that agent's session again"))
+        let message = ServerMessage.agentShellsFaults([install, AgentShellsFault(cause: .init(rawValue: "later"))])
+        let back = try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message)))
+        XCTAssertEqual(back, message)
+        XCTAssertEqual(AgentShellsFault(cause: .init(rawValue: "later")).headline(), "Agents cannot open shells you see (later).")
+    }
+
+    /// WT-12 (#56): a worktree's row is short: the name of its folder
+    /// stands for its path.
+    func testAWorktreesRowNamesItsFolderNotItsPath() {
+        let own = WorktreeInfo(path: "/Users/someone/code/project", branch: "main", isMain: true, changed: 1)
+        XCTAssertEqual(own.menuTitle, "project · main")
+        XCTAssertEqual(own.menuDetail, "1 changed")
+        let made = WorktreeInfo(path: "/Users/someone/code/project/.agentterm/worktrees/agentterm/claude-1", branch: "agentterm/claude-1", isMain: false, ahead: 2, inUse: true, isAgentTerm: true)
+        XCTAssertEqual(made.menuDetail, "2 ahead, in use")
+        let elsewhere = WorktreeInfo(
+            path: "/Users/someone/a/long/path/to/the/worktrees/of/project/review-copy", branch: "feature/login", isMain: false, ahead: 2, changed: 3, inUse: true)
+        XCTAssertEqual(elsewhere.menuTitle, "feature/login")
+        XCTAssertEqual(elsewhere.menuDetail, "2 ahead, 3 changed, in review-copy, in use")
+        XCTAssertFalse(elsewhere.menuDetail.contains("/"), "no path in the row")
+        // A folder named as its branch is not said twice.
+        XCTAssertEqual(WorktreeInfo(path: "/Users/someone/wt/hotfix", branch: "hotfix", isMain: false).menuDetail, "")
+        XCTAssertEqual(WorktreeInfo(path: "/gone", branch: "old", isMain: false, missing: true).menuDetail, "missing: its folder is gone")
+    }
+
+    /// GIT-60, GIT-61 (#44): what is said of a submodule's row and before
+    /// its commit is discarded, the same on both apps; a list of changes
+    /// with submodules goes over the wire and back, with and without diffs.
+    func testWhatIsSaidOfASubmodule() throws {
+        var moved = FileDiff(
+            path: "libs/library", added: 1, deleted: 1, isUntracked: false,
+            patch: "@@ -1 +1 @@\n-Subproject commit 621fc7f0000000000000000000000000000000aa\n+Subproject commit 2afeb230000000000000000000000000000000bb")
+        XCTAssertNil(moved.submoduleWords, "a file is not a submodule")
+        moved.isSubmodule = true
+        XCTAssertEqual(moved.submoduleWords, "submodule, 621fc7f → 2afeb23")
+        var added = moved
+        added.patch = "@@ -0,0 +1 @@\n+Subproject commit 2afeb230000000000000000000000000000000bb"
+        XCTAssertEqual(added.submoduleWords, "submodule, added at 2afeb23")
+        let question = DiscardQuestion(files: [moved])
+        XCTAssertEqual(question.title, "Put library back to its recorded commit?")
+        XCTAssertTrue(question.message.contains("621fc7f"))
+        XCTAssertEqual(question.confirm, "Check Out Recorded Commit")
+
+        let inside = DiffSnapshot(isRepository: true, branch: nil, files: [FileDiff(path: "l.txt", added: 1, deleted: 0, isUntracked: false, patch: "@@ -1 +1,2 @@\n one\n+two")])
+        let submodule = SubmoduleChanges(path: "libs/library", changes: inside)
+        XCTAssertEqual(submodule.directory(in: "/code/project"), "/code/project/libs/library")
+        XCTAssertEqual(submodule.branchWords, "detached HEAD")
+        XCTAssertNotNil(submodule.detachedWarning)
+        XCTAssertNil(SubmoduleChanges(path: "x", changes: DiffSnapshot(isRepository: true, branch: "main", files: [])).detachedWarning)
+
+        var snapshot = DiffSnapshot(isRepository: true, branch: "main", files: [moved])
+        snapshot.submodules = [submodule]
+        let message = ServerMessage.diff(path: "/code/project", snapshot: snapshot)
+        XCTAssertEqual(try MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message)), message)
+        XCTAssertEqual(snapshot.withoutPatches.submodules.first?.changes.files.map(\.patch), [""])
+        XCTAssertEqual(snapshot.withoutPatches.submodules.first?.changes.files.map(\.path), ["l.txt"])
+    }
+
+    /// SCHED-28 (#47): a schedule that runs every so often, all day or
+    /// between two times, and one that runs on certain dates, come due
+    /// when they should and say so in words; what an earlier build saved
+    /// still reads; a copy and a schedule's changes are as they should be.
+    func testTheNewWaysToScheduleAndWhatIsSaidOfARun() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        func at(_ day: Int, _ hour: Int, _ minute: Int) -> Date { calendar.date(from: DateComponents(year: 2026, month: 11, day: day, hour: hour, minute: minute))! }
+
+        let often = ScheduleTime.every(minutes: 30, from: nil, until: nil)
+        XCTAssertEqual(often.next(after: at(14, 10, 5), calendar: calendar), at(14, 10, 30))
+        XCTAssertEqual(often.next(after: at(14, 10, 30), calendar: calendar), at(14, 11, 0), "after, not at")
+        XCTAssertEqual(often.next(after: at(14, 23, 45), calendar: calendar), at(15, 0, 0), "over midnight")
+        XCTAssertEqual(often.label(), "Every 30 minutes")
+        let working = ScheduleTime.every(minutes: 120, from: 9 * 60, until: 18 * 60)
+        XCTAssertEqual(working.next(after: at(14, 8, 0), calendar: calendar), at(14, 9, 0))
+        XCTAssertEqual(working.next(after: at(14, 9, 0), calendar: calendar), at(14, 11, 0))
+        XCTAssertEqual(working.next(after: at(14, 17, 30), calendar: calendar), at(15, 9, 0), "nothing after the last of the day")
+        XCTAssertEqual(working.label(), "Every 2 hours, 09:00 to 18:00")
+        XCTAssertEqual(ScheduleTime.every(minutes: 60, from: nil, until: nil).label(), "Every hour")
+        XCTAssertEqual(ScheduleTime.every(minutes: 90, from: nil, until: nil).label(), "Every 90 minutes")
+
+        let some = ScheduleTime.dates([at(20, 9, 0), at(16, 9, 0)])
+        XCTAssertEqual(some.next(after: at(14, 0, 0), calendar: calendar), at(16, 9, 0))
+        XCTAssertEqual(some.next(after: at(16, 9, 0), calendar: calendar), at(20, 9, 0))
+        XCTAssertNil(some.next(after: at(21, 0, 0), calendar: calendar))
+        XCTAssertTrue(some.label().hasPrefix("On 2 dates, from "))
+        XCTAssertEqual(ScheduleTime.dates([]).label(), "On no date")
+        for when in [often, working, some] { XCTAssertEqual(try JSONDecoder().decode(ScheduleTime.self, from: JSONEncoder().encode(when)), when) }
+
+        // As a build before these were added saved it.
+        let old =
+            #"{"id":"s","name":"Morning","agent":"claude","folder":"/p","prompt":"go","when":{"limitReset":{}},"permissions":"ask","enabled":true,"catchUp":true,"warningAccepted":false,"runs":[{"at":0,"started":true,"note":"Started"}]}"#
+        var schedule = try XCTUnwrap(MessageCoding.decode(Schedule.self, from: Data(old.utf8)))
+        XCTAssertEqual(schedule.condition, .always)
+        XCTAssertFalse(schedule.waitsForPrevious || schedule.inWorktree)
+        XCTAssertNil(schedule.maxMinutes)
+        XCTAssertEqual(schedule.runs.first?.summary, "Started")
+        XCTAssertEqual(schedule.runs.first?.hasOutput, false)
+
+        // What is said of a run once it is over.
+        var run = ScheduleRun(at: at(14, 9, 0), started: true, session: 3, note: "Started")
+        run.ended = at(14, 9, 12)
+        run.outcome = "Done"
+        XCTAssertEqual(run.duration, 12 * 60)
+        XCTAssertEqual(run.summary, "Done, after 12 min")
+        XCTAssertEqual(ScheduleRun(at: at(14, 9, 0), started: false, note: "Skipped: nothing is changed in the folder").summary, "Skipped: nothing is changed in the folder")
+
+        // A copy: its own id and name, off, without the runs.
+        schedule.edits = [ScheduleEdit(at: at(14, 9, 0), what: ["x"])]
+        let copy = schedule.duplicate(named: ["Morning", "Morning copy"])
+        XCTAssertEqual(copy.name, "Morning copy 2")
+        XCTAssertNotEqual(copy.id, schedule.id)
+        XCTAssertFalse(copy.enabled)
+        XCTAssertEqual(copy.runs, [])
+        XCTAssertEqual(copy.edits, [])
+        XCTAssertEqual(copy.prompt, "go")
+
+        // What changed, in words.
+        var changed = schedule
+        changed.name = "Evening"
+        changed.prompt = "go on"
+        changed.condition = .afterPull
+        changed.inWorktree = true
+        changed.waitsForPrevious = true
+        changed.enabled = false
+        XCTAssertEqual(
+            changed.changes(from: schedule),
+            [
+                "Renamed from “Morning” to “Evening”", "The prompt was changed", "Turned off", "A run now waits for the one before it",
+                "Runs: every time → only after a pull brought new commits", "Each run is now in a new worktree",
+            ])
+        XCTAssertEqual(schedule.changes(from: schedule), [])
+        XCTAssertEqual(
+            ScheduleOverview.Run.id(schedule: "s", at: Date(timeIntervalSince1970: 5)),
+            ScheduleOverview.Run(schedule: schedule, run: ScheduleRun(at: Date(timeIntervalSince1970: 5), started: false, note: "")).id)
+    }
+
+    /// WT-18 (#43): what a worktree's chip says, and what is asked before
+    /// one is thrown away, the same on both apps.
+    func testWhatAWorktreesChipSays() {
+        let own = WorktreeInfo(path: "/code/project", branch: "main", isMain: true, changed: 1)
+        XCTAssertEqual(own.chipTitle, "main")
+        XCTAssertEqual(own.chipCounts, "1")
+        XCTAssertEqual(own.chipHelp, "The folder itself, 1 file changed")
+        let busy = WorktreeInfo(path: "/code/project/.agentterm/worktrees/x", branch: "x", isMain: false, ahead: 2, changed: 3, inUse: true, isAgentTerm: true)
+        XCTAssertEqual(busy.chipCounts, "3 ↑2")
+        XCTAssertEqual(busy.chipHelp, "A worktree, 3 files changed, 2 commits ahead, a session runs in it")
+        XCTAssertEqual(WorktreeInfo(path: "/code/review", branch: nil, isMain: false).chipTitle, "review", "a detached HEAD is named by its folder")
+        XCTAssertEqual(WorktreeInfo(path: "/code/clean", branch: "clean", isMain: false).chipCounts, "")
+        let gone = WorktreeInfo(path: "/gone", branch: "old", isMain: false, changed: 4, missing: true)
+        XCTAssertEqual(gone.chipCounts, "missing")
+        XCTAssertEqual(gone.chipHelp, "A worktree, its folder is gone")
+
+        XCTAssertEqual(WorktreeWords.discardTitle(busy), "Throw away x?")
+        XCTAssertEqual(WorktreeWords.discardMessage(busy), "It has work that is not merged: 2 ahead, 3 changed, in use. It will be lost.")
+        XCTAssertEqual(WorktreeWords.discardMessage(WorktreeInfo(path: "/code/clean", branch: "clean", isMain: false)), "Its folder is removed.")
+        XCTAssertEqual(WorktreeWords.merge(into: own), "Merge into main")
+        XCTAssertEqual(WorktreeWords.merge(into: nil), "Merge into the folder's branch")
+        XCTAssertEqual(WorktreeWords.setupSaid("npm install"), "Its setup command runs first: npm install")
+        XCTAssertEqual(WorktreeWords.setupSaid(""), "No setup command is run in it.")
+    }
+
+    /// NOTE-13 (#62): what an agent said at the end is told by its end,
+    /// and all of it is there for where it can be read.
+    func testAllOfWhatAnAgentSaidCanBeHad() {
+        let long = "First I looked at the tests. " + String(repeating: "Then more was done. ", count: 40) + "All 290 tests pass."
+        let done = AgentNotice(session: 1, name: "fix", folder: "/p", state: .done(said: long))
+        XCTAssertEqual(done.detail?.count, AgentNotice.detailLength)
+        XCTAssertTrue(done.detail?.hasSuffix("All 290 tests pass.") == true)
+        XCTAssertEqual(done.full, long)
+        XCTAssertTrue(done.detailIsCut)
+        let short = AgentNotice(session: 1, name: "fix", folder: "/p", state: .done(said: "Done."))
+        XCTAssertEqual(short.full, "Done.")
+        XCTAssertFalse(short.detailIsCut)
+        XCTAssertFalse(AgentNotice(session: 1, name: "fix", folder: "/p", state: .done(said: nil)).detailIsCut)
+        let asked = AgentNotice(session: 1, name: "fix", folder: "/p", state: .waitingForAnswer(AgentQuestion(text: "Which one?", choices: ["A", "B"])))
+        XCTAssertEqual(asked.full, "Which one?\nA · B")
+        XCTAssertFalse(asked.detailIsCut)
+    }
+
+    /// GIT-21 (#39): what is asked before changes are discarded, the same
+    /// on the Mac and the iPhone.
+    func testWhatIsAskedBeforeDiscarding() {
+        let changed = FileDiff(path: "src/notes.txt", added: 1, deleted: 0, isUntracked: false, patch: "")
+        let new = FileDiff(path: "docs/new guide.md", added: 3, deleted: 0, isUntracked: true, patch: "")
+        let one = DiscardQuestion(files: [changed])
+        XCTAssertEqual(one.title, "Discard the changes to notes.txt?")
+        XCTAssertTrue(one.message.contains("cannot be undone"))
+        XCTAssertEqual(one.confirm, "Discard Changes")
+        let trashed = DiscardQuestion(files: [new])
+        XCTAssertEqual(trashed.title, "Move new guide.md to the Trash?")
+        XCTAssertTrue(trashed.message.contains("put back from the Trash"))
+        XCTAssertEqual(trashed.confirm, "Move to Trash")
+        let all = DiscardQuestion(files: [changed, changed, new])
+        XCTAssertEqual(all.title, "Discard all 3 changes?")
+        XCTAssertEqual(
+            all.message, "2 files go back to what is staged or to the last commit, which cannot be undone. 1 new file is moved to the Trash of the Mac.")
+        XCTAssertEqual(all.confirm, "Discard All")
+        XCTAssertEqual(DiscardQuestion(files: [new, new]).message, "2 new files are moved to the Trash of the Mac.")
+        XCTAssertEqual(changed.discardLabel, "Discard changes to notes.txt")
+        XCTAssertEqual(new.discardLabel, "Move new guide.md to the Trash")
+    }
+
+    /// GIT-27 (#35): a branch in words, and what is asked before one is
+    /// deleted: once when nothing is lost, twice when its commits would be.
+    func testABranchInWordsAndWhatIsAskedBeforeDeletingOne() throws {
+        let merged = BranchInfo(name: "spare", isMerged: true)
+        let own = BranchInfo(name: "feature/x", upstream: "origin/feature/x", ahead: 2, behind: 1)
+        XCTAssertEqual(own.tracking, "2 ahead, 1 behind")
+        XCTAssertEqual(BranchInfo(name: "old", upstream: "origin/old", upstreamGone: true).tracking, "its remote branch is gone")
+        XCTAssertEqual(merged.tracking, "")
+        XCTAssertEqual(BranchInfo(name: "origin/feature/login", isRemote: true).localName, "feature/login")
+        XCTAssertEqual(own.localName, "feature/x")
+        XCTAssertNotEqual(BranchInfo(name: "x").id, BranchInfo(name: "x", isRemote: true).id)
+
+        let once = DeleteBranchQuestion(branch: merged, into: "main")
+        XCTAssertEqual(once.title, "Delete the branch “spare”?")
+        XCTAssertEqual(once.message, "Everything on it is on “main” too, so nothing is lost.")
+        XCTAssertEqual(once.confirm, "Delete Branch")
+        let first = DeleteBranchQuestion(branch: own, into: "main")
+        XCTAssertTrue(first.message.contains("asked once more"))
+        XCTAssertEqual(first.confirm, "Delete…")
+        let second = DeleteBranchQuestion(branch: own, into: "main", again: true)
+        XCTAssertEqual(second.title, "Delete “feature/x” and lose its commits?")
+        XCTAssertEqual(second.confirm, "Delete and Lose Its Commits")
+
+        let message = ServerMessage.gitBranches(path: "/p", branches: [merged, own])
+        XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
+    }
+
+    /// GIT-33 (#37): what is asked before a push is forced, and the setting
+    /// that fetches by itself, on unless turned off.
+    func testWhatIsAskedBeforeAForcedPush() throws {
+        let one = ForcePushQuestion(branch: "main", upstream: "origin/main", loses: ["abc1234 theirs: a line"])
+        XCTAssertEqual(one.title, "Force push “main” to origin/main?")
+        XCTAssertTrue(one.message.hasPrefix("This commit on origin/main is not in “main” and will be gone from it there:\n\n• abc1234 theirs: a line"), one.message)
+        XCTAssertTrue(one.isNeeded)
+        XCTAssertEqual(one.confirm, "Force Push")
+        let many = ForcePushQuestion(branch: "main", upstream: "origin/main", loses: (1...11).map { "h\($0) commit \($0)" })
+        XCTAssertTrue(many.message.contains("These 11 commits on origin/main are not in “main”"))
+        XCTAssertTrue(many.message.contains("• h8 commit 8\n… and 3 more"), many.message)
+        XCTAssertFalse(many.message.contains("commit 9"))
+        let none = ForcePushQuestion(branch: "main", upstream: "origin/main", loses: [])
+        XCTAssertFalse(none.isNeeded)
+        XCTAssertTrue(none.message.contains("a push without force does the same"))
+
+        XCTAssertTrue(DisplaySettings().fetchAutomatically)
+        let old = try JSONDecoder().decode(DisplaySettings.self, from: Data(#"{"temperatureUnit":"celsius","diffLayout":"split","changesView":"tree"}"#.utf8))
+        XCTAssertTrue(old.fetchAutomatically, "on for settings saved before there was the choice")
+        var off = DisplaySettings()
+        off.fetchAutomatically = false
+        XCTAssertFalse(try JSONDecoder().decode(DisplaySettings.self, from: JSONEncoder().encode(off.checked)).fetchAutomatically)
+        for message in [ServerMessage.gitFetched(path: "/p", problem: "no route", automatic: true), .gitForcePushPreview(path: "/p", upstream: nil, loses: [])] {
+            XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
+        }
+    }
+
+    /// GIT-39 (#36): where the commits of a list are drawn in the graph
+    /// beside them: one lane for a line of history, a second where a branch
+    /// parts and until it meets again.
+    func testTheGraphBesideAListOfCommits() {
+        func commit(_ hash: String, _ parents: String...) -> CommitInfo { CommitInfo(hash: hash, parents: parents, subject: hash) }
+        // A straight line: everything in the first lane.
+        let line = CommitGraphRow.rows(for: [commit("c", "b"), commit("b", "a"), commit("a")])
+        XCTAssertEqual(line.map(\.lane), [0, 0, 0])
+        XCTAssertEqual(line.map(\.width), [1, 1, 1])
+        XCTAssertEqual(line[0].incoming, [:])
+        XCTAssertEqual(line[0].outgoing, [0: 0])
+        XCTAssertEqual(line[2].outgoing, [:], "the first commit goes on to nothing")
+
+        // m merges s into the line: s is drawn beside it until b, where they parted.
+        let merged = CommitGraphRow.rows(for: [commit("m", "c", "s"), commit("c", "b"), commit("s", "b"), commit("b", "a"), commit("a")])
+        XCTAssertEqual(merged.map(\.lane), [0, 0, 1, 0, 0])
+        XCTAssertEqual(merged[0].outgoing, [0: 0, 1: 0], "the second parent's lane starts at the merge")
+        XCTAssertEqual(merged[1].incoming, [0: 0, 1: 1], "the side passes by")
+        XCTAssertEqual(merged[2].incoming, [0: 0, 1: 1])
+        XCTAssertEqual(merged[3].incoming, [0: 0, 1: 0], "both end at the commit they parted from")
+        XCTAssertEqual(merged[3].outgoing, [0: 0])
+        XCTAssertEqual(merged.map(\.width), [2, 2, 2, 2, 1])
+        XCTAssertEqual(CommitGraphRow.rows(for: []), [])
+
+        let question = CommitActionQuestion(.revert, commit: CommitInfo(hash: "abcdef1234", subject: "add two"), onto: "main")
+        XCTAssertEqual(question.title, "Revert abcdef1?")
+        XCTAssertTrue(question.message.contains("takes back what “add two” changed"))
+        XCTAssertEqual(CommitActionQuestion(.cherryPick, commit: CommitInfo(hash: "abcdef1234", subject: "x"), onto: nil).title, "Pick abcdef1 onto the checked out commit?")
+    }
+
+    /// GIT-46 (#38): a stash in words, from what git notes of it, and what
+    /// is asked before one is dropped.
+    func testAStashInWords() throws {
+        let named = StashInfo(hash: "h1", ref: "stash@{0}", noted: "On feature/login: half of the login", date: Date(timeIntervalSince1970: 5))
+        XCTAssertEqual(named.message, "half of the login")
+        XCTAssertEqual(named.branch, "feature/login")
+        let unnamed = StashInfo(hash: "h2", ref: "stash@{1}", noted: "WIP on main: abc1234 docs: the last commit", date: Date(timeIntervalSince1970: 5))
+        XCTAssertEqual(unnamed.message, "Changes on abc1234 docs: the last commit")
+        XCTAssertEqual(unnamed.branch, "main")
+        XCTAssertEqual(StashInfo(hash: "h3", ref: "stash@{2}", noted: "something of its own", date: Date()).message, "something of its own")
+        let question = DropStashQuestion(stash: named)
+        XCTAssertEqual(question.title, "Drop the stash “half of the login”?")
+        XCTAssertTrue(question.message.contains("cannot be brought back"))
+        let message = ServerMessage.gitStashes(path: "/p", stashes: [named, unnamed])
+        XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
+    }
+
+    /// GIT-50 (#41): what is asked before the last commit is undone or
+    /// amended: once, and once more when a remote has it already.
+    func testWhatIsAskedBeforeTheLastCommitIsRewritten() throws {
+        let commit = CommitInfo(hash: "abcdef1234", subject: "add two")
+        let mine = LastCommit(commit: commit, message: "add two")
+        let pushed = LastCommit(commit: commit, message: "add two", isPushed: true)
+        let undo = RewriteCommitQuestion(.undo, last: mine)
+        XCTAssertEqual(undo.title, "Undo the commit “add two”?")
+        XCTAssertEqual(undo.message, "The branch goes back to the commit before it. What it changed stays staged, so nothing is lost.")
+        XCTAssertEqual(undo.confirm, "Undo Commit")
+        let first = RewriteCommitQuestion(.undo, last: pushed)
+        XCTAssertTrue(first.message.hasSuffix("It is pushed already: you are asked once more."))
+        XCTAssertEqual(first.confirm, "Undo…")
+        let second = RewriteCommitQuestion(.undo, last: pushed, again: true)
+        XCTAssertEqual(second.title, "Undo a commit that is already pushed?")
+        XCTAssertTrue(second.message.contains("the next push has to be forced"))
+        XCTAssertEqual(second.confirm, "Undo Anyway")
+        XCTAssertEqual(RewriteCommitQuestion(.amend, last: pushed).confirm, "Amend Anyway")
+        let message = ServerMessage.gitLastCommit(path: "/p", last: pushed)
+        XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
+    }
+
+    /// GIT-54 (#40): a diff taken apart into hunks, and a patch that holds
+    /// one hunk or some of its lines, for each of the three uses.
+    func testADiffTakenApartAndAPartOfItAsAPatch() throws {
+        let patch = """
+            @@ -1,4 +1,4 @@ func first()
+             one
+            -two
+            +TWO
+             three
+             four
+            @@ -20,3 +20,4 @@
+             twenty
+            +more
+             twenty-one
+             twenty-two
+            """
+        let hunks = PatchParts.hunks(of: patch)
+        XCTAssertEqual(hunks.count, 2)
+        XCTAssertEqual(hunks[0].section, "func first()")
+        XCTAssertEqual(hunks[0].oldStart, 1)
+        XCTAssertEqual(hunks[1].newStart, 20)
+        XCTAssertEqual(hunks[0].changed, [1, 2])
+        XCTAssertEqual(hunks[0].added, 1)
+        XCTAssertEqual(hunks[0].removed, 1)
+        XCTAssertEqual(hunks[1].lines, [" twenty", "+more", " twenty-one", " twenty-two"])
+
+        // A whole hunk, with the names git needs before it.
+        XCTAssertEqual(
+            PatchParts.patch(path: "src/a.swift", hunk: hunks[1], use: .stage),
+            "diff --git a/src/a.swift b/src/a.swift\n--- a/src/a.swift\n+++ b/src/a.swift\n@@ -20,3 +20,4 @@\n twenty\n+more\n twenty-one\n twenty-two\n")
+        // Only the line put in, applied forward: the line taken out is still there, so it stays as a line both sides have.
+        XCTAssertEqual(
+            PatchParts.patch(path: "a", hunk: hunks[0], picked: [2], use: .stage)?.components(separatedBy: "\n").dropFirst(3).joined(separator: "\n"),
+            "@@ -1,4 +1,5 @@\n one\n two\n+TWO\n three\n four\n")
+        // The same line, applied the other way round: the line taken out is not on that side, so it goes.
+        XCTAssertEqual(
+            PatchParts.patch(path: "a", hunk: hunks[0], picked: [2], use: .discard)?.components(separatedBy: "\n").dropFirst(3).joined(separator: "\n"),
+            "@@ -1,3 +1,4 @@\n one\n+TWO\n three\n four\n")
+        XCTAssertNil(PatchParts.patch(path: "a", hunk: hunks[0], picked: [], use: .stage), "nothing picked is no patch")
+        XCTAssertTrue(PatchParts.Use.unstage.reversed && PatchParts.Use.discard.reversed && !PatchParts.Use.stage.reversed)
+        XCTAssertEqual(PatchParts.hunks(of: "@@ -1 +1 @@\n-a\n+b\n… diff truncated …").first?.lines, ["-a", "+b"])
     }
 }

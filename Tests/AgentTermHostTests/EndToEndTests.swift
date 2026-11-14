@@ -709,6 +709,97 @@ final class EndToEndTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.deletingLastPathComponent().appendingPathComponent("escape.txt").path))
     }
 
+    /// FIND-10 (#45): a device searches a folder on the Mac by name and
+    /// by text, each answer carrying the number of its search; a new
+    /// search for text ends the one before it, and one that is stopped is
+    /// still said to be over.
+    func testADeviceSearchesAFoldersFiles() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-find-\(UUID().uuidString)").standardizedFileURL
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try "let needle = 1\n".write(to: directory.appendingPathComponent("src/main.swift"), atomically: true, encoding: .utf8)
+        try "nothing\nA Needle here\n".write(to: directory.appendingPathComponent("notes.md"), atomically: true, encoding: .utf8)
+
+        let phone = connect("phone")
+        phone.connection.send(.findFiles(search: 1, path: directory.path, query: "main"))
+        waitUntil("the file found by name") { phone.messages.contains(.filesFound(search: 1, files: ["src/main.swift"], among: 2)) }
+        // A file made since is found once the search is opened again, which reads the folder again.
+        try "x\n".write(to: directory.appendingPathComponent("src/mainly.txt"), atomically: true, encoding: .utf8)
+        phone.connection.send(.findFiles(search: 2, path: directory.path, query: ""))
+        waitUntil("read again") { phone.messages.contains(.filesFound(search: 2, files: [], among: 3)) }
+        phone.connection.send(.findFiles(search: 3, path: directory.path, query: "main"))
+        waitUntil("both found") { phone.messages.contains(.filesFound(search: 3, files: ["src/main.swift", "src/mainly.txt"], among: 3)) }
+
+        func lines(_ search: Int) -> [String] {
+            phone.messages.flatMap { message -> [String] in
+                if case .textFound(search, let matches) = message { return matches.map { "\($0.file):\($0.line)" } }
+                return []
+            }.sorted()
+        }
+        func ended(_ search: Int) -> Bool { phone.messages.contains(.searchEnded(search: search, truncated: false, problem: nil)) }
+        phone.connection.send(.findText(search: 4, path: directory.path, query: "needle", caseSensitive: false))
+        waitUntil("the lines found") { ended(4) }
+        XCTAssertEqual(lines(4), ["notes.md:2", "src/main.swift:1"])
+        phone.connection.send(.findText(search: 5, path: directory.path, query: "Needle", caseSensitive: true))
+        waitUntil("with its case") { ended(5) }
+        XCTAssertEqual(lines(5), ["notes.md:2"])
+        // Stopped, and a search nobody has: each still answered.
+        phone.connection.send(.findText(search: 6, path: directory.path, query: "needle", caseSensitive: false))
+        phone.connection.send(.stopSearch(search: 6))
+        phone.connection.send(.stopSearch(search: 99))
+        waitUntil("said to be over") { ended(6) }
+    }
+
+    /// GIT-63 (#44): what a device does inside a submodule is answered
+    /// with the submodule's changes, and the folder around it, asked
+    /// again, says what is changed in it now, not what it kept from before.
+    func testWhatIsDoneInASubmoduleShowsInTheFolderAroundIt() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-sub-\(UUID().uuidString)").standardizedFileURL
+        defer { try? FileManager.default.removeItem(at: root) }
+        let library = root.appendingPathComponent("library")
+        let directory = root.appendingPathComponent("project")
+        for repository in [library, directory] {
+            try FileManager.default.createDirectory(at: repository, withIntermediateDirectories: true)
+            git("init", "-q", "-b", "main", in: repository)
+            for (key, value) in [("user.name", "Test"), ("user.email", "test@example.com"), ("commit.gpgsign", "false")] { git("config", key, value, in: repository) }
+        }
+        try "one\n".write(to: library.appendingPathComponent("l.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: library)
+        git("commit", "-q", "-m", "library", in: library)
+        git("-c", "protocol.file.allow=always", "submodule", "add", "-q", library.path, "lib", in: directory)
+        let inside = directory.appendingPathComponent("lib")
+        for (key, value) in [("user.name", "Test"), ("user.email", "test@example.com"), ("commit.gpgsign", "false")] { git("config", key, value, in: inside) }
+        git("commit", "-q", "-m", "project", in: directory)
+        try "one\ntwo\n".write(to: inside.appendingPathComponent("l.txt"), atomically: true, encoding: .utf8)
+
+        let phone = connect("phone")
+        /// What the newest list of the folder's changes says: its own
+        /// files, then each submodule's.
+        func latest(_ path: String) -> [String]? {
+            phone.messages.compactMap { message -> [String]? in
+                guard case .diff(path, let snapshot) = message else { return nil }
+                func named(_ files: [FileDiff], _ place: String) -> [String] { files.map { ($0.isStaged ? "staged " : "") + $0.marker + " " + place + $0.path } }
+                return named(snapshot.files, "") + snapshot.submodules.flatMap { named($0.changes.files, $0.path + ": ") }
+            }.last
+        }
+        phone.connection.send(.diff(path: directory.path))
+        waitUntil("the folder's changes") { latest(directory.path) == ["M lib: l.txt"] }
+
+        // Staged in the submodule; the folder says so when asked right after.
+        phone.connection.send(.gitStage(path: inside.path, files: ["l.txt"]))
+        waitUntil("staged in the submodule") { latest(inside.path) == ["staged M l.txt"] }
+        phone.connection.send(.diff(path: directory.path))
+        waitUntil("the folder says it is staged there") { latest(directory.path) == ["staged M lib: l.txt"] }
+
+        // Committed there: the folder shows the submodule's commit as its own change.
+        phone.connection.send(.gitCommit(path: inside.path, message: "library: two"))
+        waitUntil("committed in the submodule") { latest(inside.path) == [] }
+        phone.connection.send(.diff(path: directory.path))
+        waitUntil("the commit moved") { latest(directory.path) == ["M lib"] }
+        phone.connection.send(.gitStage(path: directory.path, files: ["lib"]))
+        waitUntil("staged in the folder") { latest(directory.path) == ["staged M lib"] }
+    }
+
     func testStagingAndCommittingFromAClient() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-commit-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -765,6 +856,167 @@ final class EndToEndTests: XCTestCase {
         XCTAssertEqual(String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self), "feat: thêm dòng\ninit\n")
     }
 
+    /// GIT-20 (#39): a device discards changes through the host: one file,
+    /// then every change; what git does not track goes to the Trash, and
+    /// the device is sent the list as it is then.
+    func testAClientDiscardsChanges() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-discard-\(UUID().uuidString)").standardizedFileURL
+        let trash = directory.appendingPathComponent(".trash-of-the-test")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        setenv(FileBrowser.trashVariable, trash.path, 1)
+        defer {
+            unsetenv(FileBrowser.trashVariable)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        git("init", "-q", "-b", "main", in: directory)
+        git("config", "user.name", "Test", in: directory)
+        git("config", "user.email", "test@example.com", in: directory)
+        git("config", "commit.gpgsign", "false", in: directory)
+        try ".trash-of-the-test\n".write(to: directory.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "one\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "one\n".write(to: directory.appendingPathComponent("c.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: directory)
+        git("commit", "-q", "-m", "init", in: directory)
+        try "one\ntwo\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "changed\n".write(to: directory.appendingPathComponent("c.txt"), atomically: true, encoding: .utf8)
+        try "mới\n".write(to: directory.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+
+        let phone = connect("phone")
+        func latest() -> [String]? {
+            phone.messages.compactMap { message -> [String]? in
+                if case .diff(directory.path, let snapshot) = message { return snapshot.files.map { $0.marker + " " + $0.path } }
+                return nil
+            }.last
+        }
+        phone.connection.send(.diff(path: directory.path))
+        waitUntil("the changes") { latest() == ["M a.txt", "M c.txt", "U b.txt"] }
+
+        phone.connection.send(.gitDiscard(path: directory.path, files: ["a.txt"]))
+        waitUntil("one discarded") { latest() == ["M c.txt", "U b.txt"] }
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("a.txt"), encoding: .utf8), "one\n")
+
+        phone.connection.send(.gitDiscard(path: directory.path, files: []))
+        waitUntil("all discarded") { latest() == [] }
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("c.txt"), encoding: .utf8), "one\n")
+        XCTAssertEqual(try String(contentsOf: trash.appendingPathComponent("b.txt"), encoding: .utf8), "mới\n", "in the Trash, not gone")
+
+        // Nothing left: said, and the list is sent all the same.
+        phone.connection.send(.gitDiscard(path: directory.path, files: []))
+        waitUntil("told there is nothing") {
+            phone.messages.contains { if case .error(let text) = $0 { return text == "There is no change to discard." } else { return false } }
+        }
+    }
+
+    /// GIT-26 (#35): a device lists the branches, makes one, switches, is
+    /// refused a switch that would lose a change, and deletes a branch;
+    /// each change is answered with the branches and the folder's changes.
+    func testAClientWorksWithBranches() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-branches-\(UUID().uuidString)").standardizedFileURL
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        git("init", "-q", "-b", "main", in: directory)
+        git("config", "user.name", "Test", in: directory)
+        git("config", "user.email", "test@example.com", in: directory)
+        git("config", "commit.gpgsign", "false", in: directory)
+        try "one\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: directory)
+        git("commit", "-q", "-m", "init", in: directory)
+
+        let phone = connect("phone")
+        func branches() -> [String]? {
+            phone.messages.compactMap { message -> [String]? in
+                if case .gitBranches(directory.path, let list) = message { return list.map { ($0.isCurrent ? "* " : "") + $0.name } }
+                return nil
+            }.last
+        }
+        func branch() -> String? {
+            phone.messages.compactMap { message -> String? in
+                if case .diff(directory.path, let snapshot) = message { return snapshot.branch } else { return nil }
+            }.last
+        }
+        phone.connection.send(.gitBranches(path: directory.path))
+        waitUntil("the branches") { branches() == ["* main"] }
+
+        phone.connection.send(.gitCreateBranch(path: directory.path, name: "feature/x", from: nil, checkout: true))
+        waitUntil("made and checked out") { branches() == ["* feature/x", "main"] && branch() == "feature/x" }
+        try "one\non the feature\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("commit", "-q", "-am", "feat: on the feature", in: directory)
+
+        phone.connection.send(.gitSwitch(path: directory.path, branch: "main"))
+        waitUntil("switched") { branch() == "main" }
+
+        // A change that the switch would lose: refused, in words.
+        try "mine\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        phone.connection.send(.gitSwitch(path: directory.path, branch: "feature/x"))
+        waitUntil("refused") {
+            phone.messages.contains { if case .error(let text) = $0 { return text.hasPrefix("Switching to feature/x would lose changes") } else { return false } }
+        }
+        XCTAssertEqual(branch(), "main")
+        git("checkout", "-q", "--", "a.txt", in: directory)
+
+        // Not merged: kept unless forced.
+        phone.connection.send(.gitDeleteBranch(path: directory.path, name: "feature/x", force: false))
+        waitUntil("kept") {
+            phone.messages.contains { if case .error(let text) = $0 { return text.contains("not fully merged") } else { return false } }
+        }
+        phone.connection.send(.gitRenameBranch(path: directory.path, from: "feature/x", to: "feature/y"))
+        waitUntil("renamed") { branches() == ["* main", "feature/y"] }
+        phone.connection.send(.gitDeleteBranch(path: directory.path, name: "feature/y", force: true))
+        waitUntil("deleted") { branches() == ["* main"] }
+    }
+
+    /// GIT-40 (#36): a device reads the history a page at a time, what a
+    /// commit changed, and reverts one; a commit that is not there is said
+    /// to be so.
+    func testAClientReadsTheHistoryAndRevertsACommit() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-history-\(UUID().uuidString)").standardizedFileURL
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        git("init", "-q", "-b", "main", in: directory)
+        git("config", "user.name", "Test", in: directory)
+        git("config", "user.email", "test@example.com", in: directory)
+        git("config", "commit.gpgsign", "false", in: directory)
+        for number in 1...3 {
+            try String(repeating: "line\n", count: number).write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+            git("add", ".", in: directory)
+            git("commit", "-q", "-m", "change \(number)", in: directory)
+        }
+
+        let phone = connect("phone")
+        func pages() -> [(skip: Int, subjects: [String], more: Bool)] {
+            phone.messages.compactMap { message in
+                if case .gitLog(directory.path, nil, let skip, let commits, let more) = message { return (skip, commits.map(\.subject), more) }
+                return nil
+            }
+        }
+        phone.connection.send(.gitLog(path: directory.path, branch: nil, skip: 0, limit: 2))
+        waitUntil("the first page") { pages().count == 1 }
+        XCTAssertEqual(pages()[0].subjects, ["change 3", "change 2"])
+        XCTAssertTrue(pages()[0].more)
+        phone.connection.send(.gitLog(path: directory.path, branch: nil, skip: 2, limit: 2))
+        waitUntil("the second page") { pages().count == 2 }
+        XCTAssertEqual(pages()[1].subjects, ["change 1"])
+        XCTAssertFalse(pages()[1].more)
+
+        let newest = try XCTUnwrap(
+            phone.messages.compactMap { message -> CommitInfo? in
+                if case .gitLog(_, _, 0, let commits, _) = message { return commits.first } else { return nil }
+            }.first)
+        phone.connection.send(.gitShow(path: directory.path, hash: newest.hash))
+        waitUntil("what it changed") {
+            phone.messages.contains {
+                if case .gitShow(_, newest.hash, let details?) = $0 { return details.files.map(\.path) == ["a.txt"] && details.files[0].patch.contains("+line") }
+                return false
+            }
+        }
+        phone.connection.send(.gitShow(path: directory.path, hash: "0000000"))
+        waitUntil("none such") { phone.messages.contains { if case .gitShow(_, "0000000", nil) = $0 { return true } else { return false } } }
+
+        phone.connection.send(.gitRevert(path: directory.path, hash: newest.hash))
+        waitUntil("reverted") { phone.messages.contains { if case .gitSynced(directory.path) = $0 { return true } else { return false } } }
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("a.txt"), encoding: .utf8), "line\nline\n")
+    }
+
     func testAClientCanBrowseFolders() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-dirs-\(UUID().uuidString)").standardizedFileURL
         for name in ["beta", "Alpha", "alpha 2", ".hidden"] {
@@ -792,6 +1044,99 @@ final class EndToEndTests: XCTestCase {
         phone.connection.send(.create(CreateRequest(command: "pwd -P", cwd: root.appendingPathComponent("alpha 2").path)))
         waitUntil("attached") { phone.attached != nil }
         waitUntil("ran there") { phone.text(phone.attached!.id).contains("/alpha 2") }
+    }
+
+    /// HIST-18 (#46): a device reads a conversation, searches what was
+    /// said, pins and hides one, which every device is told and the host
+    /// keeps, has a transcript written out as a file, and deletes one,
+    /// which goes to the Trash and is no longer listed.
+    func testADeviceReadsSearchesPinsAndDeletesConversations() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-hist-\(UUID().uuidString)").standardizedFileURL
+        defer { try? FileManager.default.removeItem(at: home) }
+        let trash = home.appendingPathComponent("trash")
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        setenv(FileBrowser.trashVariable, trash.path, 1)
+        defer { unsetenv(FileBrowser.trashVariable) }
+        let project = "/Users/me/Dev/app"
+        let folder = home.appendingPathComponent(".claude/projects/-Users-me-Dev-app")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try [
+            #"{"type":"user","timestamp":"2026-11-14T08:00:00.000Z","cwd":"/Users/me/Dev/app","message":{"role":"user","content":"write the parser"}}"#,
+            #"{"type":"assistant","timestamp":"2026-11-14T08:10:00.000Z","message":{"id":"m1","model":"claude-fable-5","role":"assistant","content":[{"type":"tool_use","name":"Write","input":{"file_path":"/Users/me/Dev/app/Parser.swift","content":"x"}},{"type":"text","text":"The tokenizer is written."}],"usage":{"input_tokens":10,"output_tokens":5}}}"#,
+        ].joined(separator: "\n").write(to: folder.appendingPathComponent("c-1.jsonl"), atomically: true, encoding: .utf8)
+        try #"{"type":"user","cwd":"/Users/me/Dev/app","message":{"role":"user","content":"tidy the README"}}"#
+            .write(to: folder.appendingPathComponent("c-2.jsonl"), atomically: true, encoding: .utf8)
+        var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, home: home.path)
+        configuration.foldersFile = home.appendingPathComponent("state/folders.json")
+        let host = HostServer(configuration: configuration)
+        let hostPort = try host.start()
+        defer { host.stop() }
+        let phone = TestClient(port: hostPort, token: token, name: "phone")
+        let other = TestClient(port: hostPort, token: token, name: "other")
+        waitUntil("welcome") { phone.welcomed && other.welcomed }
+        waitUntil("nothing pinned yet") { phone.messages.contains(.historyMarks(pinned: [], hidden: [])) }
+
+        // Read: what was said and run, and what the file tells.
+        phone.connection.send(.readConversation(agent: "claude", sessionID: "c-1", cwd: project))
+        func read(_ id: String) -> ConversationDetails?? {
+            phone.messages.compactMap { message -> ConversationDetails?? in
+                if case .conversationRead(id, let details) = message { return .some(details) }
+                return nil
+            }.last
+        }
+        waitUntil("the conversation read") { read("claude:c-1") != nil }
+        let details = try XCTUnwrap(read("claude:c-1") ?? nil)
+        XCTAssertEqual(details.entries.map(\.text), ["write the parser", "/Users/me/Dev/app/Parser.swift", "The tokenizer is written."])
+        XCTAssertEqual(details.model, "claude-fable-5")
+        XCTAssertEqual(details.files, ["/Users/me/Dev/app/Parser.swift"])
+        XCTAssertEqual(details.duration, 600)
+        // One that is not there, and an id that is no id: said to be gone.
+        phone.connection.send(.readConversation(agent: "claude", sessionID: "c-9", cwd: project))
+        phone.connection.send(.readConversation(agent: "claude", sessionID: "../../x", cwd: project))
+        waitUntil("not there") { phone.messages.contains(.conversationRead(id: "claude:c-9", details: nil)) && phone.messages.contains(.conversationRead(id: "claude:../../x", details: nil)) }
+
+        // Searched: by what was said, not only by its title.
+        phone.connection.send(.searchHistory(search: 1, path: nil, query: "TOKENIZER"))
+        waitUntil("the search over") { phone.messages.contains(.historySearchEnded(search: 1)) }
+        let hits = phone.messages.flatMap { message -> [HistoryHit] in
+            if case .historyFound(1, let hits) = message { return hits } else { return [] }
+        }
+        XCTAssertEqual(hits.map(\.conversation.sessionID), ["c-1"])
+        XCTAssertEqual(hits.first?.snippet, "The tokenizer is written.")
+
+        // Pinned and hidden: every device is told, and the host keeps it.
+        phone.connection.send(.markConversation(id: "claude:c-1", pinned: true, hidden: nil))
+        phone.connection.send(.markConversation(id: "claude:c-2", pinned: nil, hidden: true))
+        waitUntil("the other device told") { other.messages.contains(.historyMarks(pinned: ["claude:c-1"], hidden: ["claude:c-2"])) }
+        let kept = try Data(contentsOf: home.appendingPathComponent("state/history.json"))
+        XCTAssertTrue(String(decoding: kept, as: UTF8.self).contains("claude:c-1"))
+
+        // Written out as a file of the host's own.
+        phone.connection.send(.exportConversation(agent: "claude", sessionID: "c-1", cwd: project))
+        func exported() -> String? {
+            phone.messages.compactMap { if case .conversationExported("claude:c-1", let path) = $0 { return path } else { return nil } }.last
+        }
+        waitUntil("the transcript written") { exported() != nil }
+        let file = try XCTUnwrap(exported())
+        XCTAssertTrue(file.hasPrefix(home.appendingPathComponent("state/transcripts").path), file)
+        XCTAssertTrue(try String(contentsOfFile: file, encoding: .utf8).contains("## You\n\nwrite the parser"))
+
+        // Older ones: none before the oldest.
+        phone.connection.send(.historyOlder(path: nil, before: .distantPast))
+        waitUntil("no older ones") { phone.messages.contains(.historyOlder(path: nil, conversations: [], more: false)) }
+
+        // Deleted: to the Trash, its pin gone with it, every device told.
+        phone.connection.send(.deleteConversation(agent: "claude", sessionID: "c-1", cwd: project))
+        waitUntil("deleted") { other.messages.contains(.conversationDeleted(id: "claude:c-1")) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("c-1.jsonl").path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: trash.path), ["c-1.jsonl"])
+        waitUntil("its pin gone") { other.messages.last { if case .historyMarks = $0 { return true } else { return false } } == .historyMarks(pinned: [], hidden: ["claude:c-2"]) }
+        phone.connection.send(.deleteConversation(agent: "claude", sessionID: "c-1", cwd: project))
+        waitUntil("gone already") { phone.messages.contains(.error("That conversation is no longer there.")) }
+        phone.connection.send(.history(path: project))
+        waitUntil("no longer listed") {
+            phone.messages.contains { if case .history(project, let list) = $0 { return list.map(\.sessionID) == ["c-2"] } else { return false } }
+        }
     }
 
     func testAClientCanReadHistoryAndOnlyResumeRealConversations() throws {

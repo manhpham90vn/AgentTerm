@@ -34,6 +34,15 @@ struct TerminalScreen: View {
             } label: {
                 Label("Smaller Text", systemImage: "textformat.size.smaller")
             }
+            if let info = model.session(session), model.folders.contains(model.project(ofWorktree: info.cwd) ?? info.cwd) {
+                // The session's folder, on the worktree it runs in (#34).
+                Divider()
+                Button {
+                    model.path.append(.folder(info.cwd))
+                } label: {
+                    Label("Changes, History and Files", systemImage: "square.stack.3d.up")
+                }
+            }
             if let info = model.session(session), model.canHandOff(info) {
                 Divider()
                 Button {

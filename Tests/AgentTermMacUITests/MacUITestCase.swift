@@ -201,7 +201,8 @@ class MacUITestCase: XCTestCase {
 
     /// Small programs under the agents' names. Asked for one answer (`-p`,
     /// `exec`), they give a commit message; started in a terminal, they say
-    /// so and then repeat what they are told, as `cat` does.
+    /// so, write down what they were started with (`agentStarts`), and then
+    /// repeat what they are told, as `cat` does.
     func makeAgents(_ directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for name in ["claude", "codex"] {
@@ -210,6 +211,7 @@ class MacUITestCase: XCTestCase {
                 case " $* " in
                   *" -p "*) cat > /dev/null; echo "feat: written by the stand-in \(name)"; exit 0 ;;
                 esac
+                printf '%s: %s\\n' '\(name)' "$*" >> '\(directory.appendingPathComponent("started").path)'
                 echo "stand-in \(name) started: $*"
                 exec cat
                 """
@@ -217,6 +219,15 @@ class MacUITestCase: XCTestCase {
             try script.write(to: file, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
         }
+    }
+
+    /// What each stand-in agent was started with, a line each, as
+    /// `name: arguments`. Read from a file rather than from its terminal,
+    /// where a long line is wrapped at the pane's width, and a device that
+    /// attaches late is sent the screen as wrapped.
+    func agentStarts() -> [String] {
+        let file = root.appendingPathComponent("agents/started")
+        return ((try? String(contentsOf: file, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
     }
 
     // MARK: The host and the app
@@ -255,13 +266,20 @@ class MacUITestCase: XCTestCase {
         // What the host and the app take for the home folder, and give
         // their sessions as HOME: NSHomeDirectory() follows this, not HOME.
         environment["CFFIXED_USER_HOME"] = home.path
+        // What a test throws away goes here, never into the Trash of the
+        // person running the tests.
+        environment["AGENTTERM_TRASH_DIR"] = home.appendingPathComponent(".Trash-of-the-tests").path
         return environment
     }
+
+    /// What a test has the app started with besides, when it starts it again.
+    var appEnvironment: [String: String] = [:]
 
     /// Starts the app on the test's host. Its preferences are its own too:
     /// with a home of its own it reads and writes none of the real app's.
     func launchApp() throws -> MacDriver {
         var environment = Self.ownHome(home)
+        environment.merge(appEnvironment) { _, own in own }
         environment["AGENTTERM_STATE_DIR"] = state.path
         environment["AGENTTERM_PORT"] = String(appPort)
         // The home the host was given: on its own Mac the app reads

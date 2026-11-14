@@ -33,12 +33,13 @@ final class AgentShellsMCPTests: XCTestCase {
     func testEachToolAsksTheHost() {
         var asked: [AgentShellRequest] = []
         let shell = SessionInfo(id: 7, title: "ssh", cwd: "/p", size: .default, createdAt: Date())
+        let another = SessionInfo(id: 9, title: "dev", cwd: "/q", size: .default, createdAt: Date())
         let server = AgentShellsMCP(
             ask: { request in
                 asked.append(request)
                 switch request {
                 case .open: return .opened(shell)
-                case .list: return .shells([shell])
+                case .list: return .shells([shell, another], own: [7])
                 case .read: return .screen("$ ls\nREADME.md")
                 case .send: return .done
                 case .close(let session): return session == 7 ? .done : .refused("not yours")
@@ -46,7 +47,7 @@ final class AgentShellsMCPTests: XCTestCase {
             }, version: "test")
         XCTAssertEqual(((call(server, "tools/list")["result"] as? [String: Any])?["tools"] as? [[String: Any]])?.count, 6)
         XCTAssertEqual(tool(server, "open_shell", ["command": "ssh build-server", "title": "build"]).text, "Opened shell 7, “ssh”, in /p.")
-        XCTAssertEqual(tool(server, "list_shells").text, "7: ssh, in /p")
+        XCTAssertEqual(tool(server, "list_shells").text, "7: ssh, in /p (yours)\n9: dev, in /q (another agent's: read only)")
         XCTAssertEqual(tool(server, "read_screen", ["session": 7, "lines_above": 20]).text, "$ ls\nREADME.md")
         XCTAssertFalse(tool(server, "send_input", ["session": 7, "text": "ls", "keys": ["Return"]]).failed)
         XCTAssertTrue(tool(server, "close_shell", ["session": 8]).failed)
@@ -73,6 +74,128 @@ final class AgentShellsMCPTests: XCTestCase {
         XCTAssertTrue(late.text.hasPrefix("Still waiting after"), late.text)
     }
 
+    /// MCP-23 (#64): a `wait` that has not ended does not hold the server:
+    /// the same agent reads a screen, types and lists its shells
+    /// meanwhile, and waits on another shell too; each request is answered
+    /// once, under its own id; a `wait` that is cancelled ends without an
+    /// answer.
+    func testAWaitDoesNotHoldUpTheOtherCalls() throws {
+        let lock = NSLock()
+        var asked: [String] = []
+        var screens: [SessionID: String] = [1: "$ make", 2: "$ test"]
+        let server = AgentShellsMCP(
+            ask: { request in
+                lock.lock()
+                defer { lock.unlock() }
+                switch request {
+                case .read(let session, _):
+                    return .screen(screens[session] ?? "")
+                case .send(let session, let text, _):
+                    asked.append("send \(session) \(text ?? "")")
+                    return .done
+                case .list:
+                    asked.append("list")
+                    return .shells([], own: [])
+                default:
+                    return .done
+                }
+            }, version: "test")
+        server.pollInterval = 0.01
+        var replies: [[String: Any]] = []
+        func send(_ id: Any, _ tool: String, _ arguments: [String: Any]) throws {
+            let line = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": id, "method": "tools/call", "params": ["name": tool, "arguments": arguments]])
+            server.handle(String(decoding: line, as: UTF8.self)) { reply in
+                let object = (try? JSONSerialization.jsonObject(with: Data(reply.utf8))) as? [String: Any] ?? [:]
+                lock.lock()
+                replies.append(object)
+                lock.unlock()
+            }
+        }
+        func answered(_ id: Int) -> [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return replies.filter { ($0["id"] as? Int) == id }.compactMap { (($0["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String }
+        }
+        func waitUntil(_ what: String, _ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            while !condition() && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            XCTAssertTrue(condition(), "timed out waiting for: \(what)")
+        }
+
+        // Two waits, each for a text that is not there yet, on two shells.
+        try send(1, "wait", ["session": 1, "until_text": "done", "timeout_seconds": 30])
+        try send(2, "wait", ["session": 2, "until_text": "passed", "timeout_seconds": 30])
+        // Meanwhile the same agent looks, types and lists: answered at once.
+        try send(3, "read_screen", ["session": 1])
+        try send(4, "send_input", ["session": 1, "text": "q"])
+        try send(5, "list_shells", [:])
+        waitUntil("the three answered while both waits go on") { answered(3).count == 1 && answered(4).count == 1 && answered(5).count == 1 }
+        XCTAssertEqual(answered(3), ["$ make"])
+        XCTAssertEqual(answered(1), [], "the first wait has not ended")
+        XCTAssertEqual(answered(2), [])
+        lock.lock()
+        XCTAssertEqual(asked.sorted(), ["list", "send 1 q"])
+        // The second shell says what its wait is for; the first does not yet.
+        screens[2] = "$ test\npassed"
+        lock.unlock()
+        waitUntil("the second wait") { answered(2).count == 1 }
+        XCTAssertTrue(answered(2)[0].hasPrefix("“passed” is on the screen"), answered(2)[0])
+        XCTAssertEqual(answered(1), [])
+
+        // The first is cancelled: it ends, and is not answered, whatever the screen says after.
+        server.handle(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1,"reason":"the user stopped it"}}"#) { _ in XCTFail("a notification is not answered") }
+        Thread.sleep(forTimeInterval: 0.1)
+        lock.lock()
+        screens[1] = "$ make\ndone"
+        lock.unlock()
+        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertEqual(answered(1), [], "a cancelled wait is not answered")
+        // A wait made after it, for the same text, is: the cancelling was of that request only.
+        try send(6, "wait", ["session": 1, "until_text": "done", "timeout_seconds": 30])
+        waitUntil("a later wait") { answered(6).count == 1 }
+        // Cancelling what is over, or was never asked, does nothing.
+        server.handle(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":6}}"#) { _ in XCTFail("a notification is not answered") }
+        server.handle(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"none"}}"#) { _ in XCTFail("a notification is not answered") }
+        try send(7, "list_shells", [:])
+        waitUntil("still answering") { answered(7).count == 1 }
+        lock.lock()
+        XCTAssertEqual(replies.count, 6, "each request answered once, the cancelled one not at all")
+        lock.unlock()
+
+        // What is not a tool call is answered as before, at once.
+        var pinged: String?
+        server.handle(#"{"jsonrpc":"2.0","id":"p","method":"ping"}"#) { pinged = $0 }
+        XCTAssertEqual(pinged, #"{"id":"p","jsonrpc":"2.0","result":{}}"#)
+    }
+
+    /// MCP-14: a session's variable names the build whose host it is, and
+    /// only that build's server takes it as its own.
+    func testAServerTakesOnlyASessionOfItsOwnBuild() {
+        let session = AgentShellsMCP.Session(port: 7718, key: "key", useShells: true)
+        XCTAssertEqual(session.variable(channel: .dev), "7718 key dev use")
+        XCTAssertEqual(AgentShellsMCP.Session(port: 7717, key: "key", useShells: false).variable(channel: .release), "7717 key release")
+        XCTAssertEqual(AgentShellsMCP.Session(variable: "7718 key dev use", channel: .dev), session)
+        XCTAssertNil(AgentShellsMCP.Session(variable: "7718 key dev use", channel: .release), "the dev build's session is not the released server's")
+        XCTAssertNil(AgentShellsMCP.Session(variable: "7717 key release", channel: .dev), "nor the released build's the dev server's")
+        XCTAssertEqual(AgentShellsMCP.Session(variable: "7717 key release", channel: .release)?.useShells, false)
+        // From a host before the builds had a server each: the released one's.
+        XCTAssertEqual(AgentShellsMCP.Session(variable: "7717 key use", channel: .release), AgentShellsMCP.Session(port: 7717, key: "key", useShells: true))
+        XCTAssertNil(AgentShellsMCP.Session(variable: "7717 key use", channel: .dev))
+        XCTAssertNil(AgentShellsMCP.Session(variable: nil, channel: .dev))
+        XCTAssertNil(AgentShellsMCP.Session(variable: "nothing", channel: .dev))
+    }
+
+    /// MCP-14: the server and its instructions go by the build's name.
+    func testTheServerGoesByItsBuildsName() {
+        let server = AgentShellsMCP(ask: { _ in .done }, name: "agentterm-dev", version: "test", useShells: true)
+        let initialized = call(server, "initialize")["result"] as? [String: Any]
+        XCTAssertEqual((initialized?["serverInfo"] as? [String: Any])?["name"] as? String, "agentterm-dev")
+        XCTAssertTrue((initialized?["instructions"] as? String ?? "").contains("the agentterm-dev MCP server"))
+        XCTAssertTrue(AgentShellsInstructions.useShells(server: "agentterm").contains("the agentterm MCP server"))
+        XCTAssertEqual(AppChannel.release.mcpServerName, "agentterm")
+        XCTAssertEqual(AppChannel.dev.mcpServerName, "agentterm-dev")
+    }
+
     func testKeysByName() {
         XCTAssertEqual(TerminalKeys.bytes(for: "Return"), "\r")
         XCTAssertEqual(TerminalKeys.bytes(for: "Control C"), "\u{03}")
@@ -94,7 +217,7 @@ final class AgentShellsInstallTests: XCTestCase {
             AgentInfo(id: "agy", name: "Antigravity", path: nil),
         ]
         func install(_ tool: String) -> AgentShellsInstall {
-            AgentShellsInstall(directory: root, tool: tool) {
+            AgentShellsInstall(directory: root, tool: tool, name: "agentterm") {
                 ran.append($0); return true
             }
         }
@@ -129,6 +252,150 @@ final class AgentShellsInstallTests: XCTestCase {
     }
 }
 
+/// MCP-19: an agent the server cannot be installed in is told to the apps,
+/// which warn of it (#58), until it could be.
+final class AgentShellsFaultTests: XCTestCase {
+    func testAnAgentTheServerCouldNotBeInstalledInIsToldToTheApps() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-fault-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let agents = [AgentInfo(id: "claude", name: "Claude Code", path: "/a/claude"), AgentInfo(id: "codex", name: "Codex", path: "/a/codex")]
+        // Codex refuses, until it is put right.
+        var codexWorks = false
+        let token = "test-token-0123456789abcdef0123456789"
+        var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, detectAgents: { agents })
+        configuration.foldersFile = root.appendingPathComponent("state/folders.json")
+        configuration.agentShells = AgentShellsInstall(directory: root.appendingPathComponent("state"), tool: "/usr/bin/true", name: "agentterm") {
+            $0.first != "/a/codex" || codexWorks
+        }
+        let server = HostServer(configuration: configuration)
+        let port = try server.start()
+        defer { server.stop() }
+        let client = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "mac")
+        var told: [[AgentShellsFault]] = []
+        client.onMessage = { if case .agentShellsFaults(let list) = $0 { told.append(list) } }
+        client.connect()
+        func spin(until condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(15)
+            while !condition() && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        }
+        spin { told.last == [AgentShellsFault(cause: .install, agents: ["Codex"])] }
+        XCTAssertEqual(told.last, [AgentShellsFault(cause: .install, agents: ["Codex"])])
+
+        // Turned off and on, as the warning says: it is tried again.
+        codexWorks = true
+        client.send(.setAgentShells(false))
+        client.send(.setAgentShells(true))
+        spin { told.last == [] }
+        XCTAssertEqual(told.last, [])
+    }
+
+    /// An agent that refuses the name because it has it already gets this
+    /// build's own in its place.
+    func testANameTheAgentAlreadyHasIsReplacedByThisBuildsOwn() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-fault-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        var ran: [[String]] = []
+        var has = true
+        let install = AgentShellsInstall(directory: root, tool: "/Apps/AgentTerm.app/agenttermd", name: "agentterm") { arguments in
+            ran.append(arguments)
+            if arguments.contains("remove") { has = false; return true }
+            return !has
+        }
+        let claude = AgentInfo(id: "claude", name: "Claude Code", path: "/a/claude")
+        XCTAssertEqual(install.ensure(agents: [claude]), [])
+        let add = ["/a/claude", "mcp", "add", "--scope", "user", "agentterm", "--", "/Apps/AgentTerm.app/agenttermd", "mcp"]
+        XCTAssertEqual(ran, [add, ["/a/claude", "mcp", "remove", "--scope", "user", "agentterm"], add])
+        ran = []
+        XCTAssertEqual(install.ensure(agents: [claude]), [], "recorded: not asked again")
+        XCTAssertEqual(ran, [])
+        // One that cannot be added at all is said to have failed.
+        let never = AgentShellsInstall(directory: root.appendingPathComponent("never"), tool: "/x", name: "agentterm") { _ in false }
+        XCTAssertEqual(never.ensure(agents: [claude]), [claude])
+    }
+}
+
+/// MCP-15: a released build and a development build each install a server
+/// under a name of their own, and neither touches the other's (#57).
+final class AgentShellsBuildsTests: XCTestCase {
+    func testEachBuildInstallsItsOwnServerAndLeavesTheOthers() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-builds-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        var ran: [[String]] = []
+        let agents = [AgentInfo(id: "claude", name: "Claude Code", path: "/a/claude"), AgentInfo(id: "codex", name: "Codex", path: "/a/codex")]
+        let released = AgentShellsInstall(directory: root.appendingPathComponent("AgentTerm"), tool: "/Apps/AgentTerm.app/agenttermd", name: "agentterm") {
+            ran.append($0); return true
+        }
+        // A development build from before, which installed under the name
+        // every build shared and recorded it as its own.
+        let devState = root.appendingPathComponent("AgentTerm Dev")
+        try FileManager.default.createDirectory(at: devState, withIntermediateDirectories: true)
+        try #"{"installed":{"claude":"/dist/AgentTerm Dev.app/agenttermd","codex":"/dist/AgentTerm Dev.app/agenttermd"}}"#.write(
+            to: devState.appendingPathComponent("agent-shells.json"), atomically: true, encoding: .utf8)
+        func dev() -> AgentShellsInstall {
+            AgentShellsInstall(directory: devState, tool: "/dist/AgentTerm Dev.app/agenttermd", name: "agentterm-dev") {
+                ran.append($0); return true
+            }
+        }
+
+        released.ensure(agents: agents)
+        dev().ensure(agents: agents)
+        XCTAssertEqual(
+            ran,
+            [
+                ["/a/claude", "mcp", "add", "--scope", "user", "agentterm", "--", "/Apps/AgentTerm.app/agenttermd", "mcp"],
+                ["/a/codex", "mcp", "add", "agentterm", "--", "/Apps/AgentTerm.app/agenttermd", "mcp"],
+                ["/a/claude", "mcp", "add", "--scope", "user", "agentterm-dev", "--", "/dist/AgentTerm Dev.app/agenttermd", "mcp"],
+                ["/a/codex", "mcp", "add", "agentterm-dev", "--", "/dist/AgentTerm Dev.app/agenttermd", "mcp"],
+            ], "each under its own name; the shared name is not removed by the build that used to hold it")
+
+        // Both installed: neither is asked again, whichever ran last.
+        ran = []
+        released.ensure(agents: agents)
+        dev().ensure(agents: agents)
+        XCTAssertEqual(ran, [])
+
+        // The development build turned off removes its own only.
+        dev().set(on: false, agents: agents)
+        XCTAssertEqual(ran, [["/a/claude", "mcp", "remove", "--scope", "user", "agentterm-dev"], ["/a/codex", "mcp", "remove", "agentterm-dev"]])
+        ran = []
+        released.ensure(agents: agents)
+        XCTAssertEqual(ran, [], "the released build's is still there")
+    }
+
+    /// Codex is told to pass the session's variable to this build's server.
+    func testCodexPassesTheVariableToTheServerOfEachName() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-builds-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let config = root.appendingPathComponent("config.toml")
+        try """
+        [mcp_servers.agentterm]
+        command = "/Apps/AgentTerm.app/agenttermd"
+        args = ["mcp"]
+
+        [mcp_servers.agentterm-dev]
+        command = "/dist/AgentTerm Dev.app/agenttermd"
+        args = ["mcp"]
+
+        """.write(to: config, atomically: true, encoding: .utf8)
+        AgentShellsInstall(directory: root.appendingPathComponent("state"), tool: "/dist/AgentTerm Dev.app/agenttermd", name: "agentterm-dev", codexConfig: config) { _ in true }
+            .ensure(agents: [AgentInfo(id: "codex", name: "Codex", path: "/a/codex")])
+        XCTAssertEqual(
+            try String(contentsOf: config, encoding: .utf8),
+            """
+            [mcp_servers.agentterm]
+            command = "/Apps/AgentTerm.app/agenttermd"
+            args = ["mcp"]
+
+            [mcp_servers.agentterm-dev]
+            env_vars = ["AGENTTERM_MCP"]
+            command = "/dist/AgentTerm Dev.app/agenttermd"
+            args = ["mcp"]
+
+            """)
+    }
+}
+
 /// MCP-11: Codex gives an MCP server only the variables it is told to, and
 /// without the session's the server offers no tools: it is told to.
 final class AgentShellsCodexTests: XCTestCase {
@@ -157,7 +424,7 @@ final class AgentShellsCodexTests: XCTestCase {
         """
 
     private func install(run: @escaping AgentShellsInstall.Run) -> AgentShellsInstall {
-        AgentShellsInstall(directory: root.appendingPathComponent("state"), tool: "/Apps/AgentTerm.app/agenttermd", codexConfig: config, run: run)
+        AgentShellsInstall(directory: root.appendingPathComponent("state"), tool: "/Apps/AgentTerm.app/agenttermd", name: "agentterm", codexConfig: config, run: run)
     }
 
     private let codex = AgentInfo(id: "codex", name: "Codex", path: "/a/codex")
@@ -261,6 +528,28 @@ final class AgentShellsHostTests: XCTestCase {
             let result = answer?["result"] as? [String: Any] ?? [:]
             return ((result["content"] as? [[String: Any]])?.first?["text"] as? String ?? "", result["isError"] as? Bool ?? true)
         }
+
+        /// Calls a tool and does not wait for its answer: its request's id.
+        func begin(_ name: String, _ arguments: [String: Any] = [:]) throws -> Int {
+            next += 1
+            let request: [String: Any] = ["jsonrpc": "2.0", "id": next, "method": "tools/call", "params": ["name": name, "arguments": arguments]]
+            try input.write(contentsOf: try JSONSerialization.data(withJSONObject: request) + Data("\n".utf8))
+            return next
+        }
+
+        /// Says something that is not answered.
+        func notify(_ method: String, _ params: [String: Any]) throws {
+            try input.write(contentsOf: try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "method": method, "params": params]) + Data("\n".utf8))
+        }
+
+        /// What the server answered a request with, each time it did; the
+        /// text of each answer.
+        func answers(to id: Int) -> [String] {
+            let text = (try? String(contentsOf: output, encoding: .utf8)) ?? ""
+            return text.split(separator: "\n").compactMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
+                .filter { ($0["id"] as? Int) == id }
+                .map { ((($0["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String) ?? "" }
+        }
     }
 
     private var root: URL!
@@ -321,7 +610,219 @@ final class AgentShellsHostTests: XCTestCase {
         return (Agent(input: try FileHandle(forWritingTo: pipe), output: output), id)
     }
 
-    func testAnAgentOpensAShellTheUserSeesThatEveryAgentShares() throws {
+    /// Starts the real `agenttermd mcp` with `variable` as its session's,
+    /// says `request` to it, and gives its answer and how long it took.
+    private func said(to request: [String: Any], variable: String, state: URL? = nil) throws -> (answer: [String: Any], took: TimeInterval) {
+        let process = Process()
+        process.executableURL = tool
+        process.arguments = ["mcp"]
+        var environment = ProcessInfo.processInfo.environment
+        environment[HostServer.agentShellsVariable] = variable
+        if let state { environment["AGENTTERM_STATE_DIR"] = state.path }
+        process.environment = environment
+        let input = Pipe(), output = Pipe()
+        process.standardInput = input
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        var line = request
+        line["jsonrpc"] = "2.0"
+        line["id"] = 1
+        let started = Date()
+        try process.run()
+        defer { process.terminate() }
+        try input.fileHandleForWriting.write(contentsOf: try JSONSerialization.data(withJSONObject: line) + Data("\n".utf8))
+        // Read off the main thread, which the host under test answers on.
+        var read: Data?
+        DispatchQueue.global().async {
+            let data = output.fileHandleForReading.availableData
+            DispatchQueue.main.async { read = data }
+        }
+        waitUntil("the MCP server's answer", timeout: 40) { read != nil }
+        let took = Date().timeIntervalSince(started)
+        try input.fileHandleForWriting.close()
+        let reply = try JSONSerialization.jsonObject(with: read ?? Data()) as? [String: Any]
+        return (try XCTUnwrap(reply?["result"] as? [String: Any]), took)
+    }
+
+    private func toolsOffered(variable: String) throws -> Int {
+        try XCTUnwrap((try said(to: ["method": "tools/list"], variable: variable).answer["tools"] as? [Any])?.count)
+    }
+
+    /// Calls `list_shells` through a server started with `variable`.
+    private func listShells(variable: String, state: URL? = nil) throws -> (text: String, failed: Bool, took: TimeInterval) {
+        let (result, took) = try said(to: ["method": "tools/call", "params": ["name": "list_shells", "arguments": [:]]], variable: variable, state: state)
+        return ((result["content"] as? [[String: Any]])?.first?["text"] as? String ?? "", result["isError"] as? Bool ?? false, took)
+    }
+
+    /// MCP-17: an agent whose server cannot reach its host is told at once,
+    /// and why, instead of waiting fifteen seconds for one fixed sentence
+    /// (#58).
+    func testAnAgentIsToldAtOnceThatItsHostIsNotRunning() throws {
+        // A port nothing listens on: the host's own, once it has stopped.
+        let gone = port
+        server.stop()
+        server = nil
+        let told = try listShells(variable: AgentShellsMCP.Session(port: gone, key: "a-key", useShells: false).variable())
+        XCTAssertTrue(told.failed)
+        XCTAssertTrue(told.text.hasPrefix("AgentTerm's host is not running on port \(gone)"), told.text)
+        XCTAssertLessThan(told.took, 8, "told at once, not after the fifteen seconds a silent host is given")
+    }
+
+    /// MCP-18: a server the host refuses says so to its agent, and the host
+    /// tells the apps, which warn of it, until a server signs in again.
+    func testAServerThatIsRefusedTellsItsAgentAndTheApps() throws {
+        let mac = Client(port: port, token: token)
+        waitUntil("connected") { !mac.messages.isEmpty }
+        func faults() -> [AgentShellsFault]? {
+            mac.messages.compactMap { if case .agentShellsFaults(let list) = $0 { return list } else { return nil } }.last
+        }
+        // Another copy's state folder, with a token of its own.
+        let other = root.appendingPathComponent("other-state")
+        try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+        try "another-token-0123456789abcdef0123456789".write(to: other.appendingPathComponent("token"), atomically: true, encoding: .utf8)
+        let variable = AgentShellsMCP.Session(port: port, key: "a-key", useShells: false).variable()
+        let told = try listShells(variable: variable, state: other)
+        XCTAssertTrue(told.failed)
+        XCTAssertTrue(told.text.hasPrefix("AgentTerm's host refused this server's sign-in"), told.text)
+        XCTAssertLessThan(told.took, 8)
+        waitUntil("the apps to be told") { faults() == [AgentShellsFault(cause: .signIn)] }
+
+        // A server with the host's own token: answered, and the warning goes.
+        let answered = try listShells(variable: variable)
+        XCTAssertEqual(answered.text, "This is not the session of an agent AgentTerm started, or that session has ended.")
+        waitUntil("the warning to go") { faults() == [] }
+    }
+
+    /// MCP-16: with both builds installed, an agent has two servers of
+    /// AgentTerm. The one of the session's own build offers the tools; the
+    /// other build's offers none, and does not sign in to a host that is
+    /// not its own (#57).
+    func testInASessionOnlyItsOwnBuildsServerOffersTools() throws {
+        XCTAssertEqual(try toolsOffered(variable: AgentShellsMCP.Session(port: port, key: "a-key", useShells: false).variable()), 6, "its own build's session")
+        let other: AppChannel = AppChannel.current == .dev ? .release : .dev
+        XCTAssertEqual(
+            try toolsOffered(variable: AgentShellsMCP.Session(port: port, key: "a-key", useShells: false).variable(channel: other)), 0,
+            "a session of the other build")
+    }
+
+    /// MCP-24 (#64): the real server, in an agent's session, with a `wait`
+    /// going on in a shell: the agent types into that shell and reads it
+    /// meanwhile, answered at once, and what it typed ends the wait; a
+    /// second wait is cancelled and never answered.
+    func testTheRealServerAnswersWhileAWaitGoesOn() throws {
+        let mac = Client(port: port, token: token)
+        waitUntil("connected") { !mac.messages.isEmpty }
+        let (agent, _) = try startAgent("claude", title: "waiting", client: mac)
+        let opened = agent.tool("open_shell", ["command": "cat", "title": "echo"], in: self)
+        XCTAssertFalse(opened.failed, opened.text)
+        waitUntil("the shell") { mac.sessions.contains { $0.title == "echo" } }
+        let shell = try XCTUnwrap(mac.sessions.first { $0.title == "echo" }?.id)
+
+        // Waits for a line nobody has typed yet.
+        let waiting = try agent.begin("wait", ["session": shell, "until_text": "finished", "timeout_seconds": 60])
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(agent.answers(to: waiting), [])
+        // Meanwhile: read, list, and type, each answered while the wait goes on.
+        let started = Date()
+        XCTAssertFalse(agent.tool("read_screen", ["session": shell], in: self).failed)
+        XCTAssertTrue(agent.tool("list_shells", in: self).text.contains("echo"))
+        XCTAssertFalse(agent.tool("send_input", ["session": shell, "text": "finished", "keys": ["Return"]], in: self).failed)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 10, "not held up until the wait's minute is over")
+        // What it typed is what the wait was for.
+        waitUntil("the wait to end") { agent.answers(to: waiting).count == 1 }
+        XCTAssertTrue(agent.answers(to: waiting)[0].hasPrefix("“finished” is on the screen"))
+
+        // A wait that is cancelled ends without an answer; the server goes on answering.
+        let dropped = try agent.begin("wait", ["session": shell, "until_text": "never typed", "timeout_seconds": 60])
+        Thread.sleep(forTimeInterval: 0.3)
+        try agent.notify("notifications/cancelled", ["requestId": dropped, "reason": "stopped"])
+        XCTAssertFalse(agent.tool("send_input", ["session": shell, "text": "never typed", "keys": ["Return"]], in: self).failed)
+        Thread.sleep(forTimeInterval: 0.8)
+        XCTAssertEqual(agent.answers(to: dropped), [], "a cancelled wait is not answered, though its text came")
+        XCTAssertEqual(agent.answers(to: waiting).count, 1, "answered once")
+    }
+
+    /// MCP-26 (#63): a shell an agent opened connects on a device as fast
+    /// as a session the user started, with the lines above its screen,
+    /// also while its agent waits on it, reading its screen all the time.
+    func testAnAgentsShellConnectsAsFastAsAnyOtherAlsoWhileItsAgentWaits() throws {
+        let mac = Client(port: port, token: token)
+        waitUntil("connected") { !mac.messages.isEmpty }
+        let (agent, _) = try startAgent("claude", title: "busy", client: mac)
+        // Three thousand lines, and then a program that waits: in a shell
+        // the agent opened, and in a session the user started.
+        let lines = "sh -c 'seq 1 3000; exec cat'"
+        XCTAssertFalse(agent.tool("open_shell", ["command": lines, "title": "the agent's"], in: self).failed)
+        mac.connection.send(.create(CreateRequest(command: lines, cwd: root.path, title: "the user's")))
+        waitUntil("both") { mac.sessions.contains { $0.title == "the agent's" } && mac.sessions.contains { $0.title == "the user's" } }
+        let shell = try XCTUnwrap(mac.sessions.first { $0.title == "the agent's" }?.id)
+        let own = try XCTUnwrap(mac.sessions.first { $0.title == "the user's" }?.id)
+        XCTAssertTrue(agent.tool("wait", ["session": shell, "until_text": "3000", "timeout_seconds": 20], in: self).text.contains("3000"))
+        XCTAssertTrue(agent.tool("read_screen", ["session": own], in: self).failed, "the user's session is not the agent's to read")
+        Thread.sleep(forTimeInterval: 0.5)
+
+        /// A device that opens a session with 500 of the lines above its
+        /// screen: how long until its screen is there, and what came.
+        func open(_ session: SessionID) -> (took: TimeInterval, text: String) {
+            let device = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "phone")
+            var welcomed = false
+            var text = ""
+            device.onMessage = { if case .welcome = $0 { welcomed = true } }
+            device.onOutput = { id, data in if id == session { text += String(decoding: data, as: UTF8.self) } }
+            device.connect()
+            waitUntil("the device connected") { welcomed }
+            let started = Date()
+            device.send(.attach(session: session, size: TermSize(cols: 60, rows: 30), history: 500))
+            waitUntil("its screen", timeout: 30) { text.contains("3000") }
+            let took = Date().timeIntervalSince(started)
+            device.close()
+            return (took, text)
+        }
+
+        let users = open(own)
+        let idle = open(shell)
+        // Its agent waits on it, for a text that does not come.
+        let waiting = try agent.begin("wait", ["session": shell, "until_text": "never there", "timeout_seconds": 60])
+        Thread.sleep(forTimeInterval: 0.6)
+        let busy = open(shell)
+        XCTAssertEqual(agent.answers(to: waiting), [], "still waiting")
+        try agent.notify("notifications/cancelled", ["requestId": waiting])
+        print(
+            String(
+                format: "MEASURE a session of 3,000 lines opened on a device: the user's %.0f ms, an agent's shell %.0f ms, the same while its agent waits %.0f ms", users.took * 1000,
+                idle.took * 1000, busy.took * 1000))
+
+        // The lines above the screen came with it, each time.
+        for opened in [users, idle, busy] {
+            XCTAssertTrue(opened.text.contains("2600"), "a line above the screen is missing")
+            XCTAssertFalse(opened.text.contains("\r\n2400\r\n"), "more than the 500 lines asked for")
+        }
+        // As fast as any other: not slower than the user's by more than half a second.
+        XCTAssertLessThan(idle.took, users.took + 0.5)
+        XCTAssertLessThan(busy.took, users.took + 0.5)
+
+        // A program that clears the lines above its screen itself, as zsh's
+        // `clear` does (ESC [ 3 J): those lines are gone on the host, for
+        // every device, and that is the program's doing.
+        let cleared = "sh -c 'seq 1 3000; printf \"\\033[3J\\033[H\\033[2J\"; echo after-the-clear; exec cat'"
+        XCTAssertFalse(agent.tool("open_shell", ["command": cleared, "title": "cleared"], in: self).failed)
+        waitUntil("the cleared shell") { mac.sessions.contains { $0.title == "cleared" } }
+        let wiped = try XCTUnwrap(mac.sessions.first { $0.title == "cleared" }?.id)
+        XCTAssertTrue(agent.tool("wait", ["session": wiped, "until_text": "after-the-clear", "timeout_seconds": 20], in: self).text.contains("after-the-clear"))
+        let device = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "phone")
+        var text = ""
+        var welcomed = false
+        device.onMessage = { if case .welcome = $0 { welcomed = true } }
+        device.onOutput = { id, data in if id == wiped { text += String(decoding: data, as: UTF8.self) } }
+        device.connect()
+        waitUntil("connected") { welcomed }
+        device.send(.attach(session: wiped, size: TermSize(cols: 60, rows: 30), history: 500))
+        waitUntil("its screen") { text.contains("after-the-clear") }
+        XCTAssertFalse(text.contains("2600"), "the program cleared them: they are not kept behind its back")
+        device.close()
+    }
+
+    func testAnAgentOpensAShellOfItsOwnThatOtherAgentsOnlyRead() throws {
         let mac = Client(port: port, token: token)
         waitUntil("connected") { !mac.messages.isEmpty }
         let (first, firstID) = try startAgent("claude", title: "first", client: mac)
@@ -337,7 +838,7 @@ final class AgentShellsHostTests: XCTestCase {
         let shell = try XCTUnwrap(mac.sessions.first { $0.title == "echo" })
         XCTAssertEqual(shell.openedBy, firstID)
         XCTAssertEqual(shell.cwd, root.appendingPathComponent("first").path)
-        XCTAssertEqual(first.tool("list_shells", in: self).text, "\(shell.id): echo, in \(shell.cwd)")
+        XCTAssertEqual(first.tool("list_shells", in: self).text, "\(shell.id): echo, in \(shell.cwd) (yours)")
         // MCP-12: the agent's server only asks; it is not a device looking
         // at the shell. The Mac that shows it is the one whose size it takes.
         mac.connection.send(.attach(session: shell.id, size: TermSize(cols: 120, rows: 40)))
@@ -360,11 +861,26 @@ final class AgentShellsHostTests: XCTestCase {
         XCTAssertTrue(first.tool("read_screen", ["session": mine], in: self).failed)
         XCTAssertTrue(first.tool("send_input", ["session": mine, "text": "rm -rf ~"], in: self).failed)
         XCTAssertTrue(second.tool("read_screen", ["session": firstID], in: self).failed)
-        // But the shells agents opened are every agent's: the second uses
-        // the first's rather than open one of its own.
-        XCTAssertEqual(second.tool("list_shells", in: self).text, "\(shell.id): echo, in \(shell.cwd)")
-        XCTAssertFalse(second.tool("send_input", ["session": shell.id, "text": "again", "keys": ["Return"]], in: self).failed)
-        XCTAssertTrue(second.tool("wait", ["session": shell.id, "until_text": "again", "timeout_seconds": 10], in: self).text.hasPrefix("“again”"))
+        // MCP-20: a shell is its agent's alone to type into and to close
+        // (#61). Another agent sees whose it is, and may read it.
+        XCTAssertEqual(second.tool("list_shells", in: self).text, "\(shell.id): echo, in \(shell.cwd) (another agent's: read only)")
+        XCTAssertTrue(second.tool("read_screen", ["session": shell.id], in: self).text.contains("hello"))
+        let typed = second.tool("send_input", ["session": shell.id, "text": "again", "keys": ["Return"]], in: self)
+        XCTAssertTrue(typed.failed)
+        XCTAssertTrue(typed.text.contains("opened by another agent") && typed.text.contains("open_shell"), typed.text)
+        XCTAssertTrue(second.tool("close_shell", ["session": shell.id], in: self).failed)
+        // Nothing of it reached the program, and the shell still runs.
+        XCTAssertTrue(second.tool("wait", ["session": shell.id, "quiet_seconds": 0.5, "timeout_seconds": 5], in: self).text.contains("hello"))
+        XCTAssertFalse(first.tool("read_screen", ["session": shell.id], in: self).text.contains("again"))
+        XCTAssertTrue(mac.sessions.contains { $0.id == shell.id })
+        // It opens one of its own instead, which the first only reads.
+        XCTAssertFalse(second.tool("open_shell", ["command": "cat", "title": "other"], in: self).failed)
+        waitUntil("the second's shell") { mac.sessions.contains { $0.title == "other" } }
+        let other = try XCTUnwrap(mac.sessions.first { $0.title == "other" })
+        XCTAssertFalse(second.tool("send_input", ["session": other.id, "text": "mine", "keys": ["Return"]], in: self).failed)
+        XCTAssertTrue(first.tool("send_input", ["session": other.id, "text": "no"], in: self).failed)
+        XCTAssertFalse(second.tool("close_shell", ["session": other.id], in: self).failed)
+        waitUntil("the second's shell to be closed", timeout: 15) { !mac.sessions.contains { $0.id == other.id } }
 
         // MCP-7: starting an agent is refused.
         let agent = first.tool("open_shell", ["command": "claude --resume x"], in: self)
@@ -377,11 +893,17 @@ final class AgentShellsHostTests: XCTestCase {
         XCTAssertTrue(mac.sessions.contains { $0.id == shell.id }, "its shell stays")
         // Its MCP server ended with it, as an agent's does.
 
-        // The others still use it, and any of them closes it.
+        // It is nobody's now: every agent still reads it, none types into
+        // it or closes it, and nothing takes it over. The user ends it.
         let (third, _) = try startAgent("copilot", title: "third", client: mac)
-        XCTAssertTrue(third.tool("list_shells", in: self).text.contains("\(shell.id): echo"))
-        XCTAssertFalse(second.tool("close_shell", ["session": shell.id], in: self).failed)
-        waitUntil("the shell to be closed", timeout: 15) { !mac.sessions.contains { $0.id == shell.id } }
+        XCTAssertEqual(third.tool("list_shells", in: self).text, "\(shell.id): echo, in \(shell.cwd) (another agent's: read only)")
+        XCTAssertTrue(third.tool("read_screen", ["session": shell.id], in: self).text.contains("hello"))
+        XCTAssertTrue(third.tool("send_input", ["session": shell.id, "text": "taken"], in: self).failed)
+        XCTAssertTrue(second.tool("close_shell", ["session": shell.id], in: self).failed)
+        XCTAssertTrue(mac.sessions.contains { $0.id == shell.id })
+        XCTAssertEqual(shell.openedByName(among: mac.sessions), "an agent that has ended")
+        mac.connection.send(.kill(session: shell.id))
+        waitUntil("the shell to be ended by the user", timeout: 15) { !mac.sessions.contains { $0.id == shell.id } }
         XCTAssertEqual(third.tool("list_shells", in: self).text, "No agent has a shell open.")
     }
 }

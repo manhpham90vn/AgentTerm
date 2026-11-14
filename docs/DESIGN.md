@@ -216,7 +216,20 @@ Client to host:
 | `addFolder(path)` / `removeFolder(path)` | Change the shared folder list. |
 | `diff(path)` / `diffFile(path, file, staged)` | A folder's uncommitted changes without the diffs, then one file's diff: its staged part, or what is only in the working tree. |
 | `gitStage(path, files)` / `gitUnstage(path, files)` / `gitCommit(path, message)` | Change what the next commit contains (no files means all), and commit it. Answered with `diff`, after an `error` carrying git's words if it failed. |
-| `gitPush(path)` / `gitPull(path)` | Push the checked out branch, or bring in what its upstream has. Answered the same way, then with `gitSynced(path)`: a `diff` alone may answer something asked while git was still at work. |
+| `gitDiscard(path, files)` | Throw away changes that are not staged (no files means all): `git restore --worktree` for what git tracks, the Trash for what it does not (`GitActions.discard`, `FileBrowser.trash`). Answered as `gitStage` is. The apps ask first, in the words of `DiscardQuestion`. |
+| `gitBranches(path)` | The repository's branches, its own first and the checked out one before the rest, then its remotes' (`GitActions.branches`, one `git for-each-ref`). Answered with `gitBranches(path, branches)`. |
+| `gitSwitch(path, branch)` / `gitCreateBranch(path, name, from, checkout)` / `gitRenameBranch(path, from, to)` / `gitDeleteBranch(path, name, force)` | Change the branches (#35). Answered with an `error` carrying what git said if it refused, then `gitBranches` and `diff`. A branch with commits of its own is deleted only with `force`: the apps ask twice before they send it (`DeleteBranchQuestion`). |
+| `gitResolve(path, file, take)` / `gitContinue(path)` / `gitAbort(path)` | While a merge, rebase, cherry-pick or revert is stopped on conflicts (#42). `diff` says so: `DiffSnapshot.operation`, from what git keeps in its own folder meanwhile, and the files that conflict first, each a `FileDiff` with `conflict` (git's two letters) and the file as it is against both sides. A side is taken with `git checkout --ours/--theirs` and `git add`, or `git rm` where that side has no such file; "edited" is `git add`, refused while a marker is in the file. Continue runs the operation's own `--continue` with no editor; a pull, a revert or a pick that stops is no longer aborted by the host. |
+| Submodules (#44) | No message of their own. `DiffSnapshot.submodules` holds, for each submodule `git status` says has modified or untracked files inside (`S.M.`, `S..U`), its path and a `DiffSnapshot` of its own, read by the same code in the submodule's folder, so one inside another nests. The folder's own diff is run with `--ignore-submodules=dirty`: a submodule is among `files` only when its commit moved, marked `isSubmodule`. The apps act inside a submodule with the ordinary messages and the submodule's folder as `path`; the host then forgets what it kept of every folder around that path, and a client that is answered for a submodule's folder asks for the folder around it again. Discarding a submodule's row runs `git submodule update --init` for it. `GitWorktrees.checkOutSubmodules` runs `git submodule update --init --recursive` in a new worktree that has a `.gitmodules`. |
+| `gitApplyPart(path, file, patch, use)` | One hunk of a file's diff, or lines of one, staged, unstaged or discarded (#40). The app takes the diff apart and puts the part together as a patch (`PatchParts`): lines left out read as what the side the patch is applied to holds. The host applies it with `git apply`, `--cached` for the index and `--reverse` to take it out, after `git add --intent-to-add` for a file git does not track. Answered as `gitStage` is. |
+| `gitLastCommit(path)` / `gitAmend(path, message)` / `gitUndoCommit(path)` | The commit the checked out branch is at, with its whole message and whether a remote has it (`gitLastCommit(path, last)`); `git commit --amend` with what is staged; `git reset --soft HEAD~1`, or the branch unborn again for the first commit (#41). The apps amend through their commit box, and ask before undoing, twice for a commit that is pushed (`RewriteCommitQuestion`). Answered as `gitPush` is. |
+| `gitStashes(path)` / `gitStash(path, message, untracked)` / `gitStashShow(path, hash)` / `gitStashApply(path, hash, pop)` / `gitStashDrop(path, hash)` | The stash (#38). A stash is named by the hash of the commit git keeps it as, not by its place (`stash@{1}`), which moves when another is dropped: the host looks its place up each time, and says when it is gone. Changes are answered with an `error` carrying what was said, then `gitStashes` and `diff`; `gitStashShow` with the files and their diffs. The apps ask before `gitStashDrop` (`DropStashQuestion`). |
+| `gitLog(path, branch, skip, limit)` | Commits of a branch, the checked out one when none is named, newest first and a page at a time (`GitActions.log`). Answered with `gitLog(path, branch, skip, commits, more)`. The graph beside the list is worked out by the apps from each commit's parents (`CommitGraphRow.rows`). |
+| `gitShow(path, hash)` | A commit's message and what it changed, a merge against its first parent, each file with its diff unless together they pass `GitActions.showLimit`. Answered with `gitShow(path, hash, details)`. |
+| `gitRevert(path, hash)` / `gitCherryPick(path, hash)` | A new commit on the checked out branch that takes the named one back, or makes its change there too. One that conflicts is aborted and says so; a merge is refused, in words. Answered as `gitPush` is. |
+| `gitFetch(path, automatic)` | Ask the remotes for what is new (`git fetch --all --prune`). Answered with `gitFetched(path, problem, automatic)`, then `diff`. The apps send it by themselves every `DisplaySettings.fetchInterval` while a folder's changes are shown and `fetchAutomatically` is on; what an automatic one says when it fails is shown beside the buttons, never in an alert. |
+| `gitForcePushPreview(path)` | What a forced push would overwrite: the host fetches, then lists `HEAD..@{upstream}`. Answered with `gitForcePushPreview(path, upstream, loses)`; the apps ask in the words of `ForcePushQuestion` before they send `gitPush(path, force: true)`, which is `--force-with-lease`. |
+| `gitPush(path, force)` / `gitPull(path, mode)` | Push the checked out branch, or bring in what its upstream has, the way the repository is set up to or by `merge` or `rebase`. Answered the same way, then with `gitSynced(path)`: a `diff` alone may answer something asked while git was still at work. |
 | `writeCommitMessage(path)` / `cancelCommitMessage(path)` | Have an agent write the message for what is staged, or stop it. Answered with `commitMessage(path, message)`, whose message is nil when it was stopped or failed. |
 | `setCommitWriter(settings)` | Which agent writes commit messages, on which model, with which prompt. |
 | `setKeepAwake(on)` / `setKeepAwakeOptions(options)` | Keep the Mac awake while sessions run, and how: the display too, only on power, for how long. |
@@ -224,10 +237,12 @@ Client to host:
 | `setDisplaySettings(settings)` | How things are shown on every device: the temperature's unit, diffs in one panel or two, changes as a list or a tree. The host keeps it in `settings.json` and passes it on as `displaySettings`. A host that keeps none yet sends nil, and the client hands it its own. Each app also writes the values to its own preferences, which is what its views read. |
 | `sshHosts` / `connectSSH(host, size)` | The hosts of the Mac's SSH configuration, and `ssh <host>` in a new session. |
 | `history(path)` | Conversations agents had in a folder, or everywhere when `path` is nil. |
+| `historyOlder(path, before)` / `readConversation(agent, sessionID, cwd)` / `searchHistory(search, path, query)` / `markConversation(id, pinned, hidden)` / `deleteConversation(…)` / `exportConversation(…)` | What History does with the conversations (#46), answered with `historyOlder(path, conversations, more)`, `conversationRead(id, details)`, `historyFound(search, hits)` and `historySearchEnded(search)`, `historyMarks(pinned, hidden)` to every device (and to one that connects), `conversationDeleted(id)` to every device, `conversationExported(id, path)`. The host does all of it, for the Mac it runs on too, so that every device shows the same. A conversation is named by its agent, its id and its folder and looked up among the agents' own files (`AgentHistory.conversation`), never taken as a path from a client. `AgentHistory.details` reads a file line by line into `ConversationDetails`: entries (user, agent, tool), first and last time, model, tokens, branch, files written; how each agent writes these was read from the files of the versions in use on 2026-11-14 (Claude Code 2.1, Codex CLI 0.169, Copilot CLI 1.0.112, Antigravity CLI). `AgentHistory.search` looks first at the file's bytes and reads a file as a conversation only when they hold the words. Pins and hidden ones are kept in `history.json`; a transcript is written to `transcripts/` in the host's own folder. Filtering and grouping are `HistoryFilter` in `AgentTermProtocol`, which both apps apply to what was listed. |
 | `resume(agent, sessionID, cwd, size)` | Reopen a conversation in its agent, in a new session. |
 | `handoffPlan(agent)` | What the receiving agent would be told, to show it before handing off. |
 | `handoff(agent, sessionID, cwd, target, plan, prompt, note, size)` | Hand a conversation to another agent, in a new session. |
 | `files(path)` / `readFile(path)` / `writeFile(path, text)` | A folder's files, what a file holds, and saving it. |
+| `findFiles(search, path, query)` / `findText(search, path, query, caseSensitive)` / `stopSearch(search)` | Searching a folder's files (#45), answered with `filesFound(search, files, among)`, and with any number of `textFound(search, matches)` and one `searchEnded(search, truncated, problem)`. `search` is a number the client picks, so an answer to what was typed before is told from the answer to what is typed now. `FileSearch` (host) does it: the files are `git ls-files --stage` and `--others --exclude-standard`, each submodule's own the same way, or a walk of a folder that is no repository; names are ranked in Swift; text is `git grep --untracked -I -n --column -F -z` in the repository and in each submodule, read as it is printed (`Subprocess.stream`) and ended once 2,000 lines were had or the search was stopped, and a walk that reads each file elsewhere. The host keeps a folder's list of files for 30 seconds and reads it again when a search is opened (an empty query). ripgrep is not used: it is not installed on the Mac this was built on, so it could not be tried (decided by the owner on 2026-11-14). On this Mac the Mac app calls `FileSearch` itself. |
 | `createFile(directory, name, isDirectory)` / `renameFile(path, name)` / `trashFile(path)` | Change the files. Answered with the folder's listing. |
 | `listDirectory(path)` | The folders inside a folder, or inside home. |
 | `dismissFailure(id)` | The user has seen the report of a part that stopped: it is dropped for every client. |
@@ -239,8 +254,10 @@ Host to client: `welcome`, `sessions`, `agents`, `folders`, `attached`,
 (`tabLayout`, `keepAwake`, `keepAwakeOptions`, `commitWriter`) are pushed to
 every client when they change.
 
-The protocol version is 7 since 0.6.0, which added `failures` and
-`dismissFailure` (see "A part that stopped"). It was 6 from 0.4.0, which
+The protocol version is 8 since 0.7.0, which added `agentShellsFaults`
+and gave `agentShellResult`'s list of shells the asking agent's own (see
+"Shells an agent opens"). It was 7 from 0.6.0, which added `failures` and
+`dismissFailure` (see "A part that stopped"), and 6 from 0.4.0, which
 added the messages for push and pull, commit messages, keep awake options
 and SSH hosts.
 
@@ -534,7 +551,8 @@ the context window. The file is removed when the session ends.
 What an account has left is a second thing, `AccountUsage`, kept per agent
 and sent to clients as `accountUsage` when it changes. `AccountUsageFetcher`
 asks the agent's service, on the work queue, every five minutes while that
-agent has a session:
+agent has a session, or a schedule waiting for its limit to start over
+(that needs the time, also after the host started again):
 
 | Agent | Sign-in read from | Asked |
 |---|---|---|
@@ -620,14 +638,15 @@ takes them, without a change to the user's configuration:
 
 Every hook runs `agenttermd hook <agent> <event>`. It saves what it is told,
 with the agent, the event and the time, in the file `AGENTTERM_EVENTS`
-names: `session-<id>.events.json` in the usage folder, set in the session's
+names: `events/session-<id>.json` in the usage folder, set in the session's
 environment, which the agents pass on to their hooks. The command is the
 same for every session because Codex trusts a hook by its command and asks
 again when it changes. For Antigravity's `PreToolUse` the hook answers
 `{"decision":"allow"}`, which leaves the decision to its own rules.
 
-The host watches the usage folder and reads a session's file when it
-changes, and on every refresh in case a change was missed; only the latest
+The host watches that `events` folder, which holds nothing else (Claude
+Code's status line writes its usage next to it several times a second),
+and reads a session's file when it changes, and on every refresh in case a change was missed; only the latest
 event is kept, since the state follows from it. `AgentHooks.change` makes
 the state from it, from what each agent was seen to tell its hooks on
 2026-11-13 (Claude Code 2.1.323, Copilot CLI 1.0.110, Antigravity 1.5.7;
@@ -636,9 +655,11 @@ to trust). Working stays working since it began.
 
 What cannot be known:
 
-- **Codex** runs no hook until the user trusts it, so its session's state
-  is not known until it says something, and `stateNote` says how to trust
-  the hooks.
+- **Codex** before 0.169 ran no hook until the user trusted it, and its
+  session's state was not known until then. Codex 0.169 runs the hooks it
+  is given for a session without asking, as trying it on 2026-11-14
+  showed (#59), so its session carries no note about it any more: the
+  note told the user to wait for a question that no longer comes.
 - **Antigravity** says nothing when it waits for permission: its question
   comes after `PreToolUse`, with nothing in between. So while a tool runs,
   its state is not known, and `stateNote` says so.
@@ -650,22 +671,33 @@ What cannot be known:
 
 ## Worktrees
 
-`GitWorktrees` (host): `create(in:agent:branch:)` runs `git worktree add -b
-<branch> <top>/.agentterm/worktrees/<branch> HEAD` after listing
+`GitWorktrees` (host): `create(in:agent:branch:from:)` runs `git worktree
+add --no-track -b <branch> <top>/.agentterm/worktrees/<branch> <from or
+HEAD>` after listing
 `.agentterm/` in the exclude file, and returns the folder's place inside
 the new worktree. Paths are written the way the folder is: git gives real
 paths, and a folder opened through a symbolic link (`/var`, `/tmp`) would
 otherwise not be found in them. `list(folder:inUse:)` reads `git worktree
 list --porcelain`: each worktree's branch, commits ahead of the folder's
 branch, files changed, and whether its folder is gone; a session counts
-for the deepest worktree it is in. `finish` merges (`--no-edit`, undone on
-a conflict, refused with uncommitted changes) and removes, pushes and runs
+for the deepest worktree it is in. `finish` merges (`--no-edit`, left to
+be resolved on a conflict as #42 has it, refused with uncommitted changes) and removes, pushes and runs
 `gh pr create --fill` through the login shell, or removes with `--force`.
 
-Messages: `createInWorktree(request:branch:)`, `listWorktrees(folder:)`,
+`GitDiff.snapshot` leaves out of the untracked files a folder whose `.git`
+is a file pointing into the repository's own `worktrees` folder: a
+worktree made inside the repository (#43), which `git status` lists as a
+folder nobody tracks. Both apps ask for the list again when the changes on
+show change in number, in branch or in what they are ahead by, so that a
+chip's counts are not stale.
+
+Messages: `createInWorktree(request:branch:from:)`, `listWorktrees(folder:)`,
 `finishWorktree(folder:path:finish:deleteBranch:)` (refused while a session
 runs in it), `setWorktreeSetup(folder:command:)`, kept in `worktrees.json`;
-answered with `worktrees(folder:list:setup:)` and `worktreeFinished`.
+answered with `worktrees(folder:list:setup:)` and `worktreeFinished`;
+`worktreeSetups` carries every folder's setup command to a client that
+connects and whenever one changes (#34). What both apps say of a worktree
+is in `WorktreeWords` and `WorktreeInfo.chipTitle/chipCounts/chipHelp`.
 `SessionInfo.branch` names a session's worktree branch; `WorktreePath`
 tells which folder a session in `.agentterm/worktrees` belongs to. The setup
 command runs through the login shell in the new worktree before the
@@ -686,6 +718,31 @@ it looked (`checked`), from when each schedule is looked at (`from`, set
 when it is made or its time changes), and the last limit reset each agent
 ran for. Clients send `saveSchedule`, `removeSchedule` and are told
 `schedules`.
+
+What 0.7.0 adds to schedules (#47). `ScheduleTime.every(minutes, from,
+until)` comes due at midnight or at `from` and then every `minutes` until
+`until`, each day; `.dates` at each of its moments. A run that comes due
+goes into `waitingRuns` as before; one whose schedule has a condition or a
+worktree is got ready off the queue (`prepare`): the folder's changes are
+read, or its branch is pulled and its head compared, and its worktree is
+made (`GitWorktrees.create`, submodules, the setup command, the folder
+trusted for the agent), and it then starts, is recorded as skipped, or is
+recorded as not started and reported (`PartFailure.Part.schedule`). When a
+run starts, how its folder was is kept (`GitActions.baseline`: the head,
+the files as they were as a commit made by `git stash create`, which
+changes nothing, and the untracked files); when it ends
+(`runEnded`: its agent seen done at a look, or its session gone) its
+`ScheduleRun` gets `ended`, `outcome`, `changes` (commits since, `git diff
+--shortstat` against the files as they were, new untracked files) and
+`hasOutput`: the session's mirror as text, with 5,000 lines above the
+screen, written to `runs/<schedule>-<time>.txt` in the host's folder and
+removed with the run. `maxMinutes` is looked at each time the schedules
+are. Messages: `runSchedule(id)`, `stopScheduleRun(id, at)`,
+`scheduleRunOutput(id, at)` answered with `scheduleRunOutput(id, at,
+text)`, `duplicateSchedule(id)`, `pauseSchedules(Bool)` answered to every
+device with `schedulesPaused(Bool)`. The host writes what was changed
+about a schedule into its `edits` when it is saved
+(`Schedule.changes(from:)`).
 
 **Shown.** `ScheduleOverview` (protocol), which both apps use, groups the
 schedules with the sessions that still run: the runs whose session is one
@@ -709,6 +766,10 @@ as missed as the schedule says. `limitReset` is due two minutes after the
 latest `resetsAt` of the agent's account limits that it has not run for.
 A due run of a schedule whose last run is still going (its session runs
 and its agent is not done) is skipped; with two runs going, it waits. A
+run whose agent's state is not known (its hooks never ran, as Codex's
+before they are trusted, or it was interrupted) is going until it has
+written nothing for an hour (`quietRunIsDone`), then counts as done. A run whose folder is not there is recorded as not
+started: a session started there would be in the home folder. A
 run is `ScheduleRunner.launch`: the agent's command with its switch
 (`claude --permission-mode bypassPermissions|acceptEdits`, `codex
 --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust`,
@@ -716,7 +777,7 @@ run is `ScheduleRunner.launch`: the agent's command with its switch
 --dangerously-skip-permissions` or `--mode accept-edits`) and the prompt,
 started as a session with no client attached, `SessionInfo.schedule` and
 `schedulePermissions` set; Antigravity gets the folder among those it
-trusts for the session. A run's session done for 24 hours is closed. The
+trusts for the session. A run's session that has counted as done for 24 hours is closed. The
 hold on sleep is also taken while a schedule's next run is ten minutes or
 less away.
 
@@ -749,9 +810,43 @@ action that asks for the phone to be unlocked; the reply is sent as
 it, then Return, only while the session is still in that state; else it
 answers `error` and types nothing. A reply given while the connection was
 gone waits for it. Notifications hide their text where iOS hides previews.
+A question's choices are actions of its notification (#55): iOS takes a
+notification's actions from its category, so a question with choices gets
+a category of its own, named after the session, with an action for each of
+the first nine choices (`AgentNotice.buttons`) and the text reply last, ten
+being the most iOS shows. The body is the question alone
+(`AgentNotice.words`). A choice is sent as a reply is, `answer` with the
+choice's words as its text.
+
+How the host types an answer is the agent's list's to say
+(`AgentAnswer.steps`, #55). A prompt takes the text, then Return. A
+question with choices is a list with its first choice marked, and Return
+chooses what is marked: text and Return there answered every such question
+with its first choice, in Claude Code, Copilot CLI and Antigravity alike,
+as trying each showed. So an answer that is one of the choices is typed as
+Down, once for each choice before it, then Return; any other answer goes
+to the row after the choices ("Type something.", "Other", "Write-in..."):
+Down past the choices, the text, Return, with a Return before the text in
+Antigravity. The steps are typed 0.15 s apart, as a person types them. Only
+the first of several questions asked together is told and answered.
 
 **On the Mac.** A banner over the window for a session that is not the one
 selected while the app is in front.
+
+A banner is dropped when its session comes to the front (#60): on the Mac
+when the session is selected with Sessions shown and the app in front of
+the others (`selectedSession`, `show(_:)`, and when the app becomes
+active: a session chosen in a window behind another app's is not before
+the user's eyes yet), on the iPhone when its screen is put on the
+navigation stack (`path`). The app then tells the host
+`noticeSeen(session:state:)`, once for each state, when the agent is done
+or waits. The host passes it on to every other client while the session's
+state is still that one, and keeps it (`noticesSeen`) for a client that
+connects later, which is told after its list of sessions. A client that is
+told drops its banner of that session and state; the iPhone also takes
+its notification of the session out of Notification Center
+(`AgentNotifications.remove`), as it does when the session is opened on
+the phone itself.
 
 ## The Live Activity
 
@@ -777,14 +872,30 @@ message to a line, on standard input and output. Its tools are
 `close_shell`. `wait` reads the screen every 0.2 seconds until a text
 appears, or the screen has been the same for a while, or the time is up.
 
+The server answers tool calls side by side (#64). Its lines are read in
+turn; a `tools/call` is handed to a concurrent queue and answered when its
+tool is done, under its request's id, so that a `wait`, which may take as
+long as the agent lets it, does not hold up the `read_screen`,
+`send_input`, `list_shells`, `open_shell` and `close_shell` that follow
+it, nor another `wait` on another shell. `notifications/cancelled` with a
+request's id ends a `wait` that is going on, and that request is then not
+answered. An answer is one line, written whole. The line to the host
+(`AgentShellsLink.ask`) already took requests side by side.
+
 **Which session's agent it is.** The host gives every agent's session a key
-of its own, with its port, in `AGENTTERM_MCP`; the agent passes its
-environment on to the server it starts. The server signs in to the host as
+of its own, with its port and its build, in `AGENTTERM_MCP` (`<port> <key>
+<release or dev>`, then `use`); the agent passes its environment on to the
+server it starts. The server signs in to the host as
 any app on the Mac does, with the Mac's own token from the state folder,
 and sends each request as `agentShell(id:key:request:)`. The host looks up
 the session whose key it is and answers `agentShellResult(id:result:)` to
 that connection only. A key names a running agent's session or nothing.
-Without the variable, the server offers no tools. With "agents run their
+Without the variable, the server offers no tools. Nor does it in a session
+of the other build: a released build and a development build each install
+a server of their own (below), so an agent has both, and the one whose
+build the variable does not name stays out rather than sign in to a host
+with another host's token. A variable that names no build is from a host
+of 0.6, and is the released build's. With "agents run their
 commands in shells you see" on (the host's `agentsUseShells`, on by
 default) the variable ends with `use`: the server's instructions are then
 `AgentShellsInstructions.useShells`, and the agents are told the same
@@ -798,23 +909,59 @@ servers it allows, and Antigravity not at all. Codex follows the server's.
 
 **What it may reach.** A shell it opens is a session like any other, in the
 agent's folder and at its size, with `SessionInfo.openedBy` naming the
-agent's session. Listing, reading, typing and closing are done on any
-session with an `openedBy`, whichever agent opened it, so that agents share
-their shells rather than each open its own; never on the user's sessions or
-an agent's session. Two agents typing into one shell at once is not
-prevented. A command whose first word is an agent's is
-refused. Typing is the same as typing: text, and keys by name turned into
-the bytes a terminal sends (`TerminalKeys`). When the agent's session ends,
-the server it started ends with it, and its shells stay, for the others.
+agent's session. Only that agent types into it and closes it; every agent
+lists and reads the shells any agent opened, and `agentShellResult`'s
+`shells(_:own:)` says which are the asking agent's (#61). So what runs in
+an agent's shell is what that agent started, and no agent has to guess
+from a screen whether a shell is free: one that has none, or whose own is
+busy, opens another. Typing into or closing another agent's shell is
+refused with words that say to open one; so it is for a shell whose
+agent's session has ended, which is nobody's: it stays open for the user,
+and nothing takes it over. A session that is resumed or handed off is, to
+the host, another agent, and only reads the shells it opened before. An
+agent never reaches the user's sessions or an agent's session. A command
+whose first word is an agent's is refused. Typing is the same as typing:
+text, and keys by name turned into the bytes a terminal sends
+(`TerminalKeys`). When the agent's session ends, the server it started
+ends with it. The apps name a shell's agent on its row
+(`SessionInfo.openedByName`).
+
+**When it cannot reach its host.** The server's line to the host
+(`AgentShellsLink` in `agenttermd`) signs in when the server starts. A
+connection that is refused or closed answers whoever waits at once, with
+the reason in words: the host is not running on its port, the host
+refused the sign-in (it answers a wrong token with `error("invalid
+token")` and closes), or the connection was lost. Each later call tries
+the host once more, so it fails as fast while the host is gone and works
+again once it is back; only a host that is up and silent is waited for,
+fifteen seconds. The host notes a sign-in it refused from a client on this
+Mac named `MCP`, and the agents `AgentShellsInstall.ensure` could not add
+the server to, and tells every client `agentShellsFaults`: an
+`AgentShellsFault` per cause (`install`, with the agents' names; `signIn`),
+none when nothing is wrong. A sign-in fault lasts until an `MCP` client
+signs in or the server is set up again; an install fault until `ensure`
+succeeds. Both apps show each in their top banner until it is over or it
+is closed there, and a closed one comes back only after it went away. A
+host that is not running cannot say so itself: that one is the agent's to
+tell. An agent that refuses `mcp add` because it has the name already has
+the entry removed and added again as this build's own.
 
 **Installed in the agents.** `AgentShellsInstall` runs each installed agent's
 own command, through the login shell: `claude mcp add --scope user
 agentterm -- <agenttermd> mcp`, `codex mcp add agentterm -- …`, `copilot
 mcp add agentterm -- …`, `agy mcp add agentterm -- …`, and `mcp remove
-agentterm` to take it out. `agent-shells.json` in the state folder keeps
-whether it is on (on unless turned off) and which agents have it, with the
-program it names: only those are ever removed, and an agent is asked again
-when the host's program moved. The host does it at start and on
+agentterm` to take it out. The name is the build's
+(`AppChannel.mcpServerName`): `agentterm` for the released build,
+`agentterm-dev` for a development build, so that both are installed side
+by side and each installs, repairs and removes only its own; the
+instructions an agent is given name its build's server.
+`agent-shells.json` in the state folder keeps whether it is on (on unless
+turned off), the name, and which agents have it, with the program it
+names: only those are ever removed, and an agent is asked again when the
+host's program moved. What a development build of 0.6 installed under
+`agentterm` is not counted as its own any more and is left as it is: it is
+put right by hand (`<agent> mcp remove agentterm`, then the released app
+started again). The host does it at start and on
 `setAgentShells`, off its queue, and tells every client `agentShells(Bool)`.
 A host with a state folder of its own (a test, a trial run) never does.
 
@@ -1137,6 +1284,60 @@ toolbar, before the agents, switches between this Mac and the paired ones.
   its side, which the whole run leaves out.
 - `AGENTTERM_STATE_DIR` moves the host's token, folder list and log to another
   folder, which keeps test hosts away from the real pairing.
+
+## Large text and large diffs on the Mac
+
+The editor (`CodeEditor`) colors text with highlight.js only when its
+file is in a language the highlighter knows and its text is at most 512 KB
+(`Highlighting.colors`); otherwise its storage is a plain `NSTextStorage`.
+Its layout is non-contiguous, and its coordinator keeps the text it last
+gave its owner or was given (`held`), so that an update that only brings
+the editor's own change back compares nothing. Each file has an editor of
+its own (`.id(path)`), since the storage is chosen when it is made.
+
+A file's diff in one panel (`PatchView`) is one `NSTextView`: the patch as
+an attributed string, colored off the main thread, with a layout manager
+(`LineTints`) that fills each added, removed or hunk line's tint from the
+pane's left edge to its right. Its layout is non-contiguous: the top
+shows at once, and the rest is laid out 10,000 characters at a time on
+the main queue, so that the scroll bar is exact a moment later. A diff of
+the same file that changes is put in by replacing only the characters
+that differ, and the line at the top of the pane is scrolled back to
+where it was. The text view is kept as wide as the pane at least, and
+its scroll bars show only when there is something to scroll to. The two-panel diff is still rows of
+SwiftUI views (`SplitDiffView`, shared with the iPhone). `MainThreadWatch`
+notes stalls of the main thread, only when `AGENTTERM_MEASURE_MAIN` names
+a file to write them to (#21).
+
+## The host's own gits
+
+Every command the host starts by itself (`Subprocess`), not a session's
+program, is given `GIT_OPTIONAL_LOCKS=0` and `diff.autoRefreshIndex=false`
+(`HostEnvironment.forTheHostsOwnCommands`). Asked for a status or a diff,
+git otherwise rewrites the index when a file's time changed, holding
+`index.lock` while it does; the host asks whenever a file changes, so a
+`git commit` typed in a terminal at that moment, by the user or by an
+agent, failed now and then with "Unable to create index.lock" (it made a
+Mac UI test fail once in three runs). A git that has to write, because
+the user asked for a commit or an add, still takes its lock. How a folder
+was when a scheduled run started is written as a tree through a copy of
+the index (`GIT_INDEX_FILE`), not with `git stash create`, which rewrote
+the index too.
+
+## Reporting
+
+`AgentTermTelemetry` holds the choices and the gate; `AgentTermFirebase`
+plugs the service in (`FirebaseSink`), in a released build with a config
+file only. `TelemetrySettings.crashReports` is nil until the first-launch
+screen was answered (#48), and while it is nil `Telemetry` sends nothing,
+of either kind, and tells the service to collect nothing. The screen's two
+switches (`TelemetryPreferences.offersCrashReports`,
+`offersUsageStatistics`, both true) are saved by `answer()`. Its words
+are `TelemetryPreferences.Wording`, shown by both apps. So that the
+screen can be looked at and tested in a build without a service,
+`AGENTTERM_REPORTING_PREVIEW=<name>` starts `Telemetry` with a sink that
+sends nothing and preferences of that name; a released build with a
+service never reads it.
 
 ## Known limitations
 

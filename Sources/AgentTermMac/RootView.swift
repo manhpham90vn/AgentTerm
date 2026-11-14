@@ -152,6 +152,7 @@ struct RootView: View {
         .sheet(item: $model.panelConversation) { conversation in
             ConversationSheet(conversation: conversation)
         }
+        .modifier(DeleteConversationQuestions(store: model.historyStore))
         .alert("AgentTerm", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -391,26 +392,89 @@ private struct FailureBanner: View {
     }
 }
 
-/// An agent of a session that is not in front finished its task or waits
-/// for the user (#22): which session, and why. Touching it opens it.
-private struct AgentNoticeBanner: View {
+/// Something keeps the agents from opening shells the user sees, although
+/// that is on (#58): what, and what to do about it. It stays until the
+/// host says it is over, or it is closed here.
+private struct AgentShellsFaultBanner: View {
     @EnvironmentObject private var model: AppModel
-    let notice: AgentNotice
+    let fault: AgentShellsFault
 
     var body: some View {
         HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(fault.headline(on: model.remote?.name))
+                    .font(.system(size: 12, weight: .medium))
+                Text(fault.advice)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button("Dismiss") { model.dismiss(fault) }
+                .controlSize(.small)
+                .help("Hide this until it happens again")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.yellow.opacity(0.12))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("agent-shells-fault")
+    }
+}
+
+/// An agent of a session that is not in front finished its task or waits
+/// for the user (#22): which session, and why. Touching it opens it.
+///
+/// What the agent said shows on up to six lines, the end of it, where an
+/// agent comes to the point; when that leaves something out, Show All
+/// opens the banner out to the whole of it, to be scrolled when it is long
+/// (#62). The session's name gives way in the middle, so that why it is
+/// told is never the part cut off.
+private struct AgentNoticeBanner: View {
+    @EnvironmentObject private var model: AppModel
+    let notice: AgentNotice
+    @State private var openedOut = false
+
+    /// The lines shown before the banner is opened out.
+    static let lines = 6
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: AgentStateMark.symbol(for: notice.state)).foregroundStyle(AgentStateMark.color(for: notice.state))
+                .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(notice.name) \(notice.why)")
                     .font(.system(size: 12, weight: .medium))
-                if let detail = notice.detail {
-                    Text(detail)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help("\(notice.name) \(notice.why)")
+                if openedOut, let full = notice.full {
+                    ScrollView {
+                        Text(full)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxHeight: 220)
+                    .accessibilityIdentifier("agent-notice-all")
+                } else if let detail = notice.detail {
+                    Text((notice.detailIsCut ? "…" : "") + detail)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(Self.lines)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 8)
+            if notice.detailIsCut {
+                Button(openedOut ? "Show Less" : "Show All") { openedOut.toggle() }
+                    .controlSize(.small)
+                    .help(openedOut ? "Show the end of what the agent said" : "Show all of what the agent said")
+                    .accessibilityIdentifier("agent-notice-more")
+            }
             Button("Open") { model.open(notice) }
                 .controlSize(.small)
             Button("Dismiss") { model.dismissAgentNotice() }
@@ -423,6 +487,8 @@ private struct AgentNoticeBanner: View {
         .onTapGesture { model.open(notice) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-notice")
+        // Another notice starts as short as the first did.
+        .onChange(of: notice) { _ in openedOut = false }
     }
 }
 
@@ -614,6 +680,10 @@ private struct Banners: View {
         // What stopped without being asked to, until it is dismissed.
         ForEach(model.failures) { failure in
             FailureBanner(failure: failure)
+        }
+        // The agents cannot open shells, although that is on.
+        ForEach(model.shownShellsFaults) { fault in
+            AgentShellsFaultBanner(fault: fault)
         }
         // An agent of another session finished, or waits for you.
         if let notice = model.agentNotice {

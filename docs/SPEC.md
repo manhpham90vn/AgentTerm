@@ -82,8 +82,10 @@ itself.
 - A shell has no state. An agent that has just started has none until it
   says something. After Escape or Control C is typed to a working agent,
   its state is not known until the agent says more.
-- Codex runs the hooks only once the user trusts them: when Codex asks,
-  choose "Trust all and continue". Until then, its session says so.
+- Codex runs the hooks AgentTerm gives it without asking (seen with Codex
+  0.169): its session says nothing about trusting them. A Codex from
+  before, which asked to trust them first, shows no state until that is
+  answered.
 - Antigravity does not say when it waits for permission: while it runs a
   tool, its state is not shown, and its session says why.
 
@@ -99,25 +101,43 @@ itself.
   setup command (`npm install`) that is run in each new worktree first.
 - The session is listed under its folder with its branch, on the Mac and
   the iPhone. Selecting it, the Git, History and Files tabs show its
-  worktree.
-- **The worktrees of the folder that is open** (#33): when a folder's
-  repository has more than its own, a bar at the top of the side panel
-  lists them all, whoever made them, with their branch, how far ahead they
-  are, what is changed, and those whose folder is gone, as missing; ones
-  outside the folder show their path. Picking one shows its changes,
-  history and files, with the same actions as the folder.
-- **Bringing the work back**: for a worktree, Finish merges its branch into
-  the folder's and removes it (with its branch, for one AgentTerm made),
-  opens a pull request with `gh`, or throws it away, which asks first and
-  says what is not merged. A worktree a session runs in is not removed.
+  worktree; on the iPhone its menu has "Changes, History and Files",
+  which opens its folder on that worktree.
+- **The worktree bar** (#33, #43): at the top of the side panel of a
+  folder that is a repository, its worktrees as chips. The folder's own
+  branch is always the first; each worktree follows, whoever made it
+  (AgentTerm, Claude Code in `.claude/worktrees`, `git worktree add`), with
+  how many files are changed in it, how many commits it is ahead by, a dot
+  when a session runs in it, and "missing" when its folder is gone. A
+  click makes Git, History and Files about that one, with the same actions
+  as the folder; the first chip goes back to the folder. A worktree that
+  lies inside the repository is not listed among the folder's changes as
+  a file nobody tracks.
+- **+** makes a new one: the branch's name, suggested and editable, the
+  branch it starts from (the folder's own unless another, local or of a
+  remote, is picked; the new branch follows none), and what is started
+  there, an agent or a shell. The sheet says which setup command will run,
+  and when the folder has changes that the worktree will not have.
+- **⋯** is for the worktree on show: merge its branch into the folder's
+  and remove it (with its branch, for one AgentTerm made), open a pull
+  request with `gh`, or throw it away, which asks first and says what is
+  not merged; and the folder's setup command. A merge that conflicts is
+  left in the folder to be resolved and continued, or aborted, as any
+  other, and the worktree is kept. A worktree a session runs in is not
+  removed.
+- The iPhone has all of it, the same, in a folder's screen (#34); "Start
+  … in a New Worktree…" in the menu of a launch button opens the same
+  sheet.
 - `.agentterm/` is listed in the repository's own exclude file and is not
   shown in the Files tab.
 
 ### Schedules
 
 - A schedule starts an agent with a prompt in a folder: once at a time,
-  every day at a time, on some weekdays at a time, or a little after the
-  agent's account limit starts over. On or off without being deleted. Made
+  every day at a time, on some weekdays at a time, every so many minutes
+  or hours (5 minutes at the most often; all day, or only between two
+  times of the day), on certain dates, or a little after the agent's
+  account limit starts over. On or off without being deleted. Made
   and changed in the Mac's Schedules, a place of the window, and the
   iPhone's Settings > Schedules; the host keeps them and runs them, with
   the app closed too.
@@ -143,13 +163,52 @@ itself.
   the schedule and marked as its run, and stays open when the agent is done,
   for a day, so what it did can be read. A run whose turn before it is
   still going is skipped and said to be. At most two run at the same
-  moment; a third waits for its turn. A run missed while the Mac slept or
+  moment; a third waits for its turn. A run whose agent never says what it
+  is doing counts as done once it has shown nothing new for an hour. A run
+  whose folder is gone is not started, and says so. A run missed while the Mac slept or
   was off runs once when it is next awake, or is skipped, as the schedule
   says; never more than once for all the times missed. A schedule made
   after its time today first runs at its next time.
 - A schedule about to run keeps the Mac awake from ten minutes before,
   whatever the keep-awake switch says. Waking a sleeping Mac is not done.
 - Each schedule lists its last runs: when, and what came of it.
+- **Run Now** (#47), from a schedule's menu in the list or from the
+  schedule itself, starts a run whatever its time. **Stop** ends a run
+  that is going on, from the list or from the schedule; one that still
+  waits to start is taken off the list. **Duplicate** makes a copy with
+  a name of its own, turned off, to be changed. **Pause All** holds every
+  schedule back: none comes due meanwhile, and what would have run is not
+  caught up when they are let go again.
+- **What a run did.** While it goes on, its session. Once it is over, how
+  it ended (its agent done, stopped by the user, stopped for taking too
+  long, its session ended) and how long it took; what it changed in git
+  since it started, in words (commits, files changed, new files), not
+  counting what was changed in the folder before; and **Output**: what it
+  printed, its screen and up to 5,000 lines that scrolled by, kept as
+  long as the run is listed.
+- **Being told.** A run is a session, so the iPhone says when its agent is
+  done or needs an answer as for any agent. A run that was not started
+  when it should have been (its folder gone, its agent not found, its
+  pull or its worktree failed) or was stopped for taking too long is said
+  in the top banner of both apps. A run skipped as its schedule says
+  (nothing changed, nothing pulled, the run before still going) is in the
+  list of runs only.
+- **When a run starts.** Every time it comes due; only when the folder
+  has changes that are not committed; or only after a pull, done first,
+  brought new commits. A run that comes due while the one before it is
+  still going is skipped, or waits for it, as the schedule says. A
+  schedule may name the longest a run may take, after which it is
+  stopped.
+- **A worktree of its own.** A schedule may have each run in a new
+  worktree of the folder, on a branch named after the schedule and the
+  time, with its submodules checked out and the folder's setup command
+  run; the worktree is kept afterwards, in the folder's worktree bar, to
+  be looked at, merged or thrown away.
+- **The prompt** opens in a larger editor, with the files of the
+  schedule's folder beside it, found by name: one that is picked is named
+  in the prompt.
+- **Changes to a schedule** are kept with it, the last twenty: when, and
+  what was changed, in words.
 
 ### When an agent is done or needs you
 
@@ -169,7 +228,12 @@ itself.
   its window.
 - A notification for a question, or for a finished task, takes a short
   reply, written or dictated, sent as the next message; it asks for the
-  phone to be unlocked first. One for a permission has no buttons: the
+  phone to be unlocked first. A question's choices are buttons of its
+  notification, shown when it is opened out, each of which answers with
+  that choice; its text is the question alone, so that a long one does not
+  push the choices out of sight. A choice is picked in the agent's
+  own list of them, and a reply that is none of the choices is given as
+  the agent's "other" answer, whichever agent asked. One for a permission has no buttons: the
   agents do not say which choices they offer, so touching it opens the
   session. A reply that arrives after the agent moved on is dropped, and
   the app says so.
@@ -179,6 +243,20 @@ itself.
   needs me") turns it off.
 - On the Mac, a banner says so for a session that is not the one in front,
   and opens it.
+- The Mac's banner shows what the agent said on up to six lines: the end
+  of it, where an agent comes to the point. When that leaves something
+  out, Show All opens the banner out to the whole, which is scrolled when
+  it is long, and Show Less closes it again. A long session name gives way
+  in the middle, so why the banner is shown is never cut off.
+- A banner hides by itself once its session is opened, however the user
+  got there (its row, its tab, the banner itself), and does not come back
+  when they leave the session. On the Mac the session counts as opened
+  once the app is in front of the others, not while its window is behind
+  another app's.
+- What was seen on one device is seen on all: opening the session on the
+  Mac hides the iPhone's banner and takes its notification out of
+  Notification Center, and opening it on the iPhone hides the Mac's
+  banner. Opening it on the iPhone takes its notification away too.
 
 ### The Live Activity
 
@@ -207,14 +285,29 @@ itself.
   whole user, by default, the first time it runs. Settings ("Agents can
   open shells you see", on the Mac and the iPhone) removes it from them,
   and puts it back.
+- A development build installs a server of its own beside the released
+  app's, under another name (`agentterm-dev`), and each works only in the
+  sessions of its own build: trying a change never takes the shells from
+  the agents of the installed app.
 - Its tools: open a shell (with a command or without), list the shells,
   read a shell's screen, type into it (text and keys by name), wait until
   its screen is still or shows a text, close it.
-- The shells agents open are every agent's: an agent lists them, with
-  their folders, and uses one that is free rather than open one more, so
-  that each agent does not leave shells of its own behind. An agent never
-  reaches the user's own sessions, nor an agent's session. It opens shells
-  only, never another agent.
+- Only the agent that opened a shell types into it and closes it. Every
+  agent lists the shells agents opened, told which are its own, and may
+  read any of them; one that has no shell of its own, or whose own is
+  busy, opens another. So what runs in an agent's shell is what that agent
+  started. A shell whose agent's session has ended is left as it is: it
+  stays open for the user, agents still read it, and none types into it.
+  An agent never reaches the user's own sessions, nor an agent's session.
+  It opens shells only, never another agent.
+- A shell's row names the session of the agent that opened it, on the Mac
+  and on the iPhone, or says that its agent has ended.
+- When an agent's server cannot reach the host, the agent is told at once
+  and why (the host is not running, its sign-in was refused, the
+  connection was lost), rather than left waiting. When a server was
+  refused, or could not be set up in an agent, both apps say so in a
+  banner at the top, with what to do, until it is over or the banner is
+  closed.
 - When the agent's session ends, the shells it opened stay, for the user
   and for the other agents.
 - Outside a session of AgentTerm (an agent run in another terminal), the
@@ -252,7 +345,7 @@ reply.
 
 A limit turns amber at 70% used and red at 90%. The session's figures update
 every few seconds, the account's every five minutes while the agent has a
-session, and on request.
+session or a schedule for when its limit starts over, and on request.
 
 Where the figures come from:
 
@@ -430,7 +523,13 @@ panel.
     The files are in two lists, **Staged** and **Changes**. A button on a
     file moves it to the other list, a button on a list's title moves all of
     them. A file changed again after it was staged is in both, each with its
-    own diff. Above the lists is the commit message and the **Commit**
+    own diff. A change that is not staged can be **discarded**, from its
+    row or its menu, and all of them from the title of **Changes**: a file
+    git tracks goes back to what is staged of it, or to the last commit,
+    and a new file is moved to the Trash of the Mac, where it can be put
+    back from. It is asked first, saying which of the two will happen and
+    that the first cannot be undone. What is staged is never discarded: it
+    is unstaged first. Above the lists is the commit message and the **Commit**
     button, which commits what is staged, with the identity and the hooks
     the repository is set up with. What git says when it refuses is shown.
     Next to it, **Write** asks an agent for the message of what is staged
@@ -440,27 +539,179 @@ panel.
     Commit Messages in the iPhone's Settings tab; the default is the first agent
     installed, on a cheap model where AgentTerm knows one (Claude Code:
     Haiku).
-    Above the changes, **Pull** and **Push** act on the branch that is
-    checked out, each with the number of commits waiting, next to the name
-    of the branch it follows. A branch that follows none yet shows
+    The name of the branch that is checked out, at the top, opens the
+    **branches**: the repository's own, the checked out one first and the
+    rest by their last commit, then its remotes', each with how far it is
+    from the branch it follows and when it was last committed to; a field
+    narrows them down. A branch is switched to by choosing it; a remote's
+    is checked out as a branch of the repository's own that follows it,
+    made the first time. Switching is refused, in words, when changes that
+    are not committed would be lost, and nothing is changed then; a branch
+    that another worktree has checked out cannot be switched to, and says
+    where it is. **New Branch…** makes one from any branch, the checked
+    out one unless another is picked, and switches to it or not. A branch
+    of the repository's own is renamed and deleted from its menu: deleting
+    is asked first, once when everything on the branch is on the checked
+    out branch too, and twice, the second time saying its commits would be
+    lost, when it has commits of its own. The checked out branch is not
+    deleted, and a remote's branches are not changed from here.
+    Above the changes, **Fetch**, **Pull** and **Push** act on the branch
+    that is checked out, Pull and Push each with the number of commits
+    waiting, next to the name of the branch it follows. Fetch asks the
+    remotes for what is new and changes neither the branch nor the files.
+    It is also done by itself every five minutes while the folder's changes
+    are shown and the app is in front, so that the numbers stay true; when
+    that fails, a warning beside the buttons says so and why, and no alert
+    interrupts. **Fetch automatically**, in Settings > Git and shared with
+    the iPhone, turns it off. The menu beside the buttons pulls **by merge**
+    or **by rebase**, whatever the repository is set up to, and offers
+    **Force Push…**: the remote is asked first, and the question names the
+    commits on it that the branch does not have and that would be gone
+    from it; confirmed, the push is forced only as long as the remote is
+    still where it was just seen (`--force-with-lease`). A push the remote
+    refuses because it has commits the branch has not says so, and that
+    pulling or forcing is what there is to do. A branch that follows none yet shows
     **Publish Branch**, which says where the branch would go and, once
     confirmed, pushes it there and follows it from then on. git never waits
     for a password or a passphrase here: a remote that would ask fails with
-    git's message. A pull that stops on a conflict is undone, and says so.
+    git's message. A pull that stops on a conflict is left to be resolved, and says so.
     The count of commits to pull is as of the last time the remote was
     asked; pulling asks.
-    Not part of it: staging part of a file, discarding changes, amending,
-    force push, choosing a remote or another branch, and resolving a pull
-    that conflicts.
+    **Commits**, beside **Changes** under the buttons, lists the history of
+    the branch that is checked out, or of another branch picked above the
+    list: newest first, each with its author and how long ago, the branches
+    and tags that point at it, and a graph at the left with a line for
+    every line of history, so that where branches part and meet shows.
+    Older commits are read a page at a time as the list is scrolled. A
+    commit that is pressed opens out to its hash, with a button that copies
+    it, the rest of its message, and the files it changed; a file shows
+    what the commit did to it in the middle pane, in the same views as a
+    change, under the commit's hash and with nothing to stage. A merge
+    shows what it brought in. From a commit's menu it is **reverted**, by
+    a new commit that takes its change back, or **cherry-picked** onto the
+    checked out branch; each is asked first, and one that runs into
+    conflicts is left to be resolved, and says so. A merge commit is not reverted or
+    picked here: git has to be told which side to keep.
+    **Stashes**, the third list, is the repository's stash. **Stash
+    Changes…** puts what is staged and what is not aside, under a name
+    when one is given, with the files git does not track yet unless that
+    is turned off, and leaves the folder as it was committed. The stashes
+    are listed newest first, each with the branch it was made on and how
+    long ago; one that is pressed opens out to its files, which show their
+    diffs in the middle pane under **STASH**. **Apply** brings it back and
+    keeps it, **Pop** brings it back and takes it out of the stash, and
+    **Drop…** throws it away, asked first, since nothing else holds what
+    is in it. One that conflicts with what is in the folder says so: the
+    files that conflict are marked there, and the stash is kept.
+    The last commit can be **amended** and **undone**, from the menu
+    beside Commit and from the newest commit in Commits. Amending puts the
+    commit's message in the commit box, which says so above it and offers
+    Cancel; the button then replaces the commit by one with the message as
+    it is now and with whatever is staged added to it, the message alone
+    when nothing is. Undoing, asked first, puts the branch back at the
+    commit before and leaves what the commit changed staged, so nothing is
+    lost. A commit that a remote has already is asked about once more,
+    for undoing and before amending: changed here, the next push has to be
+    forced, and whoever pulled it keeps it.
+    A change can be taken apart. **Stage Parts…** in the diff of a change
+    that is not staged, **Unstage Parts…** in that of a staged one, lists
+    the hunks of the diff, each with its lines. A hunk is staged or
+    unstaged whole, or only the lines of it that are ticked; one that is
+    not staged can also be discarded, whole or by its ticked lines, asked
+    first. What was taken is gone from the list at once, which is read from
+    the file again. A part that no longer fits the file, because the file
+    changed since, is refused in words. It is the same in both layouts of
+    the diff, and on the Mac only: the iPhone stages and discards whole
+    files.
+    When a merge, a rebase, a cherry-pick or a revert **stops on
+    conflicts**, whether a pull, a pick from Commits or something done in a
+    terminal began it, it is left as it is and the top of Changes says so:
+    what is going on, how many files conflict, and which side "ours" and
+    "theirs" are, which is not the same in a rebase as in a merge. The
+    files that conflict are a list of their own, each saying how it
+    conflicts (both sides changed it, one deleted it). A file is resolved
+    by **Take Ours**, **Take Theirs**, taking a side that deleted it
+    deletes it, or by **Edit**, which opens it in the editor with its
+    markers, and then **Mark Resolved**, refused while a marker is still in
+    it. Pressed, it shows the file as it is against both sides. **Continue**
+    finishes what was stopped once nothing conflicts, and says so when a
+    rebase stops again at its next commit; **Abort…**, asked first, puts
+    the folder and the branch back as they were. Stage all is refused while
+    a file conflicts: it would take those files as they are.
+    **Submodules** (#44): a submodule with changes inside it is a list of
+    its own under the folder's, headed by its path and the branch checked
+    out in it, or "detached HEAD". Its files are listed as the folder's
+    are, staged and not, each with its diff, and are staged, unstaged and
+    discarded in the submodule; **Commit…** commits what is staged there,
+    warning first when no branch is checked out in it. They are not
+    changes of the folder. A submodule whose commit is another than the
+    folder records is: a row of the folder's own that says from which
+    commit to which, staged and committed in the folder as a file is.
+    Discarding it, asked first, checks out the recorded commit again. A
+    submodule inside a submodule is listed the same way under it. A new
+    worktree has its submodules checked out, theirs too, before its setup
+    command runs; when one cannot be fetched the worktree is made all the
+    same, and the banner says so.
+    Not part of it:
+    choosing a remote, and adding, removing or updating submodules from
+    their remotes.
 - **History**, the place in the bar at the left: every conversation the
     agents had on the Mac, one section per agent, newest first, each with a
     title, its folder and how long ago it was. A conversation can be
     resumed, which opens it in its agent in a new session, or handed off to
     another agent. Picked, it is shown in the middle of the window, over the
     terminals, as the iPhone shows one: its agent, title and folder, Resume,
-    Copy Resume Command, and the handoff's folder, agent, prompt and
-    instructions. Resuming or handing off goes to Sessions, on the new
+    Copy Resume Command, and under them two tabs: **Transcript**, which
+    shows first, and **Hand Off**, with the handoff's folder, agent, prompt
+    and instructions. Resuming or handing off goes to Sessions, on the new
     session. With none picked, the middle says to choose one.
+    What History does with the conversations (#46), in the place and in
+    the side panel's tab alike:
+    - **Search**: a field above the list finds the conversations whose
+      title or what was said in them holds the words, whatever their case,
+      each with a piece of the text around them and in how many places
+      they are. What a tool printed is not searched. The host searches
+      every conversation, not only those listed.
+    - **Group and filter**, from the menu beside the field: grouped by
+      agent or by day (Today, Yesterday, then the date); only one agent's,
+      only one folder's (a worktree AgentTerm made for it included), only
+      today's, this week's or one day's. The list says when it is
+      filtered, and Clear Filters shows all again.
+    - **Transcript**: a conversation read before it is resumed. What its
+      agent's file tells: how long it ran, its model, the tokens read and
+      written, the branch and the worktree it ran in, how many tools it
+      ran and the files they wrote; then what was asked and answered, and
+      each tool with what it was run on. What an agent does not record is
+      said to be not recorded: Codex and Antigravity run commands, which
+      do not tell which files they wrote; Copilot tells once its session
+      has ended, and its cost is in a unit of its own and is not shown. A
+      long conversation is shown by its last 600 entries, and says so.
+      **Copy Transcript** copies it as Markdown; **Open as a File** writes
+      it out on the Mac and opens it as any file.
+    - **Pin** keeps a conversation in a group of its own at the top;
+      **Hide** takes it out of the list, until Show Hidden is chosen.
+      Both are kept by the Mac and are the same on every device.
+    - **Delete…** deletes the agent's own record of the conversation,
+      after two questions: its file is moved to the Trash of the Mac. A
+      conversation a session is having is not deleted; Antigravity's
+      cannot be, and it says why.
+    - **Show Older Conversations**, at the end of a full list, brings the
+      next 200.
+
+### What the app reports
+
+A released build of either app can send two things to its developer
+through Google's Firebase: crash reports, and usage statistics, counts of
+which features are used. Never what a terminal shows, prompts, file names
+or folders. At its first launch such a build shows a screen of its own
+(#48), not an alert that could be taken for one of the system's: what
+each kind is, a switch for each, both on, and Continue. It cannot be
+closed any other way, and until it is answered nothing is sent, of
+either kind. Afterwards both switches are in Settings > Privacy on the
+Mac and under Privacy in the iPhone's Settings tab, in the same words. A
+build from source and AgentTerm Dev have no service to send to: they show
+no screen and send nothing, whatever the switches say. `PRIVACY.md` says
+all of what is sent.
 
 ### Keeping the Mac awake
 
@@ -623,8 +874,27 @@ and touch up what an agent wrote without leaving the app.
 - The tree, and open files without unsaved changes, follow changes made
   elsewhere, by an agent for one, within a few seconds.
 - The files that were open come back as tabs the next time the app starts.
+- **Search** (#45), from the magnifying glass at the top of the tab or
+  from the File menu, shows in place of the tree. **Go to File…** (⌘P)
+  finds the folder's files by part of their name as it is typed, the best
+  first: a name that holds what was typed before one that holds its
+  letters apart, the name before the folders it is in; with a slash, what
+  was typed is matched against the path. **Find in Files…** (⌘⇧F) finds a
+  word or a phrase as written, not as a pattern, with or without its case
+  (**Aa**), and lists the lines that hold it file by file, each with its
+  number and the words marked. The arrow keys walk the results and Return
+  opens the one they are on; a line opens its file at that line, a
+  Markdown file in its source. The folder searched is the one the side
+  panel shows, a worktree's too, with its submodules. What git ignores,
+  `.git` and AgentTerm's own folder are left out; binary files and files
+  larger than the editor opens are not searched. A folder that is no
+  repository is walked instead. At most 2,000 lines are given, and it says
+  so when there were more; a search that goes on can be stopped, and gives
+  what it finds while it goes. Not part of it: patterns, replacing, and
+  searching more than one folder at a time.
 
-The iPhone has the same under a folder's **Files** tab, working on the
+The iPhone has the same under a folder's **Files** tab, the search too, in
+a field above the tree, working on the
 Mac's files through the host: the tree, new file and folder, rename, move
 to the Mac's Trash and copy path (hold a row), and the same editor with
 syntax coloring, Markdown and Mermaid preview and images. A file opens as
@@ -689,10 +959,26 @@ button at the top right of Sessions goes back to the list of Macs.
 - Each folder opens what the Mac's side panel shows. **Git**: the changed
   files with added and removed line counts, and the diff of a file, which
   scrolls sideways and can be shown as two panels as on the Mac; files can
-  be staged, unstaged and committed as on the
-  Mac, the branch pushed and pulled, and the commit message written by an
+  be staged, unstaged, discarded (from a file's menu, or all of them, asked
+  first as on the Mac) and committed as on the
+  Mac; the branch's name lists the branches, to switch to one or make one
+  (renaming and deleting a branch are on the Mac); Fetch, pulling by merge
+  or by rebase and Force Push… are there as on the Mac, and the remotes
+  are asked by themselves while the folder's changes are on screen;
+  **Commits** opens the history of the checked out branch, with the graph,
+  and a commit shows its message, its hash to copy, and its files with
+  their diffs (reverting and picking a commit are on the Mac); **Stashes**
+  stashes the changes, lists the stashes with their files and diffs, and
+  applies, pops and drops one, as on the Mac; the last commit is amended
+  and undone from the menu beside the branch; what git is stopped in is
+  said at the top with the files that conflict, which show as they are,
+  and can be aborted, or continued once they were resolved on the Mac
+  (resolving a conflict is on the Mac); a submodule's changes are listed
+  under it with a commit box of its own, the branch pushed and pulled, and the commit message written by an
   agent. **History**: the conversations each agent had in the
-  folder only, as on the Mac; every conversation is in the History tab. **Files**: see
+  folder only, as on the Mac; every conversation is in the History tab; both
+  searched, grouped and filtered, a conversation read as a transcript
+  ("Read the Transcript"), pinned, hidden and deleted as on the Mac (#46). **Files**: see
   Files above.
 - A conversation can be resumed in its agent, or handed off to another
   installed agent. The handoff sheet shows the prompt the agent will start
