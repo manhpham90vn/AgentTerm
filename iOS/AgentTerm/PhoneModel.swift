@@ -192,10 +192,55 @@ final class PhoneModel: ObservableObject {
         connection?.send(.gitPush(path: folder))
     }
 
-    func pull(in folder: String) {
+    /// Brings in what the upstream has: the way the repository is set up
+    /// to (`mode` nil), by "merge" or by "rebase" (#37).
+    func pull(in folder: String, mode: String? = nil) {
         guard status == .connected, syncing[folder] == nil else { return }
         syncing[folder] = "pull"
-        connection?.send(.gitPull(path: folder))
+        connection?.send(.gitPull(path: folder, mode: mode))
+    }
+
+    /// What the last fetch no one asked for said when it failed, by folder.
+    @Published private(set) var fetchProblems: [String: String] = [:]
+    private var fetchedAt: [String: Date] = [:]
+    /// A forced push that waits to be confirmed, with what it would overwrite.
+    @Published var pendingForcePush: ForcePush?
+    @Published private(set) var askingForcePush: String?
+
+    struct ForcePush: Identifiable {
+        let folder: String
+        let question: ForcePushQuestion
+        var id: String { folder }
+    }
+
+    /// Asks the folder's remotes on the Mac for what is new. `automatic`
+    /// when no one asked: its failure is noted, and interrupts no one.
+    func fetch(in folder: String, automatic: Bool = false) {
+        guard status == .connected, syncing[folder] == nil else { return }
+        syncing[folder] = "fetch"
+        fetchedAt[folder] = Date()
+        connection?.send(.gitFetch(path: folder, automatic: automatic))
+    }
+
+    /// Fetches the folder on screen when it is time to: the setting on, a
+    /// remote to ask, and the last fetch longer ago than the interval.
+    func fetchIfDue(_ folder: String) {
+        guard display.fetchAutomatically, let diff = diffs[folder], diff.isRepository, diff.upstream != nil || diff.pushRemote != nil else { return }
+        guard Date().timeIntervalSince(fetchedAt[folder] ?? .distantPast) >= DisplaySettings.fetchInterval else { return }
+        fetch(in: folder, automatic: true)
+    }
+
+    /// Asks the Mac what a forced push would overwrite, then asks the user.
+    func requestForcePush(in folder: String) {
+        guard status == .connected, askingForcePush == nil else { return }
+        askingForcePush = folder
+        connection?.send(.gitForcePushPreview(path: folder))
+    }
+
+    func forcePushConfirmed(_ push: ForcePush) {
+        guard status == .connected, syncing[push.folder] == nil else { return }
+        syncing[push.folder] = "push"
+        connection?.send(.gitPush(path: push.folder, force: true))
     }
 
     /// How the Mac is doing: processor, memory, network, heat, battery, uptime.
@@ -1074,6 +1119,21 @@ final class PhoneModel: ObservableObject {
                 // The answer to a commit that git accepted: an error would have come first.
                 committing = nil
                 commitDrafts[folder] = nil
+            }
+        case .gitFetched(let folder, let problem, let automatic):
+            syncing[folder] = nil
+            if let problem {
+                if automatic { fetchProblems[folder] = problem } else { self.message = problem }
+            } else {
+                fetchProblems[folder] = nil
+            }
+        case .gitForcePushPreview(let folder, let upstream, let loses):
+            guard askingForcePush == folder else { break }
+            askingForcePush = nil
+            if let upstream, let branch = diffs[folder]?.branch {
+                pendingForcePush = ForcePush(folder: folder, question: ForcePushQuestion(branch: branch, upstream: upstream, loses: loses))
+            } else {
+                self.message = "The remote could not be asked what a forced push would overwrite, so nothing was pushed."
             }
         case .gitSynced(let folder):
             // Not at the `diff` before it: one asked for while git was still

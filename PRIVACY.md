@@ -1,6 +1,6 @@
 # AgentTerm Privacy Policy
 
-_Effective date: November 12, 2026_
+_Effective date: November 14, 2026_
 
 ## 1. Introduction
 
@@ -56,6 +56,12 @@ the source yourself sends nothing at all.
   OpenAI (ChatGPT), Google or GitHub. For this it reads the sign-in that the agent keeps on your Mac
   and sends it only to the service that issued it. It is not stored, logged, sent to the iPhone or
   sent to the developer. Starting the host with `agenttermd --no-account-usage` turns this off.
+- **To the remotes of your git repositories.** While a folder's Git tab is shown, the Mac asks the
+  remotes of that repository for what is new (`git fetch`) every five minutes, so that what is ahead
+  and behind stays true. It is git on your Mac that connects, to the remotes your repository names,
+  with the sign-in git already has for them; nothing in your folder changes, and nothing about it
+  goes to the developer. "Fetch automatically" in Settings turns it off, on the Mac and on the
+  iPhone alike; the remotes are then asked only when you fetch, pull or push.
 - **The agents themselves.** Claude Code, Codex, Antigravity and Copilot CLI are separate programs
   that you install and sign in to. What they send to their providers is governed by those providers'
   policies, not by this one.

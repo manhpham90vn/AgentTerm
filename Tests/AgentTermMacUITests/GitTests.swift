@@ -104,6 +104,39 @@ final class GitTests: MacUITestCase {
         app.waitGone(.id("branch-feature/ui"))
     }
 
+    /// GIT-34 (#37): Fetch says what the remote has; a forced push is asked
+    /// about with the commits it would overwrite, and then overwrites them.
+    func testFetchingAndForcingAPush() throws {
+        // Someone else pushes a commit.
+        let theirs = root.appendingPathComponent("theirs")
+        git("clone", "-q", remote.path, theirs.path, in: root)
+        git("config", "user.name", "Other", in: theirs)
+        git("config", "user.email", "other@example.com", in: theirs)
+        git("config", "commit.gpgsign", "false", in: theirs)
+        try write("theirs\n", to: "theirs.txt", in: theirs)
+        git("add", ".", in: theirs)
+        git("commit", "-q", "-m", "theirs: a file", in: theirs)
+        git("push", "-q", "origin", "HEAD:main", in: theirs)
+
+        app.press(.button("Git"))
+        app.wait(for: .button("Fetch"))
+        app.press(.button("Fetch"))
+        // One commit to pull, known without pulling it.
+        app.wait(for: .button("Pull, 1"), timeout: 20)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: project.appendingPathComponent("theirs.txt").path), "fetching changed the files")
+
+        // A commit of this side's, so that there is something to force.
+        git("commit", "-q", "--allow-empty", "-m", "mine", in: project)
+        app.press(.id("sync-more"))
+        app.press(.button("Force Push…"), menus: true)
+        app.wait(for: .containing("Force push “main” to origin/main?"), timeout: 20)
+        app.wait(for: .containing("theirs: a file"))
+        shot("asked")
+        app.press(.button("Force Push"))
+        wait("the remote to be overwritten", timeout: 20) { self.git("log", "-1", "--format=%s", "main", in: self.remote) == "mine" }
+        XCTAssertFalse(git("log", "--format=%s", "main", in: remote).contains("theirs: a file"))
+    }
+
     func testARefusedCommitSaysWhatGitSaid() throws {
         // A hook that refuses every commit, as a project's own checks may.
         let hook = project.appendingPathComponent(".git/hooks/pre-commit")

@@ -500,9 +500,22 @@ panel.
     out branch too, and twice, the second time saying its commits would be
     lost, when it has commits of its own. The checked out branch is not
     deleted, and a remote's branches are not changed from here.
-    Above the changes, **Pull** and **Push** act on the branch that is
-    checked out, each with the number of commits waiting, next to the name
-    of the branch it follows. A branch that follows none yet shows
+    Above the changes, **Fetch**, **Pull** and **Push** act on the branch
+    that is checked out, Pull and Push each with the number of commits
+    waiting, next to the name of the branch it follows. Fetch asks the
+    remotes for what is new and changes neither the branch nor the files.
+    It is also done by itself every five minutes while the folder's changes
+    are shown and the app is in front, so that the numbers stay true; when
+    that fails, a warning beside the buttons says so and why, and no alert
+    interrupts. **Fetch automatically**, in Settings > Git and shared with
+    the iPhone, turns it off. The menu beside the buttons pulls **by merge**
+    or **by rebase**, whatever the repository is set up to, and offers
+    **Force Push…**: the remote is asked first, and the question names the
+    commits on it that the branch does not have and that would be gone
+    from it; confirmed, the push is forced only as long as the remote is
+    still where it was just seen (`--force-with-lease`). A push the remote
+    refuses because it has commits the branch has not says so, and that
+    pulling or forcing is what there is to do. A branch that follows none yet shows
     **Publish Branch**, which says where the branch would go and, once
     confirmed, pushes it there and follows it from then on. git never waits
     for a password or a passphrase here: a remote that would ask fails with
@@ -510,7 +523,7 @@ panel.
     The count of commits to pull is as of the last time the remote was
     asked; pulling asks.
     Not part of it: staging part of a file, amending,
-    force push, choosing a remote, and resolving a pull
+    choosing a remote, and resolving a pull
     that conflicts.
 - **History**, the place in the bar at the left: every conversation the
     agents had on the Mac, one section per agent, newest first, each with a
@@ -752,7 +765,9 @@ button at the top right of Sessions goes back to the list of Macs.
   be staged, unstaged, discarded (from a file's menu, or all of them, asked
   first as on the Mac) and committed as on the
   Mac; the branch's name lists the branches, to switch to one or make one
-  (renaming and deleting a branch are on the Mac), the branch pushed and pulled, and the commit message written by an
+  (renaming and deleting a branch are on the Mac); Fetch, pulling by merge
+  or by rebase and Force Push… are there as on the Mac, and the remotes
+  are asked by themselves while the folder's changes are on screen, the branch pushed and pulled, and the commit message written by an
   agent. **History**: the conversations each agent had in the
   folder only, as on the Mac; every conversation is in the History tab. **Files**: see
   Files above.

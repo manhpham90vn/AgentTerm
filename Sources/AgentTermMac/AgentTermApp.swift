@@ -497,6 +497,23 @@ struct GitSettingsView: View {
                     .labelsHidden()
                     .fixedSize()
                 }
+                Divider()
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Fetch automatically").font(.system(size: 13, weight: .medium))
+                        Text(
+                            "Every five minutes, while the side panel shows a folder and the app is in front, its remotes are asked for what is new, so that what is ahead and behind stays true. Nothing in the folder changes. Off, the remotes are asked only by Fetch, Pull and Push."
+                        )
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 12)
+                    Toggle("Fetch automatically", isOn: Binding(get: { model.display.fetchAutomatically }, set: { on in model.setDisplay { $0.fetchAutomatically = on } }))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .accessibilityIdentifier("fetch-automatically")
+                }
             }
             Label(
                 "The agent runs once, without a terminal and with no way to change your files, in a folder of AgentTerm's own, so it leaves no conversation in your project. Large changes are cut down before they are sent.",

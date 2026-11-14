@@ -228,9 +228,23 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// without one is pushed to the remote the folder's changes name
     /// (`DiffSnapshot.pushRemote`), which becomes its upstream. Answered
     /// with the folder's changes, as `diff` is.
-    case gitPush(path: String)
-    /// Brings in what the upstream has. A pull that conflicts is undone.
-    case gitPull(path: String)
+    ///
+    /// With `force` true, what the upstream has and the branch has not is
+    /// overwritten (`--force-with-lease`): sent only after the user was
+    /// told what that is (`gitForcePushPreview`).
+    case gitPush(path: String, force: Bool? = nil)
+    /// Brings in what the upstream has: the way the repository is set up
+    /// to (`mode` nil or "default"), by "merge" or by "rebase" (#37). A
+    /// pull that conflicts is undone.
+    case gitPull(path: String, mode: String? = nil)
+    /// Asks the remotes for what is new, without changing the branch or the
+    /// files (#37). `automatic` when no one asked: the app does it every
+    /// few minutes while the folder is shown. Answered with `gitFetched`,
+    /// then the folder's changes.
+    case gitFetch(path: String, automatic: Bool)
+    /// Asks what a forced push would overwrite. Answered with
+    /// `gitForcePushPreview`.
+    case gitForcePushPreview(path: String)
     /// Asks an agent to write the commit message for what is staged.
     /// Answered with `commitMessage`. It never commits.
     case writeCommitMessage(path: String)
@@ -366,6 +380,14 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// The paired devices. Sent to the host's own machine when they change.
     case devices([DeviceInfo])
     case diff(path: String, snapshot: DiffSnapshot)
+    /// A fetch is over: `problem` is what git said when it failed. One that
+    /// was `automatic` is not to interrupt anyone with it.
+    case gitFetched(path: String, problem: String?, automatic: Bool)
+    /// What a forced push of the checked out branch would overwrite on
+    /// `upstream`: the commits it has and the branch has not, newest
+    /// first, as of now. `upstream` nil when there is nothing to push to,
+    /// or the remote could not be asked.
+    case gitForcePushPreview(path: String, upstream: String?, loses: [String])
     /// The repository's branches: its own, the checked out one first, then
     /// its remotes'. None for a folder that is not a repository.
     case gitBranches(path: String, branches: [BranchInfo])

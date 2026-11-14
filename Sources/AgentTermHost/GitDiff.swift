@@ -309,23 +309,62 @@ public enum GitActions {
     /// Pushes the checked out branch to its upstream. A branch without one
     /// goes to the remote `GitDiff.pushRemote` names, under its own name,
     /// and follows it from then on.
-    public static func push(in directory: String) -> String? {
+    ///
+    /// With `force`, what the upstream has and the branch has not is
+    /// overwritten, but only as long as the upstream is still where it was
+    /// last seen (`--force-with-lease`): commits someone pushed since are
+    /// not lost to it. The apps ask first, saying what would be overwritten
+    /// (`forcePushLoses`).
+    public static func push(in directory: String, force: Bool = false) -> String? {
         guard let branch = currentBranch(in: directory) else { return "Check out a branch to push: this is a detached HEAD." }
         let arguments: [String]
         if GitDiff.tracking(of: branch, in: directory).upstream != nil {
-            arguments = ["push"]
+            arguments = force ? ["push", "--force-with-lease"] : ["push"]
         } else {
             guard let remote = GitDiff.pushRemote(in: directory) else { return "This repository has no remote to push to." }
             arguments = ["push", "--set-upstream", remote, branch]
         }
         let problem = findingTools { run(arguments, in: directory, timeout: remoteTimeout, environment: actionEnvironment) }
+        return problem.map(explainingSignIn).map { said in
+            // Refused because the remote has commits the branch has not:
+            // said in words, with what there is to do about it.
+            guard !force, said.contains("non-fast-forward") || said.contains("fetch first") else { return said }
+            return "The remote has commits this branch does not have, so the push was refused. Pull first, or force the push to overwrite them.\n\n\(said)"
+        }
+    }
+
+    /// Asks the remotes for what is new, without changing the branch or the
+    /// files: how far ahead and behind the branch is then is as of now.
+    /// Branches that are gone from a remote are forgotten here too.
+    public static func fetch(in directory: String) -> String? {
+        guard list(["remote"], in: directory)?.isEmpty == false else { return "This repository has no remote to fetch from." }
+        let problem = findingTools { run(["fetch", "--all", "--prune", "--quiet"], in: directory, timeout: remoteTimeout, environment: actionEnvironment) }
         return problem.map(explainingSignIn)
     }
 
+    /// What a forced push would overwrite: the commits the upstream has and
+    /// the checked out branch has not, newest first, as "hash subject",
+    /// after asking the remote, so that it is as of now. Nil when the
+    /// branch follows none, or the remote could not be asked.
+    public static func forcePushLoses(in directory: String) -> (upstream: String, commits: [String])? {
+        guard let branch = currentBranch(in: directory), let upstream = GitDiff.tracking(of: branch, in: directory).upstream else { return nil }
+        guard fetch(in: directory) == nil else { return nil }
+        guard let lines = list(["log", "--format=%h %s", "HEAD..@{upstream}"], in: directory) else { return nil }
+        return (upstream, lines.flatMap { $0.split(separator: "\n").map(String.init) })
+    }
+
+    /// How a pull brings in what the upstream has.
+    public enum PullMode: String, Sendable {
+        /// The way the repository is set up to: git's own setting.
+        case asSetUp = "default"
+        case merge
+        case rebase
+    }
+
     /// Brings in what the upstream has, the way the repository is set up to
-    /// (merge or rebase). A pull that stops on a conflict is undone, since
-    /// there is nowhere here to resolve it.
-    public static func pull(in directory: String) -> String? {
+    /// unless a merge or a rebase is asked for. A pull that stops on a
+    /// conflict is undone, since there is nowhere here to resolve it.
+    public static func pull(in directory: String, mode: PullMode = .asSetUp) -> String? {
         guard let branch = currentBranch(in: directory) else { return "Check out a branch to pull: this is a detached HEAD." }
         guard GitDiff.tracking(of: branch, in: directory).upstream != nil else {
             return "\(branch) does not follow a branch on a remote yet. Push it first."
@@ -333,7 +372,8 @@ public enum GitActions {
         // A merge or rebase the user left unfinished is theirs, not this pull's.
         let before = unfinished(in: directory)
         let problem = findingTools { () -> String? in
-            guard let problem = run(["pull", "--no-edit"], in: directory, timeout: remoteTimeout, environment: actionEnvironment) else { return nil }
+            let how = mode == .merge ? ["--no-rebase"] : mode == .rebase ? ["--rebase"] : []
+            guard let problem = run(["pull", "--no-edit"] + how, in: directory, timeout: remoteTimeout, environment: actionEnvironment) else { return nil }
             guard before == nil, let left = unfinished(in: directory) else { return problem }
             _ = run([left, "--abort"], in: directory)
             return "The pull ran into conflicts and was undone. Pull in a terminal to resolve them.\n\n\(problem)"

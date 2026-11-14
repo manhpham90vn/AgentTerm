@@ -1485,10 +1485,26 @@ public final class HostServer {
             git(for: client, in: path, branches: true) { GitActions.deleteBranch(name, force: force, in: path) }
         case .gitCommit(let path, let message):
             git(for: client, in: path) { GitActions.commit(message: message, in: path) }
-        case .gitPush(let path):
-            git(for: client, in: path, sync: true) { GitActions.push(in: path) }
-        case .gitPull(let path):
-            git(for: client, in: path, sync: true) { GitActions.pull(in: path) }
+        case .gitPush(let path, let force):
+            git(for: client, in: path, sync: true) { GitActions.push(in: path, force: force ?? false) }
+        case .gitPull(let path, let mode):
+            git(for: client, in: path, sync: true) { GitActions.pull(in: path, mode: mode.flatMap(GitActions.PullMode.init(rawValue:)) ?? .asSetUp) }
+        case .gitFetch(let path, let automatic):
+            work(
+                for: client,
+                { () -> (String?, DiffSnapshot) in
+                    let problem = GitActions.fetch(in: path)
+                    return (problem, GitDiff.snapshot(directory: path))
+                }
+            ) { server, client, result in
+                server.diffCache[path] = (result.1, Date())
+                server.send(.gitFetched(path: path, problem: result.0, automatic: automatic), to: client)
+                server.send(.diff(path: path, snapshot: result.1.withoutPatches), to: client)
+            }
+        case .gitForcePushPreview(let path):
+            work(for: client, { GitActions.forcePushLoses(in: path) }) { server, client, found in
+                server.send(.gitForcePushPreview(path: path, upstream: found?.upstream, loses: found?.commits ?? []), to: client)
+            }
         case .history(let path):
             let home = configuration.home
             work(

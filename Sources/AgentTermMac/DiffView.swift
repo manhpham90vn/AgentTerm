@@ -162,8 +162,15 @@ private struct SyncBar: View {
 
     private var busy: String? { model.panelFolder.flatMap { model.syncing[$0] } }
 
+    /// What the last fetch no one asked for said when it failed.
+    private var fetchProblem: String? { model.panelFolder.flatMap { model.fetchProblems[$0] } }
+
     var body: some View {
         HStack(spacing: 6) {
+            // Its symbol alone: Pull and Push are what the row is for, and
+            // the side panel has no room for three words.
+            SyncButton(title: "Fetch", symbol: "arrow.triangle.2.circlepath", count: 0, working: busy == "fetch", symbolOnly: true) { model.fetch() }
+                .help("Ask the remotes for what is new, without changing the branch or the files")
             if diff.canPull {
                 SyncButton(title: "Pull", symbol: "arrow.down", count: diff.behind ?? 0, working: busy == "pull") { model.pull() }
                     .help(
@@ -182,14 +189,41 @@ private struct SyncBar: View {
                             ? "Send \(diff.ahead ?? 0) \((diff.ahead ?? 0) == 1 ? "commit" : "commits") to \(diff.upstream ?? "the remote")"
                             : "Nothing new to send to \(diff.upstream ?? "the remote")"))
             }
+            if diff.upstream != nil {
+                // The ways that are not the usual one: asked for by name.
+                Menu {
+                    Button("Pull by Merge") { model.pull(.merge) }
+                    Button("Pull by Rebase") { model.pull(.rebase) }
+                    Divider()
+                    Button("Force Push…") { model.requestForcePush() }
+                } label: {
+                    Image(systemName: "ellipsis").font(.system(size: 10, weight: .bold))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Pull by merge or by rebase, or force the push")
+                .accessibilityLabel("More ways to pull and push")
+                .accessibilityIdentifier("sync-more")
+            }
             Spacer(minLength: 4)
+            if let fetchProblem {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.yellow)
+                    .help("The remotes could not be asked for what is new, so what is ahead and behind may be out of date. Fetch says why.\n\n\(fetchProblem)")
+                    .accessibilityLabel("The last automatic fetch failed: \(fetchProblem)")
+                    .accessibilityIdentifier("fetch-problem")
+            }
+            // The first to give way when the panel is narrow.
             Text(diff.upstream ?? "not on a remote yet")
                 .font(.system(size: 10.5))
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .truncationMode(.head)
+                .layoutPriority(-1)
         }
-        .disabled(busy != nil)
+        .disabled(busy != nil || model.askingForcePush != nil)
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
     }
@@ -200,6 +234,8 @@ private struct SyncButton: View {
     let symbol: String
     let count: Int
     let working: Bool
+    /// Drawn without its title, which VoiceOver still says.
+    var symbolOnly = false
     let action: () -> Void
 
     var body: some View {
@@ -210,7 +246,7 @@ private struct SyncButton: View {
                 } else {
                     Image(systemName: symbol).font(.system(size: 9.5, weight: .bold))
                 }
-                Text(title)
+                if !symbolOnly { Text(title).fixedSize() }
                 if count > 0 {
                     Text("\(count)").monospacedDigit().foregroundStyle(.secondary)
                 }

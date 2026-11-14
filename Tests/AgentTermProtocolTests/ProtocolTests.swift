@@ -30,6 +30,10 @@ final class ProtocolTests: XCTestCase {
             .gitStage(path: "/Users/me/app", files: []),
             .gitDiscard(path: "/Users/me/app", files: ["src/a b.swift"]),
             .gitDiscard(path: "/Users/me/app", files: []),
+            .gitFetch(path: "/Users/me/app", automatic: true),
+            .gitPull(path: "/Users/me/app", mode: "rebase"),
+            .gitPush(path: "/Users/me/app", force: true),
+            .gitForcePushPreview(path: "/Users/me/app"),
             .gitBranches(path: "/Users/me/app"),
             .gitSwitch(path: "/Users/me/app", branch: "origin/feature/login"),
             .gitCreateBranch(path: "/Users/me/app", name: "feature/x", from: nil, checkout: true),
@@ -404,5 +408,32 @@ final class ProtocolTests: XCTestCase {
 
         let message = ServerMessage.gitBranches(path: "/p", branches: [merged, own])
         XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
+    }
+
+    /// GIT-33 (#37): what is asked before a push is forced, and the setting
+    /// that fetches by itself, on unless turned off.
+    func testWhatIsAskedBeforeAForcedPush() throws {
+        let one = ForcePushQuestion(branch: "main", upstream: "origin/main", loses: ["abc1234 theirs: a line"])
+        XCTAssertEqual(one.title, "Force push “main” to origin/main?")
+        XCTAssertTrue(one.message.hasPrefix("This commit on origin/main is not in “main” and will be gone from it there:\n\n• abc1234 theirs: a line"), one.message)
+        XCTAssertTrue(one.isNeeded)
+        XCTAssertEqual(one.confirm, "Force Push")
+        let many = ForcePushQuestion(branch: "main", upstream: "origin/main", loses: (1...11).map { "h\($0) commit \($0)" })
+        XCTAssertTrue(many.message.contains("These 11 commits on origin/main are not in “main”"))
+        XCTAssertTrue(many.message.contains("• h8 commit 8\n… and 3 more"), many.message)
+        XCTAssertFalse(many.message.contains("commit 9"))
+        let none = ForcePushQuestion(branch: "main", upstream: "origin/main", loses: [])
+        XCTAssertFalse(none.isNeeded)
+        XCTAssertTrue(none.message.contains("a push without force does the same"))
+
+        XCTAssertTrue(DisplaySettings().fetchAutomatically)
+        let old = try JSONDecoder().decode(DisplaySettings.self, from: Data(#"{"temperatureUnit":"celsius","diffLayout":"split","changesView":"tree"}"#.utf8))
+        XCTAssertTrue(old.fetchAutomatically, "on for settings saved before there was the choice")
+        var off = DisplaySettings()
+        off.fetchAutomatically = false
+        XCTAssertFalse(try JSONDecoder().decode(DisplaySettings.self, from: JSONEncoder().encode(off.checked)).fetchAutomatically)
+        for message in [ServerMessage.gitFetched(path: "/p", problem: "no route", automatic: true), .gitForcePushPreview(path: "/p", upstream: nil, loses: [])] {
+            XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
+        }
     }
 }

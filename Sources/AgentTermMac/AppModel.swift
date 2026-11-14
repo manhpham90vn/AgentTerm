@@ -449,25 +449,111 @@ final class AppModel: ObservableObject {
         if diff.upstream == nil, let remote = diff.pushRemote {
             pendingFirstPush = FirstPush(folder: directory, branch: branch, remote: remote)
         } else {
-            sync("push", in: directory) { GitActions.push(in: $0) }
+            sync("push", in: directory, .gitPush(path: directory)) { GitActions.push(in: $0) }
         }
     }
 
     func pushConfirmed(_ push: FirstPush) {
-        sync("push", in: push.folder) { GitActions.push(in: $0) }
+        sync("push", in: push.folder, .gitPush(path: push.folder)) { GitActions.push(in: $0) }
     }
 
-    func pull() {
+    /// Brings in what the upstream has: the way the repository is set up
+    /// to, or by a merge or a rebase when one is asked for (#37).
+    func pull(_ mode: GitActions.PullMode = .asSetUp) {
         guard let directory = panelFolder else { return }
-        sync("pull", in: directory) { GitActions.pull(in: $0) }
+        sync("pull", in: directory, .gitPull(path: directory, mode: mode.rawValue)) { GitActions.pull(in: $0, mode: mode) }
     }
 
-    private func sync(_ what: String, in directory: String, _ action: @escaping (String) -> String?) {
+    // MARK: Fetch and forced push (#37)
+
+    /// What the last fetch no one asked for said when it failed, by
+    /// folder: shown beside Fetch, not as an alert every few minutes.
+    @Published private(set) var fetchProblems: [String: String] = [:]
+    /// When each folder's remotes were last asked, by this app.
+    private var fetchedAt: [String: Date] = [:]
+    /// A forced push that waits to be confirmed, with what it would overwrite.
+    @Published var pendingForcePush: ForcePush?
+    /// The folder whose remote is being asked what a forced push would overwrite.
+    @Published private(set) var askingForcePush: String?
+
+    struct ForcePush: Identifiable {
+        let folder: String
+        let question: ForcePushQuestion
+        var id: String { folder }
+    }
+
+    /// Asks the folder's remotes for what is new. `automatic` when no one
+    /// asked: its failure is noted beside Fetch and interrupts no one.
+    func fetch(automatic: Bool = false) {
+        guard let directory = panelFolder, syncing[directory] == nil else { return }
+        syncing[directory] = "fetch"
+        fetchedAt[directory] = Date()
+        if isRemote {
+            sendForDiff(.gitFetch(path: directory, automatic: automatic), in: directory)
+            return
+        }
+        DispatchQueue.global(qos: automatic ? .utility : .userInitiated).async { [weak self] in
+            let problem = GitActions.fetch(in: directory)
+            DispatchQueue.main.async { self?.fetched(directory, problem: problem, automatic: automatic) }
+        }
+    }
+
+    private func fetched(_ directory: String, problem: String?, automatic: Bool) {
+        syncing[directory] = nil
+        if let problem {
+            if automatic { fetchProblems[directory] = problem } else { notice = problem }
+        } else {
+            fetchProblems[directory] = nil
+        }
+        if !isRemote { refreshDiff() }
+    }
+
+    /// Fetches the folder that is shown when it is time to: the side panel
+    /// open on a repository with a remote, the app in front, the setting
+    /// on, and the last fetch longer ago than the interval.
+    private func fetchIfDue() {
+        guard display.fetchAutomatically, showDiff, NSApp.isActive, let directory = panelFolder, let diff, diff.isRepository,
+            diff.upstream != nil || diff.pushRemote != nil, syncing[directory] == nil
+        else { return }
+        guard Date().timeIntervalSince(fetchedAt[directory] ?? .distantPast) >= DisplaySettings.fetchInterval else { return }
+        fetch(automatic: true)
+    }
+
+    /// Asks what a forced push would overwrite, then asks the user.
+    func requestForcePush() {
+        guard let directory = panelFolder, let branch = diff?.branch, askingForcePush == nil else { return }
+        askingForcePush = directory
+        if isRemote {
+            connection?.send(.gitForcePushPreview(path: directory))
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let found = GitActions.forcePushLoses(in: directory)
+            DispatchQueue.main.async { self?.forcePushPreview(directory, branch: branch, upstream: found?.upstream, loses: found?.commits ?? []) }
+        }
+    }
+
+    private func forcePushPreview(_ directory: String, branch: String?, upstream: String?, loses: [String]) {
+        guard askingForcePush == directory else { return }
+        askingForcePush = nil
+        guard let upstream, let branch = branch ?? diff?.branch else {
+            notice = "The remote could not be asked what a forced push would overwrite, so nothing was pushed."
+            return
+        }
+        pendingForcePush = ForcePush(folder: directory, question: ForcePushQuestion(branch: branch, upstream: upstream, loses: loses))
+        if !isRemote { refreshDiff() }
+    }
+
+    func forcePushConfirmed(_ push: ForcePush) {
+        sync("push", in: push.folder, .gitPush(path: push.folder, force: true)) { GitActions.push(in: $0, force: true) }
+    }
+
+    private func sync(_ what: String, in directory: String, _ message: ClientMessage, _ action: @escaping (String) -> String?) {
         guard syncing[directory] == nil else { return }
         syncing[directory] = what
         if isRemote {
             // The other Mac's git does it, and says when it is over.
-            sendForDiff(what == "push" ? .gitPush(path: directory) : .gitPull(path: directory), in: directory)
+            sendForDiff(message, in: directory)
             return
         }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -652,7 +738,11 @@ final class AppModel: ObservableObject {
         // read again when its files change (`panelWatch`) (#21).
         diffTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.isRemote, self.showDiff, NSApp.isActive else { return }
+                guard let self else { return }
+                // The remotes are asked every few minutes; looked at here
+                // often, so that a folder just opened is asked soon.
+                self.fetchIfDue()
+                guard self.isRemote, self.showDiff, NSApp.isActive else { return }
                 self.refreshDiff()
             }
         }
@@ -1293,6 +1383,10 @@ final class AppModel: ObservableObject {
             accountUsage = Dictionary(list.map { ($0.agent, $0) }, uniquingKeysWith: { $1 })
         case .gitBranches(let path, let list):
             if path == panelFolder { branches = list }
+        case .gitFetched(let path, let problem, let automatic):
+            fetched(path, problem: problem, automatic: automatic)
+        case .gitForcePushPreview(let path, let upstream, let loses):
+            forcePushPreview(path, branch: nil, upstream: upstream, loses: loses)
         case .diff(let path, let snapshot):
             // Only asked for on another Mac: this Mac's changes are read
             // from its own disk.

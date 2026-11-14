@@ -237,6 +237,8 @@ private struct SyncBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
+                button("Fetch", symbol: "arrow.triangle.2.circlepath", count: 0, working: busy == "fetch") { model.fetch(in: folder) }
+                    .accessibilityIdentifier("git-fetch")
                 if diff.canPull {
                     button("Pull", symbol: "arrow.down", count: diff.behind ?? 0, working: busy == "pull") { model.pull(in: folder) }
                         .accessibilityIdentifier("git-pull")
@@ -248,16 +250,60 @@ private struct SyncBar: View {
                     }
                     .accessibilityIdentifier("git-push")
                 }
+                if diff.upstream != nil {
+                    // The ways that are not the usual one: asked for by name.
+                    Menu {
+                        Button("Pull by Merge") { model.pull(in: folder, mode: "merge") }
+                        Button("Pull by Rebase") { model.pull(in: folder, mode: "rebase") }
+                        Divider()
+                        Button("Force Push…", role: .destructive) { model.requestForcePush(in: folder) }
+                    } label: {
+                        Image(systemName: "ellipsis.circle").font(.system(size: 20)).frame(width: 36, height: 36)
+                    }
+                    .accessibilityLabel("More ways to pull and push")
+                    .accessibilityIdentifier("git-more")
+                }
             }
-            .disabled(busy != nil || model.status != .connected)
+            .disabled(busy != nil || model.askingForcePush != nil || model.status != .connected)
             Text(diff.upstream.map { "Follows \($0)" } ?? "Not on a remote yet")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .lineLimit(1)
                 .truncationMode(.head)
                 .padding(.horizontal, 6)
+            if let problem = model.fetchProblems[folder] {
+                // A fetch no one asked for failed: said here, not in an alert.
+                Label("The Mac could not ask the remote for what is new: \(problem)", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .padding(.horizontal, 6)
+                    .accessibilityIdentifier("fetch-problem")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        // The remotes are asked every few minutes while this is on screen.
+        .task(id: folder) {
+            while !Task.isCancelled {
+                model.fetchIfDue(folder)
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+            }
+        }
+        // A forced push is asked about first, saying what it overwrites.
+        .confirmationDialog(
+            model.pendingForcePush?.question.title ?? "",
+            isPresented: Binding(get: { model.pendingForcePush?.folder == folder }, set: { if !$0 { model.pendingForcePush = nil } }),
+            titleVisibility: .visible, presenting: model.pendingForcePush
+        ) { push in
+            if push.question.isNeeded {
+                Button(push.question.confirm, role: .destructive) { model.forcePushConfirmed(push) }
+            } else {
+                Button("Push") { model.push(in: folder) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { push in
+            Text(push.question.message)
+        }
         .confirmationDialog(
             "Push “\(diff.branch ?? "")” to \(diff.pushRemote ?? "the remote")?", isPresented: $confirmingFirstPush, titleVisibility: .visible
         ) {

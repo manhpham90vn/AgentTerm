@@ -103,6 +103,82 @@ final class GitSyncTests: XCTestCase {
         XCTAssertTrue(problem.contains("rejected") || problem.contains("fetch first"), problem)
     }
 
+    /// GIT-30 (#37): a fetch asks the remote for what is new and changes
+    /// neither the branch nor the files; a repository without a remote
+    /// says so.
+    func testAFetchSaysWhatTheRemoteHasWithoutChangingAnything() throws {
+        try commit("b.txt", "theirs\n", "theirs", in: theirs)
+        run("push", "-q", in: theirs)
+        try "mine, not committed\n".write(to: mine.appendingPathComponent("c.txt"), atomically: true, encoding: .utf8)
+        let head = run("rev-parse", "HEAD", in: mine)
+        XCTAssertEqual(snapshot(mine).behind, 0)
+
+        XCTAssertNil(GitActions.fetch(in: mine.path))
+        XCTAssertEqual(snapshot(mine).behind, 1, "what the remote has is known")
+        XCTAssertEqual(run("rev-parse", "HEAD", in: mine), head, "the branch is where it was")
+        XCTAssertEqual(try String(contentsOf: mine.appendingPathComponent("c.txt"), encoding: .utf8), "mine, not committed\n")
+
+        // A branch that is gone from the remote is forgotten here too.
+        run("push", "-q", "origin", "main:spare", in: theirs)
+        XCTAssertNil(GitActions.fetch(in: mine.path))
+        XCTAssertTrue(GitActions.branches(in: mine.path).contains { $0.name == "origin/spare" })
+        run("push", "-q", "origin", "--delete", "spare", in: theirs)
+        XCTAssertNil(GitActions.fetch(in: mine.path))
+        XCTAssertFalse(GitActions.branches(in: mine.path).contains { $0.name == "origin/spare" })
+
+        let alone = root.appendingPathComponent("alone")
+        run("init", "-q", "-b", "main", alone.path, in: root)
+        XCTAssertEqual(GitActions.fetch(in: alone.path), "This repository has no remote to fetch from.")
+    }
+
+    /// GIT-31 (#37): a pull brings the upstream in by a merge or by a
+    /// rebase when one is asked for, whatever the repository is set up to.
+    func testAPullByMergeOrByRebase() throws {
+        try commit("b.txt", "theirs\n", "theirs", in: theirs)
+        run("push", "-q", in: theirs)
+        try commit("c.txt", "mine\n", "mine", in: mine)
+        // Set up to merge: asked to rebase, mine comes after theirs, with no merge.
+        XCTAssertNil(GitActions.pull(in: mine.path, mode: .rebase))
+        XCTAssertEqual(run("log", "--format=%s", "-3", in: mine), "mine\ntheirs\ninit")
+        XCTAssertEqual(run("rev-list", "--merges", "--count", "HEAD", in: mine), "0")
+
+        try commit("d.txt", "theirs again\n", "theirs again", in: theirs)
+        run("push", "-q", "--force", in: theirs)
+        try commit("e.txt", "mine again\n", "mine again", in: mine)
+        run("config", "pull.rebase", "true", in: mine)
+        // Set up to rebase: asked to merge, there is a merge commit.
+        XCTAssertNil(GitActions.pull(in: mine.path, mode: .merge))
+        XCTAssertEqual(run("rev-list", "--merges", "--count", "HEAD", in: mine), "1")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mine.appendingPathComponent("d.txt").path))
+    }
+
+    /// GIT-32 (#37): a push the remote refuses says why and what to do; a
+    /// forced push is told what it would overwrite, as of now, and then
+    /// overwrites it.
+    func testAForcedPushSaysWhatItOverwrites() throws {
+        try commit("b.txt", "theirs\n", "theirs: a line", in: theirs)
+        try commit("b.txt", "theirs\nmore\n", "theirs: one more", in: theirs)
+        run("push", "-q", in: theirs)
+        try commit("a.txt", "one\nmine\n", "mine", in: mine)
+
+        let refused = try XCTUnwrap(GitActions.push(in: mine.path))
+        XCTAssertTrue(refused.hasPrefix("The remote has commits this branch does not have, so the push was refused. Pull first, or force the push"), refused)
+        XCTAssertEqual(run("log", "-1", "--format=%s", "main", in: remote), "theirs: one more", "nothing was overwritten")
+
+        // The remote is asked, so what is told is what is there now.
+        let loses = try XCTUnwrap(GitActions.forcePushLoses(in: mine.path))
+        XCTAssertEqual(loses.upstream, "origin/main")
+        XCTAssertEqual(loses.commits.map { String($0.split(separator: " ", maxSplits: 1).last ?? "") }, ["theirs: one more", "theirs: a line"])
+
+        XCTAssertNil(GitActions.push(in: mine.path, force: true))
+        XCTAssertEqual(run("log", "--format=%s", "main", in: remote), "mine\ninit")
+        XCTAssertEqual(GitActions.forcePushLoses(in: mine.path)?.commits, [], "nothing left to overwrite")
+
+        // A branch that follows none has nothing to be told about.
+        run("checkout", "-q", "-b", "alone", in: mine)
+        XCTAssertNil(GitActions.forcePushLoses(in: mine.path))
+    }
+
     func testAPullThatConflictsIsUndone() throws {
         try commit("a.txt", "theirs\n", "theirs", in: theirs)
         run("push", "-q", in: theirs)

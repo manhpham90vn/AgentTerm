@@ -179,6 +179,10 @@ private struct SettingsTab: View {
                             Text("Flat list").tag("list")
                             Text("By folder").tag("tree")
                         }
+                        Toggle(
+                            "Fetch automatically", isOn: Binding(get: { model.display.fetchAutomatically }, set: { on in model.setDisplay { $0.fetchAutomatically = on } })
+                        )
+                        .accessibilityIdentifier("fetch-automatically")
                     }
                     .disabled(!online)
                 } header: {

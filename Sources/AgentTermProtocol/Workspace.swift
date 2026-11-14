@@ -45,6 +45,35 @@ public struct FileDiff: Codable, Identifiable, Equatable, Sendable {
     public var marker: String { isUntracked ? "U" : status.rawValue }
 }
 
+/// What is asked before a push is forced (#37), the same on every device:
+/// which commits on the remote would be gone from the branch there.
+public struct ForcePushQuestion: Equatable, Sendable {
+    public var title: String
+    public var message: String
+    public var confirm: String
+    /// Nothing would be overwritten: a plain push does it.
+    public var isNeeded: Bool
+
+    /// How many of the commits are named before the rest are counted.
+    public static let shown = 8
+
+    public init(branch: String, upstream: String, loses: [String]) {
+        isNeeded = !loses.isEmpty
+        title = "Force push “\(branch)” to \(upstream)?"
+        confirm = "Force Push"
+        guard isNeeded else {
+            message = "\(upstream) has no commit that “\(branch)” does not have: a push without force does the same."
+            return
+        }
+        let count = loses.count == 1 ? "This commit on \(upstream) is" : "These \(loses.count) commits on \(upstream) are"
+        var lines = loses.prefix(Self.shown).map { "• " + $0 }
+        if loses.count > Self.shown { lines.append("… and \(loses.count - Self.shown) more") }
+        message =
+            "\(count) not in “\(branch)” and will be gone from it there:\n\n" + lines.joined(separator: "\n")
+            + "\n\nAnyone who has them is not asked. The push is refused if the remote changed again since it was looked at just now."
+    }
+}
+
 /// A branch of a repository (#35): one of its own, or one of a remote's as
 /// of the last time the remote was asked.
 public struct BranchInfo: Codable, Equatable, Hashable, Identifiable, Sendable {

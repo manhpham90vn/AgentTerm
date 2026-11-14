@@ -146,6 +146,21 @@ struct RootView: View {
         } message: { push in
             Text("The branch does not follow a branch on a remote yet. It is pushed as \(push.remote)/\(push.branch), which it follows from then on.")
         }
+        // A forced push is asked about first, saying what it overwrites (#37).
+        .confirmationDialog(
+            model.pendingForcePush?.question.title ?? "",
+            isPresented: Binding(get: { model.pendingForcePush != nil }, set: { if !$0 { model.pendingForcePush = nil } }),
+            titleVisibility: .visible, presenting: model.pendingForcePush
+        ) { push in
+            if push.question.isNeeded {
+                Button(push.question.confirm, role: .destructive) { model.forcePushConfirmed(push) }
+            } else {
+                Button("Push") { model.push() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { push in
+            Text(push.question.message)
+        }
         .sheet(item: $model.pendingHandoff) { conversation in
             HandoffSheet(conversation: conversation)
         }
