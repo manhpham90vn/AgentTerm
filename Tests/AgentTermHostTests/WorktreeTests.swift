@@ -109,6 +109,24 @@ final class WorktreeTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: project.path), "nothing is removed by listing")
     }
 
+    /// WT-9: what watches a worktree sees its branches change in the
+    /// repository's own git folder, as a push or a fetch in a terminal
+    /// changes them.
+    func testAWorktreesWatchSeesTheRepositorysBranches() throws {
+        let worktree = try GitWorktrees.create(in: project.path, agent: "claude", branch: nil).directory
+        var changes = 0
+        let watch = FolderWatch(paths: FolderWatch.paths(for: worktree), latency: 0.1, queue: .main) { changes += 1 }
+        XCTAssertNotNil(watch)
+        RunLoop.main.run(until: Date().addingTimeInterval(1))
+        changes = 0
+        // What a push of its branch writes.
+        git("update-ref", "refs/remotes/origin/agentterm/claude-1", "HEAD")
+        let deadline = Date().addingTimeInterval(5)
+        while changes == 0 && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.05)) }
+        XCTAssertGreaterThan(changes, 0, "the push was not seen")
+        withExtendedLifetime(watch) {}
+    }
+
     func testWhereAWorktreesSessionBelongs() {
         XCTAssertEqual(WorktreePath.project(of: "/p/.agentterm/worktrees/agentterm/claude-1"), "/p")
         XCTAssertNil(WorktreePath.project(of: "/p/src"))

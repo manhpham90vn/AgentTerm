@@ -34,12 +34,20 @@ public final class FolderWatch {
         self.stream = stream
     }
 
-    /// The folder and, for a git repository, git's own folder for it.
+    /// The folder and, for a git repository, git's own folder for it and,
+    /// for a worktree, the repository's own git folder too: its branches
+    /// and remotes are there, and a push or a fetch changes nothing else.
     public static func paths(for folder: String) -> [String] {
         var paths = [folder]
-        if let result = Subprocess.run("/usr/bin/git", ["-C", folder, "rev-parse", "--absolute-git-dir"], timeout: 5), result.status == 0 {
-            let gitDirectory = String(decoding: result.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !gitDirectory.isEmpty, !gitDirectory.hasPrefix(folder + "/") { paths.append(gitDirectory) }
+        if let result = Subprocess.run("/usr/bin/git", ["-C", folder, "rev-parse", "--absolute-git-dir", "--git-common-dir"], timeout: 5),
+            result.status == 0
+        {
+            let lines = String(decoding: result.output, as: UTF8.self).split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+            for line in lines where !line.isEmpty {
+                // The common folder may be given from the folder.
+                let directory = URL(fileURLWithPath: line, relativeTo: URL(fileURLWithPath: folder, isDirectory: true)).standardizedFileURL.path
+                if directory != folder, !directory.hasPrefix(folder + "/"), !paths.contains(directory) { paths.append(directory) }
+            }
         }
         return paths
     }
