@@ -197,6 +197,16 @@ enum Subprocess {
         kill(pid, SIGCONT)
     }
 
+    /// The programs running in the session a program leads, itself among them.
+    static func session(of leader: pid_t) -> [pid_t] {
+        let room = proc_listallpids(nil, 0)
+        guard room > 0 else { return [leader] }
+        var pids = [pid_t](repeating: 0, count: Int(room) + 64)
+        let found = proc_listallpids(&pids, Int32(pids.count * MemoryLayout<pid_t>.size))
+        guard found > 0 else { return [leader] }
+        return pids.prefix(Int(found)).filter { $0 > 0 && getsid($0) == leader }
+    }
+
     /// A command that was started and runs by itself, to be stopped or
     /// waited for: an agent that writes a commit message, which takes as
     /// long as it takes and can be given up on.
@@ -225,10 +235,29 @@ enum Subprocess {
 
         /// Asks it to end, unless it has: its number may be another
         /// program's once it was waited for.
+        ///
+        /// With everything it started: it is the first of a session of its
+        /// own, and every program of that session is asked to end. An
+        /// interactive shell takes no notice of being asked, and where it
+        /// stays the parent of the program it runs, that program would
+        /// otherwise go on to its own end. A shell that is still there a
+        /// moment later is told its terminal is gone, which it does heed,
+        /// and what is there after three seconds is killed.
         func stop() {
             lock.lock()
             defer { lock.unlock() }
-            if status == nil { Subprocess.end(pid) }
+            guard status == nil else { return }
+            for member in Subprocess.session(of: pid) where member != pid { Subprocess.end(member) }
+            Subprocess.end(pid)
+            DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { [self] in
+                guard isRunning else { return }
+                kill(pid, SIGHUP)
+                kill(pid, SIGCONT)
+            }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 3) { [self] in
+                guard isRunning else { return }
+                for member in Subprocess.session(of: pid) { kill(member, SIGKILL) }
+            }
         }
 
         /// Waits for it to end, and says how it did.

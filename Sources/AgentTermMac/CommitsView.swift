@@ -181,6 +181,43 @@ private struct CommitRow: View {
         .padding(.trailing, 6)
     }
 
+    // In pieces of their own: as one expression the row took the compiler
+    // longer to type-check than the build that CodeQL watches allows.
+
+    /// A branch or a tag that points at the commit.
+    private func refChip(_ ref: String) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 3, style: .continuous)
+        return Text(ref)
+            .font(.system(size: 9.5, weight: .medium))
+            .lineLimit(1)
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(shape.fill(Color.accentColor.opacity(0.22)))
+            .fixedSize()
+    }
+
+    private var fill: Color {
+        if opened { return Color.white.opacity(0.09) }
+        return hovering ? Color.white.opacity(0.05) : Color.clear
+    }
+
+    private var pickTitle: String {
+        let onto = onBranch.map { "“" + $0 + "”" } ?? "the Checked Out Commit"
+        return "Cherry-Pick onto " + onto + "…"
+    }
+
+    @ViewBuilder private var menu: some View {
+        Button("Copy Hash", action: copy)
+        if isLast {
+            Divider()
+            Button("Amend…", action: amend)
+            Button("Undo Commit…", action: undo)
+        }
+        Divider()
+        Button("Revert…", action: revert)
+        Button(pickTitle, action: pick)
+    }
+
     private var summary: some View {
         VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 5) {
@@ -188,15 +225,7 @@ private struct CommitRow: View {
                     .font(.system(size: 12))
                     .lineLimit(1)
                     .truncationMode(.tail)
-                ForEach(commit.refs.prefix(2), id: \.self) { ref in
-                    Text(ref)
-                        .font(.system(size: 9.5, weight: .medium))
-                        .lineLimit(1)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(RoundedRectangle(cornerRadius: 3, style: .continuous).fill(Color.accentColor.opacity(0.22)))
-                        .fixedSize()
-                }
+                ForEach(Array(commit.refs.prefix(2)), id: \.self) { ref in refChip(ref) }
             }
             Text(byline)
                 .font(.system(size: 10.5))
@@ -205,22 +234,12 @@ private struct CommitRow: View {
         }
         .frame(maxWidth: .infinity, minHeight: CommitGraph.dotY * 2, alignment: .leading)
         .padding(.horizontal, 4)
-        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(opened ? Color.white.opacity(0.09) : (hovering ? Color.white.opacity(0.05) : .clear)))
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(fill))
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .onTapGesture(perform: toggle)
         .help(commit.short + " " + commit.subject)
-        .contextMenu {
-            Button("Copy Hash", action: copy)
-            if isLast {
-                Divider()
-                Button("Amend…", action: amend)
-                Button("Undo Commit…", action: undo)
-            }
-            Divider()
-            Button("Revert…", action: revert)
-            Button("Cherry-Pick onto \(onBranch.map { "“\($0)”" } ?? "the Checked Out Commit")…", action: pick)
-        }
+        .contextMenu { menu }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityIdentifier("commit-" + commit.short)
