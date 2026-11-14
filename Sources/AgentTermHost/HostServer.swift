@@ -2067,7 +2067,14 @@ public final class HostServer {
         case .read(let session, let linesAbove):
             guard let shell = own(session) else { return answer(.refused(notOwn)) }
             let lines = min(linesAbove, configuration.screenLines)
-            answer(.screen(shell.mirrorQueue.sync { shell.mirror.text(linesAbove: lines) }))
+            // Read where the screen is kept, after what was written to it,
+            // without this queue, which every session's output goes
+            // through, waiting for that (#21). Answers are matched by `id`.
+            let mirror = shell.mirror
+            shell.mirrorQueue.async { [weak self] in
+                let text = mirror.text(linesAbove: lines)
+                self?.queue.async { answer(.screen(text)) }
+            }
         case .send(let session, let text, let keys):
             guard let shell = own(session) else { return answer(.refused(notOwn)) }
             var bytes = text ?? ""
