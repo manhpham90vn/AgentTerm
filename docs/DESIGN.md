@@ -711,7 +711,8 @@ A due run of a schedule whose last run is still going (its session runs
 and its agent is not done) is skipped; with two runs going, it waits. A
 run whose agent's state is not known (its hooks never ran, as Codex's
 before they are trusted, or it was interrupted) is going until it has
-written nothing for an hour (`quietRunIsDone`), then counts as done. A
+written nothing for an hour (`quietRunIsDone`), then counts as done. A run whose folder is not there is recorded as not
+started: a session started there would be in the home folder. A
 run is `ScheduleRunner.launch`: the agent's command with its switch
 (`claude --permission-mode bypassPermissions|acceptEdits`, `codex
 --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust`,

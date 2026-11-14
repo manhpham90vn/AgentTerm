@@ -402,6 +402,22 @@ final class SchedulerHostTests: XCTestCase {
         XCTAssertEqual(client.schedules.first { $0.name == third.name }?.runs.map(\.note), ["Started"])
     }
 
+    /// SCHED-18: a run whose folder is gone is not started anywhere else,
+    /// and says why.
+    func testARunWhoseFolderIsGoneIsNotStarted() throws {
+        client.connection.send(.saveSchedule(morning()))
+        waitUntil("saved") { self.client.schedules.count == 1 }
+        try FileManager.default.removeItem(at: project)
+        set(ScheduleTime.daily(hour: 9, minute: 0).next(after: clock)!.addingTimeInterval(5))
+        waitUntil("the run to be recorded") { self.client.schedules.first?.runs.count == 1 }
+        let run = try XCTUnwrap(client.schedules.first?.runs.first)
+        XCTAssertFalse(run.started)
+        XCTAssertEqual(run.note, "Not started: its folder \(project.path) is not there")
+        pause()
+        XCTAssertEqual(client.sessions, [])
+        XCTAssertEqual(startedLines, [], "not in the home folder either")
+    }
+
     /// SCHED-9: Copilot CLI asked to skip all is told so through its variable.
     func testCopilotIsToldThroughItsVariable() throws {
         client.connection.send(.saveSchedule(morning("copilot")))

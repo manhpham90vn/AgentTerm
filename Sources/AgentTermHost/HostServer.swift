@@ -776,6 +776,14 @@ public final class HostServer {
                 still.append(run)
                 continue
             }
+            // Never somewhere else: a session whose folder is gone starts in
+            // the home folder, and an agent that skips permissions would
+            // have all of it.
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: schedule.folder, isDirectory: &isDirectory), isDirectory.boolValue else {
+                record(ScheduleRun(at: run.at, started: false, note: "Not started: its folder \(schedule.folder) is not there"), in: index)
+                continue
+            }
             let (command, environment) = ScheduleRunner.launch(schedule)
             let request = CreateRequest(command: command, cwd: schedule.folder, title: schedule.name)
             if let id = create(request, for: nil, run: schedule, environment: environment) {
