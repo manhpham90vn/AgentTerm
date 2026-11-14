@@ -143,6 +143,30 @@ public enum HostEnvironment {
 
 /// Runs a short helper command and returns its standard output.
 enum Subprocess {
+    /// How a command ended (#52): three facts that one number cannot tell
+    /// apart, since exit 15 and SIGTERM, which the timeout sends, are both 15.
+    enum Ending: Equatable {
+        /// It exited by itself, with this status.
+        case exited(Int32)
+        /// Something else killed it, with this signal.
+        case signalled(Int32)
+        /// It took longer than its timeout and was stopped.
+        case timedOut
+    }
+
+    /// What a command printed and how it ended.
+    struct Result {
+        var ending: Ending
+        var output: Data
+
+        /// Its exit status, or -1 when it did not exit by itself: a check
+        /// for a status is never met by a signal of the same number.
+        var status: Int32 {
+            if case .exited(let status) = ending { return status }
+            return -1
+        }
+    }
+
     /// - Parameter mergeErrors: also capture what the command writes to standard error.
     ///
     /// Started with `posix_spawn` and waited for with `waitpid`: Foundation's
@@ -151,7 +175,7 @@ enum Subprocess {
     static func run(
         _ executable: String, _ arguments: [String], cwd: String? = nil, timeout: TimeInterval = 10, mergeErrors: Bool = false,
         environment: [String: String]? = nil
-    ) -> (status: Int32, output: Data)? {
+    ) -> Result? {
         var pipe: [Int32] = [0, 0]
         guard Darwin.pipe(&pipe) == 0 else { return nil }
         var actions: posix_spawn_file_actions_t?
@@ -191,10 +215,14 @@ enum Subprocess {
         // its number may be another program's.
         let lock = NSLock()
         var ended = false
+        var stopped = false
         let timer = DispatchWorkItem {
             lock.lock()
             defer { lock.unlock() }
-            if !ended { kill(pid, SIGTERM) }
+            if !ended {
+                stopped = true
+                kill(pid, SIGTERM)
+            }
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
         // Read before waiting so a full pipe cannot stall the child.
@@ -217,12 +245,16 @@ enum Subprocess {
         while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) < 0 && errno == EINTR {}
         lock.lock()
         ended = true
+        let timedOut = stopped
         lock.unlock()
         timer.cancel()
         var status: Int32 = 0
         while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
         let signal = status & 0x7f
-        return (signal == 0 ? (status >> 8) & 0xff : signal, output)
+        // Stopped at its timeout whatever it then did with the signal: a
+        // command may catch SIGTERM and exit with a status of its own.
+        if timedOut { return Result(ending: .timedOut, output: output) }
+        return Result(ending: signal == 0 ? .exited((status >> 8) & 0xff) : .signalled(signal), output: output)
     }
 }
 #endif
