@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 10
+public let agenttermProtocolVersion = 11
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -341,6 +341,29 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Asks for the conversations agents had in a folder, or everywhere on
     /// the host when `path` is nil.
     case history(path: String?)
+    /// The conversations before the oldest that `history` gave (#46): a
+    /// page of those last changed before `before`. Answered with `historyOlder`.
+    case historyOlder(path: String?, before: Date)
+    /// Reads a conversation from its agent's own file: what was said and
+    /// run in it, and what the file tells about it. Answered with
+    /// `conversationRead`.
+    case readConversation(agent: String, sessionID: String, cwd: String)
+    /// The conversations of a folder, or of the host when `path` is nil,
+    /// whose title or what was said in them holds `query`. Answered with
+    /// any number of `historyFound` and one `historySearchEnded`. A
+    /// client's search ends the one before it.
+    case searchHistory(search: Int, path: String?, query: String)
+    /// Pins a conversation or takes its pin away, hides it or shows it
+    /// again; what is nil is left as it is. `id` is `Conversation.id`. The
+    /// host keeps both, and tells every device with `historyMarks`.
+    case markConversation(id: String, pinned: Bool?, hidden: Bool?)
+    /// Deletes a conversation: its agent's own record of it goes to the
+    /// Trash. Sent once the user was asked twice. Answered with
+    /// `conversationDeleted`, or with `error` and why not.
+    case deleteConversation(agent: String, sessionID: String, cwd: String)
+    /// Writes a conversation out as a Markdown file on the host, to be
+    /// opened as any file. Answered with `conversationExported`.
+    case exportConversation(agent: String, sessionID: String, cwd: String)
     /// Reopens a conversation in its agent, in a new session the sender is attached to.
     case resume(agent: String, sessionID: String, cwd: String, size: TermSize)
     /// Asks what the receiving agent would be told when a conversation of
@@ -469,6 +492,17 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// `file` is nil when it no longer has changes.
     case diffFile(path: String, file: FileDiff?)
     case history(path: String?, conversations: [Conversation])
+    /// A page of older conversations, and whether there are older ones still.
+    case historyOlder(path: String?, conversations: [Conversation], more: Bool)
+    /// A conversation as it was read; `details` is nil when it is no longer there.
+    case conversationRead(id: String, details: ConversationDetails?)
+    case historyFound(search: Int, hits: [HistoryHit])
+    case historySearchEnded(search: Int)
+    /// The conversations that are pinned, and those that are hidden, by `Conversation.id`.
+    case historyMarks(pinned: [String], hidden: [String])
+    case conversationDeleted(id: String)
+    /// Where a conversation was written out as a file, on the host.
+    case conversationExported(id: String, path: String)
     case directory(DirectoryListing)
     /// Answer to `handoffPlan`: the prompt, and an id to hand off with.
     case handoffPlan(id: String, prompt: String)

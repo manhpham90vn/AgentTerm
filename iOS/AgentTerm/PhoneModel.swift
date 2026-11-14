@@ -1068,6 +1068,31 @@ final class PhoneModel: ObservableObject {
         case .worktrees(let folder, let list, let setup):
             worktrees[folder] = list
             worktreeSetups[folder] = setup
+        case .historyMarks(let pinned, let hidden):
+            pinnedConversations = Set(pinned)
+            hiddenConversations = Set(hidden)
+        case .conversationRead(let id, let details):
+            conversationDetails[id] = .some(details)
+            // The last few are kept: each may be large.
+            if conversationDetails.count > 6, let other = conversationDetails.keys.first(where: { $0 != id }) { conversationDetails[other] = nil }
+        case .historyFound(let search, let hits):
+            guard search == historySearch, let key = historySearchKey else { break }
+            historyHits[key, default: []] += hits
+        case .historySearchEnded(let search):
+            guard search == historySearch, let key = historySearchKey else { break }
+            historySearching.remove(key)
+        case .historyOlder(let folder, let conversations, let more):
+            let key = folder ?? ""
+            let known = Set((olderHistory[key] ?? []).map(\.id))
+            olderHistory[key, default: []] += conversations.filter { !known.contains($0.id) }
+            if !more { historyEnded.insert(key) }
+        case .conversationDeleted(let id):
+            conversationDetails[id] = nil
+            for key in histories.keys { histories[key]?.removeAll { $0.id == id } }
+            for key in olderHistory.keys { olderHistory[key]?.removeAll { $0.id == id } }
+            for key in historyHits.keys { historyHits[key]?.removeAll { $0.id == id } }
+        case .conversationExported(_, let path):
+            exportedTranscript = path
         case .filesFound(let search, let files, let among):
             guard search == searchNumber else { break }
             foundFiles = files
@@ -1601,6 +1626,66 @@ final class PhoneModel: ObservableObject {
     /// `folder` nil loads every conversation on the Mac.
     func loadHistory(_ folder: String?) {
         connection?.send(.history(path: folder))
+    }
+
+    // MARK: History: search, read, pin, hide, delete (#46)
+
+    @Published private(set) var pinnedConversations: Set<String> = []
+    @Published private(set) var hiddenConversations: Set<String> = []
+    /// Conversations as they were read, by their id; nil inside for one
+    /// that is no longer there.
+    @Published private(set) var conversationDetails: [String: ConversationDetails?] = [:]
+    /// What a search of History found, by the list it was for ("" for
+    /// every conversation); nothing while that list is not searched.
+    @Published private(set) var historyHits: [String: [HistoryHit]] = [:]
+    @Published private(set) var historySearching: Set<String> = []
+    /// Pages of older conversations asked for after the first, by list,
+    /// and the lists that have none older.
+    @Published private(set) var olderHistory: [String: [Conversation]] = [:]
+    @Published private(set) var historyEnded: Set<String> = []
+    /// Where a transcript was written out as a file on the Mac, until it is opened.
+    @Published var exportedTranscript: String?
+    private var historySearch = 0
+    private var historySearchKey: String?
+
+    /// Searches a list's conversations by title and by what was said. An
+    /// empty query shows the list again.
+    func searchHistory(_ query: String, in folder: String?) {
+        let key = folder ?? ""
+        historySearch += 1
+        let wanted = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !wanted.isEmpty, status == .connected else {
+            historyHits[key] = nil
+            historySearching.remove(key)
+            return
+        }
+        historySearchKey = key
+        historyHits[key] = []
+        historySearching.insert(key)
+        connection?.send(.searchHistory(search: historySearch, path: folder, query: wanted))
+    }
+
+    func readConversation(_ conversation: Conversation) {
+        connection?.send(.readConversation(agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd))
+    }
+
+    func markConversation(_ conversation: Conversation, pinned: Bool? = nil, hidden: Bool? = nil) {
+        connection?.send(.markConversation(id: conversation.id, pinned: pinned, hidden: hidden))
+    }
+
+    /// Deletes a conversation's record on the Mac, once the user was asked twice.
+    func deleteConversation(_ conversation: Conversation) {
+        connection?.send(.deleteConversation(agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd))
+    }
+
+    func exportConversation(_ conversation: Conversation) {
+        connection?.send(.exportConversation(agent: conversation.agent, sessionID: conversation.sessionID, cwd: conversation.cwd))
+    }
+
+    func loadOlderHistory(_ folder: String?) {
+        let key = folder ?? ""
+        guard let oldest = ((histories[key] ?? []) + (olderHistory[key] ?? [])).map(\.updatedAt).min() else { return }
+        connection?.send(.historyOlder(path: folder, before: oldest))
     }
 
     /// Reopens a conversation in its agent and shows its terminal.

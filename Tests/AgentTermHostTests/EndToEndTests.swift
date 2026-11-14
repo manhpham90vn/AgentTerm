@@ -1046,6 +1046,99 @@ final class EndToEndTests: XCTestCase {
         waitUntil("ran there") { phone.text(phone.attached!.id).contains("/alpha 2") }
     }
 
+    /// HIST-18 (#46): a device reads a conversation, searches what was
+    /// said, pins and hides one, which every device is told and the host
+    /// keeps, has a transcript written out as a file, and deletes one,
+    /// which goes to the Trash and is no longer listed.
+    func testADeviceReadsSearchesPinsAndDeletesConversations() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-hist-\(UUID().uuidString)").standardizedFileURL
+        defer { try? FileManager.default.removeItem(at: home) }
+        let trash = home.appendingPathComponent("trash")
+        try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        setenv(FileBrowser.trashVariable, trash.path, 1)
+        defer { unsetenv(FileBrowser.trashVariable) }
+        let project = "/Users/me/Dev/app"
+        let folder = home.appendingPathComponent(".claude/projects/-Users-me-Dev-app")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try [
+            #"{"type":"user","timestamp":"2026-11-14T08:00:00.000Z","cwd":"/Users/me/Dev/app","message":{"role":"user","content":"write the parser"}}"#,
+            #"{"type":"assistant","timestamp":"2026-11-14T08:10:00.000Z","message":{"id":"m1","model":"claude-fable-5","role":"assistant","content":[{"type":"tool_use","name":"Write","input":{"file_path":"/Users/me/Dev/app/Parser.swift","content":"x"}},{"type":"text","text":"The tokenizer is written."}],"usage":{"input_tokens":10,"output_tokens":5}}}"#,
+        ].joined(separator: "\n").write(to: folder.appendingPathComponent("c-1.jsonl"), atomically: true, encoding: .utf8)
+        try #"{"type":"user","cwd":"/Users/me/Dev/app","message":{"role":"user","content":"tidy the README"}}"#
+            .write(to: folder.appendingPathComponent("c-2.jsonl"), atomically: true, encoding: .utf8)
+        var configuration = HostServer.Configuration(port: 0, token: token, listenOnTailscale: false, home: home.path)
+        configuration.foldersFile = home.appendingPathComponent("state/folders.json")
+        let host = HostServer(configuration: configuration)
+        let hostPort = try host.start()
+        defer { host.stop() }
+        let phone = TestClient(port: hostPort, token: token, name: "phone")
+        let other = TestClient(port: hostPort, token: token, name: "other")
+        waitUntil("welcome") { phone.welcomed && other.welcomed }
+        waitUntil("nothing pinned yet") { phone.messages.contains(.historyMarks(pinned: [], hidden: [])) }
+
+        // Read: what was said and run, and what the file tells.
+        phone.connection.send(.readConversation(agent: "claude", sessionID: "c-1", cwd: project))
+        func read(_ id: String) -> ConversationDetails?? {
+            phone.messages.compactMap { message -> ConversationDetails?? in
+                if case .conversationRead(id, let details) = message { return .some(details) }
+                return nil
+            }.last
+        }
+        waitUntil("the conversation read") { read("claude:c-1") != nil }
+        let details = try XCTUnwrap(read("claude:c-1") ?? nil)
+        XCTAssertEqual(details.entries.map(\.text), ["write the parser", "/Users/me/Dev/app/Parser.swift", "The tokenizer is written."])
+        XCTAssertEqual(details.model, "claude-fable-5")
+        XCTAssertEqual(details.files, ["/Users/me/Dev/app/Parser.swift"])
+        XCTAssertEqual(details.duration, 600)
+        // One that is not there, and an id that is no id: said to be gone.
+        phone.connection.send(.readConversation(agent: "claude", sessionID: "c-9", cwd: project))
+        phone.connection.send(.readConversation(agent: "claude", sessionID: "../../x", cwd: project))
+        waitUntil("not there") { phone.messages.contains(.conversationRead(id: "claude:c-9", details: nil)) && phone.messages.contains(.conversationRead(id: "claude:../../x", details: nil)) }
+
+        // Searched: by what was said, not only by its title.
+        phone.connection.send(.searchHistory(search: 1, path: nil, query: "TOKENIZER"))
+        waitUntil("the search over") { phone.messages.contains(.historySearchEnded(search: 1)) }
+        let hits = phone.messages.flatMap { message -> [HistoryHit] in
+            if case .historyFound(1, let hits) = message { return hits } else { return [] }
+        }
+        XCTAssertEqual(hits.map(\.conversation.sessionID), ["c-1"])
+        XCTAssertEqual(hits.first?.snippet, "The tokenizer is written.")
+
+        // Pinned and hidden: every device is told, and the host keeps it.
+        phone.connection.send(.markConversation(id: "claude:c-1", pinned: true, hidden: nil))
+        phone.connection.send(.markConversation(id: "claude:c-2", pinned: nil, hidden: true))
+        waitUntil("the other device told") { other.messages.contains(.historyMarks(pinned: ["claude:c-1"], hidden: ["claude:c-2"])) }
+        let kept = try Data(contentsOf: home.appendingPathComponent("state/history.json"))
+        XCTAssertTrue(String(decoding: kept, as: UTF8.self).contains("claude:c-1"))
+
+        // Written out as a file of the host's own.
+        phone.connection.send(.exportConversation(agent: "claude", sessionID: "c-1", cwd: project))
+        func exported() -> String? {
+            phone.messages.compactMap { if case .conversationExported("claude:c-1", let path) = $0 { return path } else { return nil } }.last
+        }
+        waitUntil("the transcript written") { exported() != nil }
+        let file = try XCTUnwrap(exported())
+        XCTAssertTrue(file.hasPrefix(home.appendingPathComponent("state/transcripts").path), file)
+        XCTAssertTrue(try String(contentsOfFile: file, encoding: .utf8).contains("## You\n\nwrite the parser"))
+
+        // Older ones: none before the oldest.
+        phone.connection.send(.historyOlder(path: nil, before: .distantPast))
+        waitUntil("no older ones") { phone.messages.contains(.historyOlder(path: nil, conversations: [], more: false)) }
+
+        // Deleted: to the Trash, its pin gone with it, every device told.
+        phone.connection.send(.deleteConversation(agent: "claude", sessionID: "c-1", cwd: project))
+        waitUntil("deleted") { other.messages.contains(.conversationDeleted(id: "claude:c-1")) }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: folder.appendingPathComponent("c-1.jsonl").path))
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: trash.path), ["c-1.jsonl"])
+        waitUntil("its pin gone") { other.messages.last { if case .historyMarks = $0 { return true } else { return false } } == .historyMarks(pinned: [], hidden: ["claude:c-2"]) }
+        phone.connection.send(.deleteConversation(agent: "claude", sessionID: "c-1", cwd: project))
+        waitUntil("gone already") { phone.messages.contains(.error("That conversation is no longer there.")) }
+        phone.connection.send(.history(path: project))
+        waitUntil("no longer listed") {
+            phone.messages.contains { if case .history(project, let list) = $0 { return list.map(\.sessionID) == ["c-2"] } else { return false } }
+        }
+    }
+
     func testAClientCanReadHistoryAndOnlyResumeRealConversations() throws {
         let home = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-home-\(UUID().uuidString)")
         let project = "/Users/me/Dev/app"

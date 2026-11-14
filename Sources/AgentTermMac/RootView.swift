@@ -152,6 +152,7 @@ struct RootView: View {
         .sheet(item: $model.panelConversation) { conversation in
             ConversationSheet(conversation: conversation)
         }
+        .modifier(DeleteConversationQuestions(store: model.historyStore))
         .alert("AgentTerm", isPresented: Binding(get: { model.notice != nil }, set: { if !$0 { model.notice = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {

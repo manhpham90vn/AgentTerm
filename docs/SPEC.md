@@ -622,9 +622,42 @@ panel.
     resumed, which opens it in its agent in a new session, or handed off to
     another agent. Picked, it is shown in the middle of the window, over the
     terminals, as the iPhone shows one: its agent, title and folder, Resume,
-    Copy Resume Command, and the handoff's folder, agent, prompt and
-    instructions. Resuming or handing off goes to Sessions, on the new
+    Copy Resume Command, and under them two tabs: **Transcript**, which
+    shows first, and **Hand Off**, with the handoff's folder, agent, prompt
+    and instructions. Resuming or handing off goes to Sessions, on the new
     session. With none picked, the middle says to choose one.
+    What History does with the conversations (#46), in the place and in
+    the side panel's tab alike:
+    - **Search**: a field above the list finds the conversations whose
+      title or what was said in them holds the words, whatever their case,
+      each with a piece of the text around them and in how many places
+      they are. What a tool printed is not searched. The host searches
+      every conversation, not only those listed.
+    - **Group and filter**, from the menu beside the field: grouped by
+      agent or by day (Today, Yesterday, then the date); only one agent's,
+      only one folder's (a worktree AgentTerm made for it included), only
+      today's, this week's or one day's. The list says when it is
+      filtered, and Clear Filters shows all again.
+    - **Transcript**: a conversation read before it is resumed. What its
+      agent's file tells: how long it ran, its model, the tokens read and
+      written, the branch and the worktree it ran in, how many tools it
+      ran and the files they wrote; then what was asked and answered, and
+      each tool with what it was run on. What an agent does not record is
+      said to be not recorded: Codex and Antigravity run commands, which
+      do not tell which files they wrote; Copilot tells once its session
+      has ended, and its cost is in a unit of its own and is not shown. A
+      long conversation is shown by its last 600 entries, and says so.
+      **Copy Transcript** copies it as Markdown; **Open as a File** writes
+      it out on the Mac and opens it as any file.
+    - **Pin** keeps a conversation in a group of its own at the top;
+      **Hide** takes it out of the list, until Show Hidden is chosen.
+      Both are kept by the Mac and are the same on every device.
+    - **Delete…** deletes the agent's own record of the conversation,
+      after two questions: its file is moved to the Trash of the Mac. A
+      conversation a session is having is not deleted; Antigravity's
+      cannot be, and it says why.
+    - **Show Older Conversations**, at the end of a full list, brings the
+      next 200.
 
 ### Keeping the Mac awake
 
@@ -889,7 +922,9 @@ button at the top right of Sessions goes back to the list of Macs.
   (resolving a conflict is on the Mac); a submodule's changes are listed
   under it with a commit box of its own, the branch pushed and pulled, and the commit message written by an
   agent. **History**: the conversations each agent had in the
-  folder only, as on the Mac; every conversation is in the History tab. **Files**: see
+  folder only, as on the Mac; every conversation is in the History tab; both
+  searched, grouped and filtered, a conversation read as a transcript
+  ("Read the Transcript"), pinned, hidden and deleted as on the Mac (#46). **Files**: see
   Files above.
 - A conversation can be resumed in its agent, or handed off to another
   installed agent. The handoff sheet shows the prompt the agent will start

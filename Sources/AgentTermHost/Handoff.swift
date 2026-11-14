@@ -26,7 +26,11 @@ extension AgentHistory {
     /// Empty when the agent left no readable record of it.
     public static func transcript(of conversation: Conversation) -> [TranscriptMessage] {
         guard let source = conversation.source else { return [] }
-        let data = read(URL(fileURLWithPath: source), tail: transcriptBytes)
+        return transcript(of: conversation, data: read(URL(fileURLWithPath: source), tail: transcriptBytes))
+    }
+
+    /// The same from what was read of its file already.
+    static func transcript(of conversation: Conversation, data: Data) -> [TranscriptMessage] {
         var messages: [TranscriptMessage] = []
         for line in data.split(separator: 0x0a) {
             guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],

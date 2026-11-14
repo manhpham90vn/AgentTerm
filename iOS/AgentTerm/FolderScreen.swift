@@ -775,95 +775,165 @@ struct HistoryList: View {
     @EnvironmentObject private var model: PhoneModel
     let folder: String?
     @State private var selected: Conversation?
-    @State private var collapsedAgents: Set<String> = []
+    @State private var collapsed: Set<String> = []
+    /// Searching, grouping and filtering (#46), as on the Mac.
+    @State private var query = ""
+    @State private var filter = HistoryFilter()
+    @State private var deleting: Conversation?
 
     private var showsAll: Bool { folder == nil }
     private var key: String { showsAll ? "" : (folder ?? "") }
 
-    private var sections: [(id: String, name: String, conversations: [Conversation])] {
-        let all = model.histories[key] ?? []
-        return model.agents.compactMap { agent in
-            let own = all.filter { $0.agent == agent.id }
-            return own.isEmpty ? nil : (agent.id, agent.name, own)
-        }
+    /// The first page and the older ones asked for since.
+    private var conversations: [Conversation] {
+        let first = model.histories[key] ?? []
+        let known = Set(first.map(\.id))
+        return first + (model.olderHistory[key] ?? []).filter { !known.contains($0.id) }
+    }
+    private var groups: [HistoryFilter.Group] {
+        filter.groups(conversations, pinned: model.pinnedConversations, hidden: model.hiddenConversations, agentNames: model.agents.map { ($0.id, $0.name) })
+    }
+    private var hits: [HistoryHit]? {
+        model.historyHits[key]?.filter { filter.allows($0.conversation, hidden: model.hiddenConversations) }.sorted { $0.conversation.updatedAt > $1.conversation.updatedAt }
+    }
+    private var isSearching: Bool { model.historySearching.contains(key) }
+    /// The first page is full: there may be older ones.
+    private var mayHaveOlder: Bool { (model.histories[key]?.count ?? 0) >= (showsAll ? 300 : 200) && !model.historyEnded.contains(key) }
+
+    private var summary: String {
+        if let hits { return isSearching ? "Searching… \(hits.count) found" : (hits.count == 1 ? "1 found" : "\(hits.count) found") }
+        let count = groups.reduce(0) { $0 + $1.conversations.count }
+        let words = count == 1 ? "1 conversation" : "\(count) conversations"
+        return filter.isActive ? words + ", filtered" : words
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if folder != nil {
-                HStack(spacing: 10) {
-                    if let count = model.histories[key]?.count {
-                        Text(count == 1 ? "1 conversation" : "\(count) conversations")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
+            HistoryControls(query: $query, filter: $filter, folder: folder)
+                .padding(.horizontal, 16)
+                .padding(.bottom, 8)
+            if model.histories[key] != nil {
+                HStack {
+                    Text(summary).font(.footnote).foregroundStyle(.secondary).lineLimit(1).accessibilityIdentifier("history-summary")
                     Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 16)
-                .padding(.bottom, 10)
-            }
-            if let history = model.histories[key] {
-                if history.isEmpty {
-                    Placeholder(text: showsAll ? "No agent has a conversation on this Mac yet." : "No agent has a conversation in this folder yet.")
-                } else {
-                    ScrollView {
-                        LazyVStack(alignment: .leading, spacing: 18) {
-                            ForEach(sections, id: \.id) { section in
-                                let expanded = !collapsedAgents.contains(section.id)
-                                VStack(alignment: .leading, spacing: 8) {
-                                    Button {
-                                        if expanded { collapsedAgents.insert(section.id) } else { collapsedAgents.remove(section.id) }
-                                    } label: {
-                                        HStack(spacing: 7) {
-                                            Image(systemName: expanded ? "chevron.down" : "chevron.right")
-                                                .font(.system(size: 10, weight: .bold))
-                                                .foregroundStyle(.secondary)
-                                            Image(systemName: AgentStyle.symbol(for: section.id))
-                                                .font(.system(size: 12, weight: .semibold))
-                                                .foregroundStyle(AgentStyle.accent(for: section.id))
-                                            Text(section.name).font(.subheadline.weight(.semibold))
-                                            Spacer(minLength: 0)
-                                        }
-                                        .contentShape(Rectangle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .padding(.horizontal, 6)
-                                    .accessibilityLabel("\(section.name), \(expanded ? "expanded" : "collapsed")")
-                                    if expanded {
-                                        VStack(spacing: 0) {
-                                            ForEach(section.conversations) { conversation in
-                                                Button {
-                                                    selected = conversation
-                                                } label: {
-                                                    ConversationRow(conversation: conversation, showsFolder: showsAll)
-                                                }
-                                                .buttonStyle(.plain)
-                                                if conversation.id != section.conversations.last?.id {
-                                                    Palette.hairline.frame(height: 1).padding(.leading, 14)
-                                                }
-                                            }
-                                        }
-                                        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
-                                    }
-                                }
+                .padding(.horizontal, 22)
+                .padding(.bottom, 8)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 18) {
+                        if let hits {
+                            if hits.isEmpty {
+                                Text(isSearching ? "Searching…" : "No conversation holds “\(query)”.")
+                                    .font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity).padding(.top, 40)
+                            } else {
+                                card(hits.map(\.conversation), hits: hits, showsAgent: true)
+                            }
+                        } else if groups.isEmpty {
+                            Text(
+                                conversations.isEmpty
+                                    ? (showsAll ? "No agent has a conversation on this Mac yet." : "No agent has a conversation in this folder yet.")
+                                    : "No conversation passes the filter."
+                            )
+                            .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: .infinity).padding(.top, 40)
+                        } else {
+                            ForEach(groups) { group in groupView(group) }
+                            if mayHaveOlder {
+                                Button("Show Older Conversations") { model.loadOlderHistory(folder) }
+                                    .font(.subheadline)
+                                    .padding(.leading, 6)
+                                    .accessibilityIdentifier("history-older")
                             }
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.bottom, 24)
                     }
-                    .refreshable { load() }
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 24)
                 }
+                .refreshable { load() }
             } else {
                 LoadingView("Loading the history…") { load() }
             }
         }
         .onAppear(perform: load)
+        // Searched a moment after the last key.
+        .task(id: query) {
+            if !query.isEmpty { try? await Task.sleep(for: .milliseconds(350)) }
+            if !Task.isCancelled { model.searchHistory(query, in: folder) }
+        }
         .sheet(item: $selected) { conversation in
             ConversationSheet(conversation: conversation)
                 .environmentObject(model)
                 .preferredColorScheme(.dark)
         }
+        .modifier(DeleteConversationAsk(asked: $deleting))
+    }
+
+    private func groupView(_ group: HistoryFilter.Group) -> some View {
+        let expanded = !collapsed.contains(group.id)
+        let agent = group.id.hasPrefix("agent:") ? String(group.id.dropFirst("agent:".count)) : nil
+        return VStack(alignment: .leading, spacing: 8) {
+            Button {
+                if expanded { collapsed.insert(group.id) } else { collapsed.remove(group.id) }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                    if let agent {
+                        Image(systemName: AgentStyle.symbol(for: agent)).font(.system(size: 12, weight: .semibold)).foregroundStyle(AgentStyle.accent(for: agent))
+                    } else {
+                        Image(systemName: group.id == "pinned" ? "pin.fill" : "calendar").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                    }
+                    Text(group.title).font(.subheadline.weight(.semibold))
+                    Spacer(minLength: 0)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 6)
+            .accessibilityLabel("\(group.title), \(expanded ? "expanded" : "collapsed")")
+            if expanded { card(group.conversations, hits: nil, showsAgent: agent == nil) }
+        }
+    }
+
+    /// Rows of conversations in one panel, each with its menu.
+    private func card(_ list: [Conversation], hits: [HistoryHit]?, showsAgent: Bool) -> some View {
+        VStack(spacing: 0) {
+            ForEach(list) { conversation in
+                let pinned = model.pinnedConversations.contains(conversation.id)
+                let hidden = model.hiddenConversations.contains(conversation.id)
+                Button {
+                    selected = conversation
+                } label: {
+                    ConversationRow(
+                        conversation: conversation, showsFolder: showsAll, agentName: showsAgent ? model.agents.first { $0.id == conversation.agent }?.name : nil,
+                        isPinned: pinned, isHidden: hidden, hit: hits?.first { $0.id == conversation.id })
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("conversation-" + conversation.sessionID)
+                .contextMenu {
+                    Button {
+                        model.markConversation(conversation, pinned: !pinned)
+                    } label: {
+                        Label(pinned ? "Unpin" : "Pin", systemImage: pinned ? "pin.slash" : "pin")
+                    }
+                    Button {
+                        model.markConversation(conversation, hidden: !hidden)
+                    } label: {
+                        Label(hidden ? "Show Again" : "Hide", systemImage: hidden ? "eye" : "eye.slash")
+                    }
+                    Divider()
+                    Button(role: .destructive) {
+                        deleting = conversation
+                    } label: {
+                        Label("Delete…", systemImage: "trash")
+                    }
+                }
+                if conversation.id != list.last?.id {
+                    Palette.hairline.frame(height: 1).padding(.leading, 14)
+                }
+            }
+        }
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
     }
 
     private func load() {
@@ -874,16 +944,36 @@ struct HistoryList: View {
 private struct ConversationRow: View {
     let conversation: Conversation
     let showsFolder: Bool
+    /// Whose it is, where the rows are not under their agent.
+    var agentName: String?
+    var isPinned = false
+    var isHidden = false
+    /// What a search found in it.
+    var hit: HistoryHit?
 
     var body: some View {
         HStack(spacing: 10) {
             VStack(alignment: .leading, spacing: 3) {
-                Text(conversation.title)
-                    .font(.body)
-                    .lineLimit(2)
-                    .multilineTextAlignment(.leading)
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    if isPinned { Image(systemName: "pin.fill").font(.system(size: 10)).foregroundStyle(.orange) }
+                    Text(conversation.title)
+                        .font(.body)
+                        .lineLimit(2)
+                        .multilineTextAlignment(.leading)
+                        .foregroundStyle(isHidden ? .secondary : .primary)
+                }
+                if let snippet = hit?.snippet {
+                    Text(snippet).font(.footnote).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.leading)
+                }
                 HStack(spacing: 5) {
+                    if let agentName {
+                        Circle().fill(AgentStyle.accent(for: conversation.agent)).frame(width: 6, height: 6)
+                        Text(agentName).lineLimit(1)
+                        Text("·")
+                    }
                     Text(relativeTime(conversation.updatedAt))
+                    if let hit, hit.count > 1 { Text("· \(hit.count) places") }
+                    if isHidden { Text("· hidden") }
                     if showsFolder {
                         Text("·")
                         Image(systemName: "folder").font(.system(size: 10))
@@ -972,6 +1062,22 @@ struct ConversationSheet: View {
                             .lineLimit(1)
                             .truncationMode(.head)
                     }
+
+                    // What was said in it, to read before resuming it (#46).
+                    NavigationLink {
+                        TranscriptScreen(conversation: conversation) { dismiss() }
+                    } label: {
+                        HStack {
+                            Label("Read the Transcript", systemImage: "text.bubble")
+                            Spacer()
+                            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.panel))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("conversation-transcript")
 
                     if showsResume {
                         VStack(spacing: 10) {

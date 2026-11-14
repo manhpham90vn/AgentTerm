@@ -518,6 +518,7 @@ public final class HostServer {
             // Installed by default the first time, and again after the app moved.
             setAgentShells(nil)
             loadSchedules()
+            loadHistoryMarks()
             loadWorktreeSetups()
             startAtLoginByDefault()
             let timer = DispatchSource.makeTimerSource(queue: queue)
@@ -847,6 +848,119 @@ public final class HostServer {
             runDoneAt[session.info.id] = nil
             session.endAsked = true
             session.process.hangUp()
+        }
+    }
+
+    // MARK: History (#46)
+
+    /// How many older conversations are given at a time.
+    private static let historyPage = 200
+
+    /// The conversations the user pinned and hid, by `Conversation.id`.
+    private struct HistoryMarks: Codable {
+        var pinned: Set<String> = []
+        var hidden: Set<String> = []
+    }
+    private var historyMarks = HistoryMarks()
+    private var historyMarksFile: URL? { configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("history.json") }
+
+    private func loadHistoryMarks() {
+        guard let file = historyMarksFile, let data = FileManager.default.contents(atPath: file.path) else { return }
+        historyMarks = MessageCoding.decode(HistoryMarks.self, from: data) ?? HistoryMarks()
+    }
+
+    private func saveHistoryMarks() {
+        guard let file = historyMarksFile else { return }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? MessageCoding.encode(historyMarks).write(to: file, options: .atomic)
+    }
+
+    private var historyMarksMessage: ServerMessage { .historyMarks(pinned: historyMarks.pinned.sorted(), hidden: historyMarks.hidden.sorted()) }
+
+    private func broadcastHistoryMarks() {
+        for client in clients.values where client.authenticated { send(historyMarksMessage, to: client) }
+    }
+
+    private func searchHistory(search: Int, in path: String?, query: String, for client: Client) {
+        client.searches.values.forEach { $0.stop() }
+        let flag = SearchFlag()
+        client.searches[search] = flag
+        let id = client.id
+        let home = configuration.home
+        workQueue.async { [weak self] in
+            // Every conversation there is, not only the page that is listed.
+            let all = path.map { AgentHistory.conversations(in: $0, home: home, limit: .max) } ?? AgentHistory.allConversations(home: home, limit: .max)
+            AgentHistory.search(query, in: all, isCancelled: { flag.isStopped }) { hit in
+                self?.queue.async {
+                    guard let self, let client = self.clients[id], !flag.isStopped else { return }
+                    self.send(.historyFound(search: search, hits: [hit]), to: client)
+                }
+            }
+            self?.queue.async {
+                guard let self, let client = self.clients[id] else { return }
+                if client.searches[search] === flag { client.searches[search] = nil }
+                self.send(.historySearchEnded(search: search), to: client)
+            }
+        }
+    }
+
+    private func deleteConversation(agent: String, sessionID: String, cwd: String, for client: Client) {
+        // Its agent may be writing to it.
+        if sessions.values.contains(where: { $0.info.agent == agent && $0.info.conversationID == sessionID }) {
+            send(.error("A session is having that conversation: end it first."), to: client)
+            return
+        }
+        let home = configuration.home
+        let id = agent + ":" + sessionID
+        work(
+            for: client,
+            { () -> String? in
+                // Found again among the agents' own files, whatever the client says of where it is.
+                guard let conversation = AgentHistory.conversation(agent: agent, sessionID: sessionID, cwd: cwd, home: home) else { return "That conversation is no longer there." }
+                return AgentHistory.delete(conversation, home: home)
+            }
+        ) { server, client, problem in
+            if let problem {
+                server.send(.error(problem), to: client)
+                return
+            }
+            server.historyMarks.pinned.remove(id)
+            server.historyMarks.hidden.remove(id)
+            server.saveHistoryMarks()
+            server.broadcastHistoryMarks()
+            for other in server.clients.values where other.authenticated { server.send(.conversationDeleted(id: id), to: other) }
+        }
+    }
+
+    /// Written into the host's own folder, a file for each conversation,
+    /// written over when it is asked for again.
+    private func exportConversation(agent: String, sessionID: String, cwd: String, for client: Client) {
+        guard let folder = configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("transcripts", isDirectory: true) else {
+            send(.error("This host has nowhere to write the transcript."), to: client)
+            return
+        }
+        let home = configuration.home
+        let id = agent + ":" + sessionID
+        let name = AgentDetector.known.first { $0.id == agent }?.name ?? agent
+        work(
+            for: client,
+            { () -> String? in
+                guard let conversation = AgentHistory.conversation(agent: agent, sessionID: sessionID, cwd: cwd, home: home) else { return nil }
+                let file = folder.appendingPathComponent("\(agent)-\(sessionID).md")
+                do {
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                    try AgentHistory.details(of: conversation).markdown(agentName: name).write(to: file, atomically: true, encoding: .utf8)
+                    return file.path
+                } catch {
+                    return nil
+                }
+            }
+        ) { server, client, path in
+            if let path {
+                server.send(.conversationExported(id: id, path: path), to: client)
+            } else {
+                server.send(.error("The transcript could not be written."), to: client)
+            }
         }
     }
 
@@ -1639,6 +1753,35 @@ public final class HostServer {
             ) { server, client, conversations in
                 server.send(.history(path: path, conversations: conversations), to: client)
             }
+        case .historyOlder(let path, let before):
+            let home = configuration.home
+            work(
+                for: client,
+                { () -> [Conversation] in
+                    let all = path.map { AgentHistory.conversations(in: $0, home: home, limit: .max) } ?? AgentHistory.allConversations(home: home, limit: .max)
+                    return all.filter { $0.updatedAt < before }
+                }
+            ) { server, client, older in
+                server.send(.historyOlder(path: path, conversations: Array(older.prefix(Self.historyPage)), more: older.count > Self.historyPage), to: client)
+            }
+        case .readConversation(let agent, let sessionID, let cwd):
+            let home = configuration.home
+            let id = agent + ":" + sessionID
+            work(for: client, { AgentHistory.conversation(agent: agent, sessionID: sessionID, cwd: cwd, home: home).map(AgentHistory.details(of:)) }) {
+                server, client, details in
+                server.send(.conversationRead(id: id, details: details), to: client)
+            }
+        case .searchHistory(let search, let path, let query):
+            searchHistory(search: search, in: path, query: query, for: client)
+        case .markConversation(let id, let pinned, let hidden):
+            if let pinned { if pinned { historyMarks.pinned.insert(id) } else { historyMarks.pinned.remove(id) } }
+            if let hidden { if hidden { historyMarks.hidden.insert(id) } else { historyMarks.hidden.remove(id) } }
+            saveHistoryMarks()
+            broadcastHistoryMarks()
+        case .deleteConversation(let agent, let sessionID, let cwd):
+            deleteConversation(agent: agent, sessionID: sessionID, cwd: cwd, for: client)
+        case .exportConversation(let agent, let sessionID, let cwd):
+            exportConversation(agent: agent, sessionID: sessionID, cwd: cwd, for: client)
         case .resume(let agent, let sessionID, let cwd, let size):
             guard AgentDetector.known.contains(where: { $0.id == agent }), AgentHistory.isSafeIdentifier(sessionID) else {
                 send(.error("cannot resume that conversation"), to: client)
@@ -2035,6 +2178,7 @@ public final class HostServer {
         for (id, state) in noticesSeen { send(.noticeSeen(session: id, state: state), to: client) }
         send(.schedules(schedules), to: client)
         send(.worktreeSetups(worktreeSetups), to: client)
+        send(historyMarksMessage, to: client)
         send(.commitWriter(commitWriter), to: client)
         if let item = configuration.loginItem { send(.startAtLogin(item.isOn), to: client) }
         // Without any yet, the client is sent none and hands over its own.

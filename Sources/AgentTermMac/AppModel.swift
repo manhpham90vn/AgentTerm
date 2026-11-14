@@ -646,6 +646,8 @@ final class AppModel: ObservableObject {
     let files = FilesModel()
     /// The search of the folder's files, in the Files tab (#45).
     let search = SearchModel()
+    /// History's filters, search, transcripts and pins (#46).
+    let historyStore = HistoryStore()
 
     /// Shows the search of the side panel's folder, by name (⌘P) or by
     /// text (⌘⇧F): in Sessions, the side panel shown, on its Files tab.
@@ -726,6 +728,21 @@ final class AppModel: ObservableObject {
         }
         connect()
         folderChanged()
+        // History's reading, pins and searches are the host's, for this Mac too (#46).
+        historyStore.send = { [weak self] message in self?.connection?.send(message) }
+        historyStore.exported = { [weak self] path in
+            // A transcript written out as a file opens as any file, in Sessions.
+            self?.panelConversation = nil
+            self?.show(.sessions, toggling: false)
+            self?.files.open(path)
+        }
+        historyStore.deleted = { [weak self] id in
+            guard let self else { return }
+            self.history?.removeAll { $0.id == id }
+            self.folderHistory?.removeAll { $0.id == id }
+            if self.historySelection?.id == id { self.historySelection = nil }
+            if self.panelConversation?.id == id { self.panelConversation = nil }
+        }
         // A file that comes to the front takes the diff's place there.
         files.$active.sink { [weak self] active in
             if active != nil { self?.diffInFront = false }
@@ -1167,6 +1184,7 @@ final class AppModel: ObservableObject {
             connection = nil
             files.connectionLost()
             search.connectionLost()
+            historyStore.reset()
             forgetHostState()
             retryConnection(reason: reason)
         }
@@ -1288,6 +1306,8 @@ final class AppModel: ObservableObject {
             worktreeSetups[folder] = setup
         case .filesFound, .textFound, .searchEnded:
             search.handle(message)
+        case .historyOlder, .conversationRead, .historyFound, .historySearchEnded, .historyMarks, .conversationDeleted, .conversationExported:
+            historyStore.handle(message, folderPath: panelFolder)
         case .worktreeSetups(let setups):
             worktreeSetups = setups
         case .worktreeFinished(_, _, let said):
@@ -1651,6 +1671,7 @@ final class AppModel: ObservableObject {
         // The diff tab stays: it belongs to its own folder, not to the one on show.
         files.setRoot(panelFolder)
         search.setRoot(panelFolder)
+        historyStore.folderChanged()
         refreshDiff()
         folderHistory = nil
         refreshHistory(ofFolder: true)
