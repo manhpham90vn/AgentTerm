@@ -235,6 +235,34 @@ final class ProtocolTests: XCTestCase {
         XCTAssertTrue(told.isEmpty)
     }
 
+    /// NOTE-8 (#55): a notification's body is the question alone, and each
+    /// choice is a button of its own, so that iOS, which shows a few lines,
+    /// does not cut the choices off after a long question.
+    func testAQuestionsChoicesAreButtonsOfItsNotification() {
+        let asked = AgentQuestion(text: "Which colour?", choices: ["Red", "Blue"])
+        let question = AgentNotice(session: 1, name: "s", folder: "/p", state: .waitingForAnswer(asked))
+        XCTAssertEqual(question.words, "Which colour?", "the choices are not in the body")
+        XCTAssertEqual(question.buttons.map(\.title), ["Red", "Blue"])
+        XCTAssertEqual(question.buttons.map { question.choice(ofButton: $0.id) }, ["Red", "Blue"])
+        XCTAssertNil(question.choice(ofButton: "choice-2"), "not one of its choices")
+        XCTAssertNil(question.choice(ofButton: "reply"))
+
+        // More choices than a notification has room for: the first ones,
+        // the text reply taking the place that is left.
+        let many = AgentNotice(session: 1, name: "s", folder: "/p", state: .waitingForAnswer(AgentQuestion(text: "?", choices: (1...20).map(String.init))))
+        XCTAssertEqual(many.buttons.count, AgentNotice.mostButtons)
+        XCTAssertEqual(many.buttons.last?.title, String(AgentNotice.mostButtons))
+
+        // Only a question has them.
+        let done = AgentNotice(session: 1, name: "s", folder: "/p", state: .done(said: "All tests pass."))
+        XCTAssertEqual(done.words, "All tests pass.")
+        XCTAssertTrue(done.buttons.isEmpty)
+        let permission = AgentNotice(session: 1, name: "s", folder: "/p", state: .waitingForPermission(AgentQuestion(text: "make test", choices: ["Yes"])))
+        XCTAssertEqual(permission.words, "make test")
+        XCTAssertTrue(permission.buttons.isEmpty, "a permission is answered in the session")
+        XCTAssertNil(permission.choice(ofButton: "choice-0"))
+    }
+
     /// LIVE-1: the Live Activity shows only while the phone is connected, no
     /// one is at the Mac, and an agent works or waits; it ends at once when
     /// the connection ends or the Mac is used, and shows "done" at the end.

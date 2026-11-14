@@ -1307,12 +1307,43 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
         let center = UNUserNotificationCenter.current()
         center.delegate = self
         // A reply runs something on the Mac: the phone is unlocked first.
-        let reply = UNTextInputNotificationAction(
+        center.setNotificationCategories(Self.fixedCategories)
+    }
+
+    private static var reply: UNNotificationAction {
+        UNTextInputNotificationAction(
             identifier: "reply", title: "Reply", options: [.authenticationRequired], textInputButtonTitle: "Send", textInputPlaceholder: "Your answer")
-        center.setNotificationCategories([
-            UNNotificationCategory(identifier: Self.replyCategory, actions: [reply], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle]),
-            UNNotificationCategory(identifier: Self.openCategory, actions: [], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle]),
-        ])
+    }
+
+    private static var fixedCategories: Set<UNNotificationCategory> {
+        [
+            UNNotificationCategory(identifier: replyCategory, actions: [reply], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle]),
+            UNNotificationCategory(identifier: openCategory, actions: [], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle]),
+        ]
+    }
+
+    /// The categories of questions with choices (#55), by the notification
+    /// each is for: iOS takes a notification's buttons from its category,
+    /// so a question's choices make one of its own, replaced by the next
+    /// thing told of the same session.
+    private var choiceCategories: [String: UNNotificationCategory] = [:]
+
+    /// The category of a notice: one of its own for a question with
+    /// choices, a button for each and the text reply after them.
+    private func category(of notice: AgentNotice, request: String) -> String {
+        let buttons = notice.buttons
+        if buttons.isEmpty {
+            choiceCategories[request] = nil
+        } else {
+            // A choice runs something on the Mac, as a reply does: the
+            // phone is unlocked first.
+            let actions = buttons.map { UNNotificationAction(identifier: $0.id, title: $0.title, options: [.authenticationRequired]) }
+            choiceCategories[request] = UNNotificationCategory(
+                identifier: "agent-choices-\(request)", actions: actions + [Self.reply], intentIdentifiers: [], options: [.hiddenPreviewsShowTitle])
+        }
+        UNUserNotificationCenter.current().setNotificationCategories(Self.fixedCategories.union(choiceCategories.values))
+        if let own = choiceCategories[request] { return own.identifier }
+        return notice.takesAReply ? Self.replyCategory : Self.openCategory
     }
 
     /// Asks iOS, the first time, whether the app may notify.
@@ -1329,10 +1360,12 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
         content.subtitle = "\((notice.folder as NSString).lastPathComponent) on \(macName)"
         // What the agent said shows only where iOS shows previews: by
         // default not on the lock screen.
-        content.body = notice.detail ?? ""
+        // A question's choices are its buttons, not its last line, which
+        // iOS cuts off after a long question (#55).
+        content.body = notice.words ?? ""
         content.sound = .default
         content.threadIdentifier = "\(mac)-\(notice.session)"
-        content.categoryIdentifier = notice.takesAReply ? Self.replyCategory : Self.openCategory
+        content.categoryIdentifier = category(of: notice, request: "\(mac)-\(notice.session)")
         content.userInfo = [
             "mac": mac, "session": Int(notice.session),
             "state": String(decoding: MessageCoding.encode(notice.state), as: UTF8.self),
@@ -1352,6 +1385,8 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
             guard let model = self?.model, let session, let state, model.pairing?.id == info["mac"] as? String else { return }
             if let reply = response as? UNTextInputNotificationResponse {
                 model.answer(session: session, to: state, text: reply.userText)
+            } else if let choice = AgentNotice(session: session, name: "", folder: "", state: state).choice(ofButton: response.actionIdentifier) {
+                model.answer(session: session, to: state, text: choice)
             } else if response.actionIdentifier == UNNotificationDefaultActionIdentifier {
                 model.open(AgentNotice(session: session, name: "", folder: "", state: state))
             }

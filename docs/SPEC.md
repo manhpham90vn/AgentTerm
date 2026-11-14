@@ -171,7 +171,10 @@ itself.
   its window.
 - A notification for a question, or for a finished task, takes a short
   reply, written or dictated, sent as the next message; it asks for the
-  phone to be unlocked first. One for a permission has no buttons: the
+  phone to be unlocked first. A question's choices are buttons of its
+  notification, shown when it is opened out, each of which answers with
+  that choice; its text is the question alone, so that a long one does not
+  push the choices out of sight. One for a permission has no buttons: the
   agents do not say which choices they offer, so touching it opens the
   session. A reply that arrives after the agent moved on is dropped, and
   the app says so.

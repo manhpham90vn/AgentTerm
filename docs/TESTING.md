@@ -478,6 +478,7 @@ A second host stands in for the other Mac, with a project of its own.
 | NOTE-4 | The Mac app with a shell in front and History shown, an agent in another session | The agent comes to wait for permission | A banner names the session and what it asks; Open selects it | M |
 | NOTE-5 | The iPhone in the sessions list, an agent in a session | The agent finishes | A banner over the list, which opens the session | hand, until the iPhone tests cover it |
 | NOTE-6 | The iPhone just left, an agent asks a question | The notification is answered with a reply | The reply is typed into the session after unlocking | hand: needs a real phone |
+| NOTE-8 | An agent asks a question with choices; one with more than nine; a permission | What its notification is made of | The body is the question alone; a button for each choice, the first nine at most, each standing for its choice; none for a permission | P; hand on a real phone for what iOS shows and for answering with a button |
 
 ### The Live Activity
 

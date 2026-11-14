@@ -43,6 +43,39 @@ public struct AgentNotice: Equatable, Sendable {
         }
     }
 
+    /// What it said or asks, without the choices: a notification's body,
+    /// of which iOS shows a few lines only. The choices are its buttons
+    /// (#55), which a long question does not push out of sight.
+    public var words: String? {
+        switch state {
+        case .waitingForAnswer(let question): return question.text.isEmpty ? nil : question.text
+        case .done, .waitingForPermission, .working: return detail
+        }
+    }
+
+    /// A choice of a question, as a button where it is told.
+    public struct Button: Equatable, Sendable, Identifiable {
+        /// Names the choice by its place among the question's.
+        public var id: String
+        /// The choice, in the agent's words.
+        public var title: String
+    }
+
+    /// As many buttons as a notification takes with a text reply beside
+    /// them: iOS shows ten actions at most.
+    public static let mostButtons = 9
+
+    /// A question's choices, the first `mostButtons` of them. None for a
+    /// permission, which is answered in the session.
+    public var buttons: [Button] {
+        guard case .waitingForAnswer(let question) = state else { return [] }
+        return question.choices.prefix(Self.mostButtons).enumerated().map { Button(id: "choice-\($0.offset)", title: $0.element) }
+    }
+
+    /// The choice a button stands for, or nil when it is none of this
+    /// notice's.
+    public func choice(ofButton id: String) -> String? { buttons.first { $0.id == id }?.title }
+
     /// Whether the user can answer it in a few words where it is told: a
     /// question, or a finished task's next instruction. A permission is
     /// answered in the session, whose choices the agents do not tell.
