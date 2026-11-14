@@ -787,8 +787,27 @@ and touch up what an agent wrote without leaving the app.
 - The tree, and open files without unsaved changes, follow changes made
   elsewhere, by an agent for one, within a few seconds.
 - The files that were open come back as tabs the next time the app starts.
+- **Search** (#45), from the magnifying glass at the top of the tab or
+  from the File menu, shows in place of the tree. **Go to File…** (⌘P)
+  finds the folder's files by part of their name as it is typed, the best
+  first: a name that holds what was typed before one that holds its
+  letters apart, the name before the folders it is in; with a slash, what
+  was typed is matched against the path. **Find in Files…** (⌘⇧F) finds a
+  word or a phrase as written, not as a pattern, with or without its case
+  (**Aa**), and lists the lines that hold it file by file, each with its
+  number and the words marked. The arrow keys walk the results and Return
+  opens the one they are on; a line opens its file at that line, a
+  Markdown file in its source. The folder searched is the one the side
+  panel shows, a worktree's too, with its submodules. What git ignores,
+  `.git` and AgentTerm's own folder are left out; binary files and files
+  larger than the editor opens are not searched. A folder that is no
+  repository is walked instead. At most 2,000 lines are given, and it says
+  so when there were more; a search that goes on can be stopped, and gives
+  what it finds while it goes. Not part of it: patterns, replacing, and
+  searching more than one folder at a time.
 
-The iPhone has the same under a folder's **Files** tab, working on the
+The iPhone has the same under a folder's **Files** tab, the search too, in
+a field above the tree, working on the
 Mac's files through the host: the tree, new file and folder, rename, move
 to the Mac's Trash and copy path (hold a row), and the same editor with
 syntax coloring, Markdown and Mermaid preview and images. A file opens as

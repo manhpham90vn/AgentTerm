@@ -399,6 +399,17 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | FILE-7 | A file open as a tab | Quit the app and open it again | The file is a tab again | M |
 | FILE-8 | The Files tab open on the Mac | A second device creates a file and writes into it | The file appears in the Mac's tree and opens with that text | M |
 | FILE-9 | A text file of 3 MB, and one over 20 MB | Open it | It says it is too large to open by itself and offers Open Anyway, which opens it; over 20 MB it is not offered | H, M |
+| FIND-1 | A repository with tracked, new, ignored and deleted files, and `.agentterm/` | Its files, and from a folder inside it | What git tracks and what is new; not what is ignored, deleted or AgentTerm's own; named from that folder | H |
+| FIND-2 | A folder that is no repository | Its files | Every file, hidden ones too, without `.git` and `.agentterm` | H |
+| FIND-3 | A list of files | Ranked for part of a name, for letters apart, with a slash, with blanks, for nothing | The name that starts with it, then names that hold it, then folders that do; in their order; against the path; blanks are not letters; nothing | H |
+| FIND-4 | A repository with a word in tracked, new, ignored, binary and very large files | Searched without and with its case, with a dot and a parenthesis, for nothing | Each line with its file and number, new files too, not the ignored, binary or large ones; only the line with that case; as written; nothing; where the word is in the line is given | H |
+| FIND-5 | 300 lines that hold a word | Searched with a limit of 25; stopped at once | 25 lines and said to be cut short; nothing, and no problem | H |
+| FIND-6 | A line of 10,000 characters with the word in its middle | Searched | Cut to 300 characters around the word, marked as cut at both ends | H |
+| FIND-7 | A folder that is no repository | Searched for a word | As FIND-4 | H |
+| FIND-8 | A repository with a submodule | Its files; a word that is in both | The submodule's files named from the folder; found in both | H |
+| FIND-9 | The Mac app | File > Go to File…, part of a name, the file; Find in Files…, a word, Aa, a word of a Markdown file, its line; Close | The search in place of the tree, the file found and opened; the line with its file and number; nothing with the wrong case; the Markdown file opens in its source; the tree is back | M |
+| FIND-10 | A host and a device | A file by name; an empty query after a file was made; text without and with its case; a search stopped; a search stopped that nobody has | Answered with the search's number; the folder read again; the lines, then said to be over; still said to be over; nothing | H |
+| FIND-11 | The Mac app and the iPhone | ⌘P and ⌘⇧F with the side panel hidden; the arrow keys and Return; a search of a worktree; Stop on a long search; on the iPhone the field above the tree, Name and Text, a line | The panel shows on Files with the keyboard in the field; the row opens; the worktree's files; it stops and says how far it got; the same as the Mac, the file opening at the line | hand |
 
 ### Pairing and devices
 

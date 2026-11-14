@@ -21,6 +21,8 @@ enum Route: Hashable {
     case file(folder: String, file: String, staged: Bool)
     /// A file on the Mac, to read or edit.
     case document(path: String)
+    /// The same, shown at a line a search found (#45).
+    case documentLine(path: String, line: Int)
     /// The commits of a folder's checked out branch (#36).
     case commits(folder: String)
     /// One commit: its message and the files it changed.
@@ -1066,6 +1068,18 @@ final class PhoneModel: ObservableObject {
         case .worktrees(let folder, let list, let setup):
             worktrees[folder] = list
             worktreeSetups[folder] = setup
+        case .filesFound(let search, let files, let among):
+            guard search == searchNumber else { break }
+            foundFiles = files
+            filesAmong = among
+        case .textFound(let search, let matches):
+            guard search == searchNumber else { break }
+            foundLines += matches
+        case .searchEnded(let search, let truncated, let problem):
+            guard search == searchNumber else { break }
+            isSearching = false
+            searchTruncated = truncated
+            searchProblem = problem
         case .worktreeSetups(let setups):
             worktreeSetups = setups
         case .worktreeFinished(_, _, let said):
@@ -1401,6 +1415,52 @@ final class PhoneModel: ObservableObject {
     func loadPatch(folder: String, file: String, staged: Bool) {
         pendingPatch = (folder, file, staged)
         connection?.send(.diffFile(path: folder, file: file, staged: staged))
+    }
+
+    // MARK: Searching a folder's files (#45)
+
+    /// Files whose name matches what was typed, best first, and how many
+    /// files the folder has.
+    @Published private(set) var foundFiles: [String] = []
+    @Published private(set) var filesAmong = 0
+    /// Lines that hold the text that was searched for.
+    @Published private(set) var foundLines: [TextMatch] = []
+    @Published private(set) var isSearching = false
+    @Published private(set) var searchTruncated = false
+    @Published private(set) var searchProblem: String?
+    /// Numbers the searches: an answer to an earlier one is not shown.
+    private var searchNumber = 0
+
+    func findFiles(_ query: String, in folder: String) {
+        searchNumber += 1
+        connection?.send(.findFiles(search: searchNumber, path: folder, query: query))
+    }
+
+    func findText(_ query: String, caseSensitive: Bool, in folder: String) {
+        stopSearch()
+        searchNumber += 1
+        foundLines = []
+        searchTruncated = false
+        searchProblem = nil
+        guard !query.isEmpty, status == .connected else { return }
+        isSearching = true
+        connection?.send(.findText(search: searchNumber, path: folder, query: query, caseSensitive: caseSensitive))
+    }
+
+    func stopSearch() {
+        if isSearching { connection?.send(.stopSearch(search: searchNumber)) }
+        isSearching = false
+    }
+
+    /// Forgets what a search found, when it is closed.
+    func clearSearch() {
+        stopSearch()
+        searchNumber += 1
+        foundFiles = []
+        filesAmong = 0
+        foundLines = []
+        searchTruncated = false
+        searchProblem = nil
     }
 
     // MARK: Files

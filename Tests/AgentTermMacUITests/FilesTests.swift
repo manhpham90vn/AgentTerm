@@ -36,6 +36,46 @@ final class FilesTests: MacUITestCase {
         XCTAssertFalse(app.all(.button("notes.txt")).isEmpty, "the file that was open did not come back as a tab")
     }
 
+    /// FIND-9 (#45): Go to File finds a file by part of its name and opens
+    /// it; Find in Files finds a word with its file and line, and opens the
+    /// file there, a Markdown file in its source.
+    func testFilesAreFoundByNameAndByWhatIsInThem() throws {
+        try write("one\ntwo\nthe needle is here\nfour\n", to: "Sources/deep/haystack.txt")
+        app.wait(for: .text("project, folder"), timeout: 15)
+        app.menu(["File", "Go to File…"])
+        app.wait(for: .id("search-field"))
+        app.wait(for: .containing("Type part of a file's name."))
+        app.write("hayst", into: .id("search-field"))
+        app.wait(for: .id("found-Sources/deep/haystack.txt"))
+        XCTAssertFalse(app.exists(.id("found-notes.txt")))
+        shot("names")
+        app.press(.id("found-Sources/deep/haystack.txt"))
+        let editor = MacDriver.Query.role(kAXTextAreaRole as String)
+        wait("the file in the editor") { self.app.value(of: editor) == "one\ntwo\nthe needle is here\nfour\n" }
+
+        // By what is in them: the same field, the other way.
+        app.menu(["File", "Find in Files…"])
+        app.write("Needle", into: .id("search-field"))
+        app.wait(for: .id("match-Sources/deep/haystack.txt:3"))
+        app.wait(for: .containing("1 line in 1 file."))
+        // With its case it is not there.
+        app.press(.id("search-case"))
+        app.wait(for: .containing("Nothing found."))
+        app.press(.id("search-case"))
+        app.wait(for: .id("match-Sources/deep/haystack.txt:3"))
+
+        // A word of the Markdown file: it opens in its source, at the line.
+        app.write("Some words", into: .id("search-field"))
+        app.wait(for: .id("match-docs/guide.md:3"))
+        shot("text")
+        app.press(.id("match-docs/guide.md:3"))
+        wait("the Markdown file's source") { self.app.value(of: editor) == "# Guide\n\nSome words.\n" }
+
+        // Closed, the tree is back.
+        app.press(.button("Close Search"))
+        app.wait(for: .button("notes.txt"))
+    }
+
     /// FILE-9: a text file over the size it is opened at by itself says so,
     /// and opens when asked.
     func testALargeTextFileOpensWhenAsked() throws {

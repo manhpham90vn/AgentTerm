@@ -88,10 +88,14 @@ public struct CodeEditor: NSViewRepresentable {
     let path: String
     var fontSize: CGFloat
 
-    public init(text: Binding<String>, path: String, fontSize: CGFloat = 12.5) {
+    /// The line to show, when one was asked for.
+    var target: LineTarget?
+
+    public init(text: Binding<String>, path: String, fontSize: CGFloat = 12.5, target: LineTarget? = nil) {
         _text = text
         self.path = path
         self.fontSize = fontSize
+        self.target = target
     }
 
     public func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -138,6 +142,7 @@ public struct CodeEditor: NSViewRepresentable {
         scroll.backgroundColor = EditorStyle.background
         context.coordinator.textView = textView
         context.coordinator.path = path
+        context.coordinator.go(to: target)
         return scroll
     }
 
@@ -155,12 +160,28 @@ public struct CodeEditor: NSViewRepresentable {
             // Changed from outside the editor, such as discarding edits.
             textView.string = text
         }
+        context.coordinator.go(to: target)
     }
 
     public final class Coordinator: NSObject, NSTextViewDelegate {
         var parent: CodeEditor
         weak var textView: NSTextView?
         var path = ""
+        private var shown: Int?
+
+        /// Scrolls to a line and marks it, once for each time it is asked
+        /// for; after the view was laid out, which it is not yet when made.
+        func go(to target: LineTarget?) {
+            guard let target, target.token != shown, textView?.string.isEmpty == false else { return }
+            shown = target.token
+            DispatchQueue.main.async { [weak self] in
+                guard let textView = self?.textView else { return }
+                let range = LineTarget.range(ofLine: target.line, in: textView.string as NSString)
+                textView.setSelectedRange(range)
+                textView.scrollRangeToVisible(range)
+                textView.showFindIndicator(for: range)
+            }
+        }
 
         init(_ parent: CodeEditor) {
             self.parent = parent
@@ -180,10 +201,14 @@ public struct CodeEditor: UIViewRepresentable {
     let path: String
     var fontSize: CGFloat
 
-    public init(text: Binding<String>, path: String, fontSize: CGFloat = 13) {
+    /// The line to show, when one was asked for.
+    var target: LineTarget?
+
+    public init(text: Binding<String>, path: String, fontSize: CGFloat = 13, target: LineTarget? = nil) {
         _text = text
         self.path = path
         self.fontSize = fontSize
+        self.target = target
     }
 
     public func makeCoordinator() -> Coordinator { Coordinator(self) }
@@ -228,6 +253,7 @@ public struct CodeEditor: UIViewRepresentable {
         bar.items = [UIBarButtonItem(systemItem: .flexibleSpace), hide]
         bar.sizeToFit()
         textView.inputAccessoryView = bar
+        context.coordinator.go(to: target, in: textView)
         return textView
     }
 
@@ -244,11 +270,26 @@ public struct CodeEditor: UIViewRepresentable {
             // while a character is being composed, which this would break.
             textView.text = text
         }
+        context.coordinator.go(to: target, in: textView)
     }
 
     public final class Coordinator: NSObject, UITextViewDelegate {
         var parent: CodeEditor
         var path = ""
+        private var shown: Int?
+
+        /// Scrolls to a line and selects it, once for each time it is asked
+        /// for, and not before the file's text is there.
+        func go(to target: LineTarget?, in textView: UITextView) {
+            guard let target, target.token != shown, !textView.text.isEmpty else { return }
+            shown = target.token
+            DispatchQueue.main.async { [weak textView] in
+                guard let textView else { return }
+                let range = LineTarget.range(ofLine: target.line, in: textView.text as NSString)
+                textView.selectedRange = range
+                textView.scrollRangeToVisible(range)
+            }
+        }
 
         init(_ parent: CodeEditor) {
             self.parent = parent
@@ -327,5 +368,34 @@ public struct MarkdownPreview: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Color(EditorStyle.background))
+    }
+}
+
+/// A line of the file to go to (#45): the editor scrolls to it and marks
+/// it. `token` changes each time one is asked for, the same line too.
+public struct LineTarget: Equatable, Sendable {
+    public var line: Int
+    public var token: Int
+
+    public init(line: Int, token: Int) {
+        self.line = line
+        self.token = token
+    }
+
+    /// Where a line is in a text, by its number from 1; the last line for
+    /// a number past the end.
+    public static func range(ofLine line: Int, in text: NSString) -> NSRange {
+        var start = 0
+        var current = 1
+        while current < line, start < text.length {
+            let range = text.lineRange(for: NSRange(location: start, length: 0))
+            guard NSMaxRange(range) > start, NSMaxRange(range) < text.length else { break }
+            start = NSMaxRange(range)
+            current += 1
+        }
+        var range = text.lineRange(for: NSRange(location: min(start, text.length), length: 0))
+        // Without the line break at its end.
+        while range.length > 0, let last = UnicodeScalar(text.character(at: NSMaxRange(range) - 1)), CharacterSet.newlines.contains(last) { range.length -= 1 }
+        return range
     }
 }

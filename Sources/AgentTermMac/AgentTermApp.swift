@@ -46,6 +46,13 @@ struct AgentTermApp: App {
                 Divider()
                 Button("Add Folder…") { model.addFolder() }
                     .keyboardShortcut("o")
+                Divider()
+                Button("Go to File…") { model.showSearch(.names) }
+                    .keyboardShortcut("p")
+                    .disabled(model.panelFolder == nil)
+                Button("Find in Files…") { model.showSearch(.text) }
+                    .keyboardShortcut("f", modifiers: [.command, .shift])
+                    .disabled(model.panelFolder == nil)
             }
             // Settings is a place in the window, not a window of its own.
             CommandGroup(replacing: .appSettings) {

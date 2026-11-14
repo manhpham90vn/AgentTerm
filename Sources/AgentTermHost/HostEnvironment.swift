@@ -255,6 +255,63 @@ enum Subprocess {
         return Started(pid: pid)
     }
 
+    /// Runs a command and hands over what it prints as it prints it, a
+    /// piece at a time, on the calling thread (#45): a search gives its
+    /// first results while it goes on. `taken` returns false to have the
+    /// command ended there. Nil when it could not be started.
+    @discardableResult
+    static func stream(
+        _ executable: String, _ arguments: [String], cwd: String? = nil, environment: [String: String]? = nil, taken: (Data) -> Bool
+    ) -> Ending? {
+        var pipe: [Int32] = [0, 0]
+        guard Darwin.pipe(&pipe) == 0 else { return nil }
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_adddup2(&actions, pipe[1], STDOUT_FILENO)
+        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0)
+        if let cwd { posix_spawn_file_actions_addchdir_np(&actions, cwd) }
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+        let argv: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map { strdup($0) } + [nil]
+        var given = environment ?? ProcessInfo.processInfo.environment
+        HostEnvironment.keepGitOffTheirConfiguration(&given)
+        let envp: [UnsafeMutablePointer<CChar>?] = given.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer {
+            argv.forEach { free($0) }
+            envp.forEach { free($0) }
+        }
+        var pid: pid_t = 0
+        let spawned = posix_spawn(&pid, executable, &actions, &attributes, argv, envp)
+        close(pipe[1])
+        guard spawned == 0 else {
+            close(pipe[0])
+            return nil
+        }
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        var ended = false
+        while true {
+            let count = read(pipe[0], &buffer, buffer.count)
+            if count < 0, errno == EINTR { continue }
+            guard count > 0 else { break }
+            if !taken(Data(buffer[0..<count])) {
+                // Enough was had: it is not waited on to print the rest.
+                end(pid)
+                ended = true
+                break
+            }
+        }
+        close(pipe[0])
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+        let signal = status & 0x7f
+        if ended { return .signalled(SIGTERM) }
+        return signal == 0 ? .exited((status >> 8) & 0xff) : .signalled(signal)
+    }
+
     /// - Parameter mergeErrors: also capture what the command writes to standard error.
     ///
     /// Started with `posix_spawn` and waited for with `waitpid`: Foundation's

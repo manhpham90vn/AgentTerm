@@ -83,6 +83,33 @@ final class PerformanceMeasurements: XCTestCase {
                 Double(clock() - cpuBefore) / Double(CLOCKS_PER_SEC) * 1000 / 5 / 3000 * 100))
     }
 
+    /// Searching a repository of 50,000 files (#45): its files listed and
+    /// ranked for a name, and how long until the first lines that hold a
+    /// word are given, and until all of them are.
+    func testSearchingALargeRepository() {
+        let repo = repository("search")
+        writeFiles(50_000, in: repo) { "file \($0)\nsome text of file \($0)\n" + ($0 % 1000 == 0 ? "the needle is here\n" : "") }
+        git("add", "-A", in: repo)
+        git("commit", "-q", "-m", "init", in: repo)
+        var files: [String] = []
+        report("search, 50,000 files: the files listed in", ms(time { files = FileSearch.files(in: repo.path) }))
+        report("search, 50,000 files: a name ranked among them in", ms(time { _ = FileSearch.rank(files, query: "f4999") }))
+        var first = Double.infinity
+        let all = time {
+            let started = Date()
+            var seen = false
+            _ = FileSearch.text("needle", in: repo.path, caseSensitive: false, isCancelled: { false }) { _ in
+                if !seen { first = min(first, Date().timeIntervalSince(started) * 1000) }
+                seen = true
+            }
+        }
+        report("search, 50,000 files: a word in 50 of them, the first lines given in", ms(first))
+        report("search, 50,000 files: a word in 50 of them, all lines given in", ms(all))
+        report(
+            "search, 50,000 files: a word in every file, stopped at 2,000 lines in", ms(time { _ = FileSearch.text("some text", in: repo.path, caseSensitive: false, isCancelled: { false }) { _ in } })
+        )
+    }
+
     /// Thousands of changed or untracked files.
     func testManyChanges() {
         let repo = repository("many")

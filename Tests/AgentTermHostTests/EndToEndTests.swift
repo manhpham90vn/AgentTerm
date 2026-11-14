@@ -709,6 +709,47 @@ final class EndToEndTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: directory.deletingLastPathComponent().appendingPathComponent("escape.txt").path))
     }
 
+    /// FIND-10 (#45): a device searches a folder on the Mac by name and
+    /// by text, each answer carrying the number of its search; a new
+    /// search for text ends the one before it, and one that is stopped is
+    /// still said to be over.
+    func testADeviceSearchesAFoldersFiles() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-find-\(UUID().uuidString)").standardizedFileURL
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try "let needle = 1\n".write(to: directory.appendingPathComponent("src/main.swift"), atomically: true, encoding: .utf8)
+        try "nothing\nA Needle here\n".write(to: directory.appendingPathComponent("notes.md"), atomically: true, encoding: .utf8)
+
+        let phone = connect("phone")
+        phone.connection.send(.findFiles(search: 1, path: directory.path, query: "main"))
+        waitUntil("the file found by name") { phone.messages.contains(.filesFound(search: 1, files: ["src/main.swift"], among: 2)) }
+        // A file made since is found once the search is opened again, which reads the folder again.
+        try "x\n".write(to: directory.appendingPathComponent("src/mainly.txt"), atomically: true, encoding: .utf8)
+        phone.connection.send(.findFiles(search: 2, path: directory.path, query: ""))
+        waitUntil("read again") { phone.messages.contains(.filesFound(search: 2, files: [], among: 3)) }
+        phone.connection.send(.findFiles(search: 3, path: directory.path, query: "main"))
+        waitUntil("both found") { phone.messages.contains(.filesFound(search: 3, files: ["src/main.swift", "src/mainly.txt"], among: 3)) }
+
+        func lines(_ search: Int) -> [String] {
+            phone.messages.flatMap { message -> [String] in
+                if case .textFound(search, let matches) = message { return matches.map { "\($0.file):\($0.line)" } }
+                return []
+            }.sorted()
+        }
+        func ended(_ search: Int) -> Bool { phone.messages.contains(.searchEnded(search: search, truncated: false, problem: nil)) }
+        phone.connection.send(.findText(search: 4, path: directory.path, query: "needle", caseSensitive: false))
+        waitUntil("the lines found") { ended(4) }
+        XCTAssertEqual(lines(4), ["notes.md:2", "src/main.swift:1"])
+        phone.connection.send(.findText(search: 5, path: directory.path, query: "Needle", caseSensitive: true))
+        waitUntil("with its case") { ended(5) }
+        XCTAssertEqual(lines(5), ["notes.md:2"])
+        // Stopped, and a search nobody has: each still answered.
+        phone.connection.send(.findText(search: 6, path: directory.path, query: "needle", caseSensitive: false))
+        phone.connection.send(.stopSearch(search: 6))
+        phone.connection.send(.stopSearch(search: 99))
+        waitUntil("said to be over") { ended(6) }
+    }
+
     /// GIT-63 (#44): what a device does inside a submodule is answered
     /// with the submodule's changes, and the folder around it, asked
     /// again, says what is changed in it now, not what it kept from before.

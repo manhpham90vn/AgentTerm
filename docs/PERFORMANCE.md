@@ -112,6 +112,20 @@ simulator does not report late frames; a phone does.
 A long session is opened with 500 lines above the screen rather than all of
 it, and the rest comes a page at a time as it is scrolled up (HIST-6).
 
+## Searching files
+
+Taken on 2026-11-14 with a debug build (`testSearchingALargeRepository`): a
+repository of 50,000 small files, searched by the host (#45). The issue
+asks for the first results within a second.
+
+| | |
+|---|---|
+| The folder's files listed (once when the search is opened, then kept 30 s) | 250 ms |
+| A name ranked among them (each key) | 173 ms |
+| A word that 50 files hold: the first lines given | 63 ms |
+| The same: all lines given | 660 ms |
+| A word every file holds: stopped at 2,000 lines | 254 ms |
+
 ## Not measured yet
 
 These need what a test on this Mac does not have, and are still to do for

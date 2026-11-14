@@ -12,6 +12,146 @@ struct FilesList: View {
     @State private var prompt: NamePrompt?
     @State private var name = ""
     @State private var trashing: FileEntry?
+    /// The search of the folder's files (#45): what is typed, by name or
+    /// by text, and whether its results are shown in place of the tree.
+    @State private var query = ""
+    @State private var byText = false
+    @State private var caseSensitive = false
+    @State private var searching = false
+    @FocusState private var searchFocused: Bool
+
+    private func search() {
+        if byText { model.findText(query, caseSensitive: caseSensitive, in: folder) } else { model.findFiles(query, in: folder) }
+    }
+
+    private func closeSearch() {
+        searching = false
+        searchFocused = false
+        query = ""
+        model.clearSearch()
+    }
+
+    /// The field, the two ways to search, and what was found.
+    private var searchBar: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField(byText ? "Find in files" : "Go to file", text: $query)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .focused($searchFocused)
+                    .submitLabel(.search)
+                    .onSubmit(search)
+                    .accessibilityIdentifier("search-field")
+                if searching {
+                    Button("Cancel", action: closeSearch).font(.subheadline)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.panel))
+            if searching {
+                HStack(spacing: 10) {
+                    Picker("Search", selection: $byText) {
+                        Text("Name").tag(false)
+                        Text("Text").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("search-mode")
+                    if byText {
+                        Toggle("Aa", isOn: $caseSensitive)
+                            .toggleStyle(.button)
+                            .accessibilityLabel("Match Case")
+                            .accessibilityIdentifier("search-case")
+                    }
+                }
+            }
+        }
+        .onChange(of: searchFocused) { _, focused in
+            if focused, !searching {
+                searching = true
+                search()
+            }
+        }
+        // A name is searched as it is typed; text a moment after the last key.
+        .task(id: [query, byText ? "text" : "name", caseSensitive ? "Aa" : "a"]) {
+            guard searching else { return }
+            if byText { try? await Task.sleep(for: .milliseconds(350)) }
+            if !Task.isCancelled { search() }
+        }
+    }
+
+    private var searchSummary: String {
+        if let problem = model.searchProblem { return problem }
+        if !byText { return TextMatch.summary(ofFiles: model.foundFiles.count, among: model.filesAmong, query: query) }
+        if query.isEmpty { return "Type a word or a phrase. It is searched for as written." }
+        return TextMatch.summary(of: model.foundLines, truncated: model.searchTruncated, searching: model.isSearching)
+    }
+
+    private func path(of file: String) -> String { (folder as NSString).appendingPathComponent(file) }
+
+    @ViewBuilder private var searchResults: some View {
+        HStack {
+            Text(searchSummary).font(.footnote).foregroundStyle(model.searchProblem == nil ? Color.secondary : Color.orange)
+            Spacer(minLength: 0)
+            if byText, model.isSearching { Button("Stop") { model.stopSearch() }.font(.footnote) }
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 10)
+        .accessibilityIdentifier("search-summary")
+        if byText {
+            ForEach(TextMatch.byFile(model.foundLines), id: \.file) { group in
+                VStack(alignment: .leading, spacing: 0) {
+                    HStack(spacing: 6) {
+                        Text((group.file as NSString).lastPathComponent).font(.subheadline.weight(.semibold)).lineLimit(1)
+                        Text((group.file as NSString).deletingLastPathComponent).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head)
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.top, 10)
+                    .padding(.bottom, 4)
+                    ForEach(group.lines, id: \.self) { match in
+                        NavigationLink(value: Route.documentLine(path: path(of: match.file), line: match.line)) {
+                            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                                Text("\(match.line)").font(.caption.monospaced()).foregroundStyle(.tertiary).frame(minWidth: 30, alignment: .trailing)
+                                Text(match.text).font(.caption.monospaced()).lineLimit(2).multilineTextAlignment(.leading)
+                                Spacer(minLength: 0)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 7)
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("match-\(match.file):\(match.line)")
+                    }
+                }
+                .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
+                .padding(.bottom, 10)
+            }
+        } else if !model.foundFiles.isEmpty {
+            VStack(spacing: 0) {
+                ForEach(model.foundFiles, id: \.self) { file in
+                    NavigationLink(value: Route.document(path: path(of: file))) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "doc").foregroundStyle(.secondary).frame(width: 20)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text((file as NSString).lastPathComponent).font(.body).lineLimit(1)
+                                let directory = (file as NSString).deletingLastPathComponent
+                                if !directory.isEmpty { Text(directory).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.head) }
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 9)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("found-" + file)
+                    if file != model.foundFiles.last { Palette.hairline.frame(height: 1).padding(.leading, 42) }
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
+        }
+    }
 
     /// What a name is being asked for.
     private struct NamePrompt: Identifiable {
@@ -54,43 +194,11 @@ struct FilesList: View {
             if model.fileListings[folder] != nil {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        HStack(spacing: 18) {
-                            Text((folder as NSString).lastPathComponent)
-                                .font(.footnote.weight(.medium))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                            Spacer()
-                            Button {
-                                ask(.newFile, folder)
-                            } label: {
-                                Image(systemName: "doc.badge.plus").font(.system(size: 16, weight: .medium))
-                            }
-                            .accessibilityLabel("New File")
-                            Button {
-                                ask(.newFolder, folder)
-                            } label: {
-                                Image(systemName: "folder.badge.plus").font(.system(size: 16, weight: .medium))
-                            }
-                            .accessibilityLabel("New Folder")
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.bottom, 10)
-                        let rows = rows
-                        if rows.isEmpty {
-                            Text("This folder is empty.")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                                .padding(.top, 40)
+                        searchBar.padding(.bottom, 10)
+                        if searching {
+                            searchResults
                         } else {
-                            VStack(spacing: 0) {
-                                ForEach(rows) { row in
-                                    rowView(row)
-                                    if row.id != rows.last?.id {
-                                        Palette.hairline.frame(height: 1).padding(.leading, 44 + CGFloat(row.depth) * 16)
-                                    }
-                                }
-                            }
-                            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
+                            tree
                         }
                     }
                     .padding(.horizontal, 16)
@@ -102,6 +210,7 @@ struct FilesList: View {
             }
         }
         .onAppear(perform: reload)
+        .onDisappear { if !searching { model.clearSearch() } }
         .alert(prompt?.title ?? "", isPresented: Binding(get: { prompt != nil }, set: { if !$0 { prompt = nil } }), presenting: prompt) { prompt in
             TextField("Name", text: $name)
                 .textInputAutocapitalization(.never)
@@ -126,6 +235,48 @@ struct FilesList: View {
             let parent = (created as NSString).deletingLastPathComponent
             if parent != folder { expanded.insert(parent) }
             model.path.append(Route.document(path: created))
+        }
+    }
+
+    /// The folder's own header and its tree of files.
+    @ViewBuilder private var tree: some View {
+        HStack(spacing: 18) {
+            Text((folder as NSString).lastPathComponent)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer()
+            Button {
+                ask(.newFile, folder)
+            } label: {
+                Image(systemName: "doc.badge.plus").font(.system(size: 16, weight: .medium))
+            }
+            .accessibilityLabel("New File")
+            Button {
+                ask(.newFolder, folder)
+            } label: {
+                Image(systemName: "folder.badge.plus").font(.system(size: 16, weight: .medium))
+            }
+            .accessibilityLabel("New Folder")
+        }
+        .padding(.horizontal, 6)
+        .padding(.bottom, 10)
+        let rows = rows
+        if rows.isEmpty {
+            Text("This folder is empty.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.top, 40)
+        } else {
+            VStack(spacing: 0) {
+                ForEach(rows) { row in
+                    rowView(row)
+                    if row.id != rows.last?.id {
+                        Palette.hairline.frame(height: 1).padding(.leading, 44 + CGFloat(row.depth) * 16)
+                    }
+                }
+            }
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Palette.panel))
         }
     }
 
@@ -261,6 +412,8 @@ private struct FileTreeRow: View {
 struct DocumentScreen: View {
     @EnvironmentObject private var model: PhoneModel
     let path: String
+    /// The line to show it at, when a search found it (#45).
+    var line: Int?
     /// The text as edited here.
     @State private var text = ""
     /// The text on the Mac that the edits started from. Nil until it loads.
@@ -352,7 +505,7 @@ struct DocumentScreen: View {
                     // Pictures the document refers to are on the Mac and are not shown here.
                     MarkdownPreview(text: text, baseURL: nil)
                 } else {
-                    CodeEditor(text: $text, path: path)
+                    CodeEditor(text: $text, path: path, target: line.map { LineTarget(line: $0, token: 1) })
                 }
             case .image:
                 if let data = file.data, let image = UIImage(data: data) {

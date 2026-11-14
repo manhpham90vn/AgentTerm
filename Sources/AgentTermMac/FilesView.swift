@@ -45,7 +45,8 @@ struct FilesView: View {
             if files.root == nil {
                 placeholder("Select a folder to see its files.")
             } else {
-                tree
+                // The search, and what it found, in place of the tree (#45).
+                SearchOrTree(search: model.search) { tree }
             }
         }
         .onReceive(refresh) { _ in
@@ -79,6 +80,9 @@ struct FilesView: View {
                 .lineLimit(1)
             Spacer()
             if let root = files.root {
+                headerButton("magnifyingglass", "Search the files: by name ⌘P, by text ⇧⌘F") {
+                    if model.search.isShown { model.search.hide() } else { model.showSearch(.names) }
+                }
                 headerButton("doc.badge.plus", "New file") { ask(.newFile(in: root)) }
                 headerButton("folder.badge.plus", "New folder") { ask(.newFolder(in: root)) }
                 headerButton("arrow.clockwise", "Refresh") { files.refresh() }
@@ -95,6 +99,7 @@ struct FilesView: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .help(help)
+        .accessibilityIdentifier("files-" + symbol)
         .accessibilityLabel(help)
     }
 
@@ -169,6 +174,22 @@ struct FilesView: View {
             .multilineTextAlignment(.center)
             .padding(24)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// The Files tab under its header: the search while it is shown, or the tree.
+private struct SearchOrTree<Tree: View>: View {
+    @ObservedObject var search: SearchModel
+    @ViewBuilder let tree: () -> Tree
+
+    var body: some View {
+        if search.isShown {
+            SearchField(search: search)
+            Theme.hairline.frame(height: 1)
+            SearchResults(search: search)
+        } else {
+            tree()
+        }
     }
 }
 
@@ -274,7 +295,9 @@ struct DocumentView: View {
             content
         }
         .background(Theme.canvas)
-        .onChange(of: document.path) { _, _ in previewing = true }
+        .onChange(of: document.path) { _, _ in previewing = files.lineTargets[document.path] == nil }
+        // Asked to be shown at a line (#45): that is in its source, not in its preview.
+        .onChange(of: files.lineTargets[document.path], initial: true) { _, target in if target != nil { previewing = false } }
     }
 
     private var bar: some View {
@@ -339,7 +362,7 @@ struct DocumentView: View {
                 let path = document.path
                 CodeEditor(
                     text: Binding(get: { files.documents.first { $0.path == path }?.text ?? "" }, set: { files.setText($0, for: path) }),
-                    path: path
+                    path: path, target: files.lineTargets[path]
                 )
             }
         case .image:

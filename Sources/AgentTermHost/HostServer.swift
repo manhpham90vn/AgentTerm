@@ -137,6 +137,8 @@ public final class HostServer {
         var inFront = false
         /// Numbers the large messages sent in pieces.
         var nextMessage: UInt32 = 0
+        /// The searches for text this client has going (#45), by its number.
+        var searches: [Int: SearchFlag] = [:]
 
         var authenticated: Bool { identity != nil }
         /// The Mac's own apps may pair and revoke devices.
@@ -146,6 +148,23 @@ public final class HostServer {
             self.id = id
             self.connection = connection
             self.isLocal = isLocal
+        }
+    }
+
+    /// Says to a search that goes on off the host's queue that it is no
+    /// longer wanted.
+    private final class SearchFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stopped = false
+        var isStopped: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return stopped
+        }
+        func stop() {
+            lock.lock()
+            stopped = true
+            lock.unlock()
         }
     }
 
@@ -831,6 +850,54 @@ public final class HostServer {
         }
     }
 
+    // MARK: Searching a folder's files (#45)
+
+    /// The files of the folders that were searched by name, kept for a
+    /// little while: a name is typed a letter at a time, and each letter
+    /// is a search.
+    private var fileLists: [String: (files: [String], at: Date)] = [:]
+    private static let fileListKeptFor: TimeInterval = 30
+    private static let fileListsKept = 6
+
+    private func findFiles(search: Int, in path: String, query: String, for client: Client) {
+        // Read again when the search is opened, and when what is kept is old.
+        let kept = fileLists[path].flatMap { query.isEmpty || Date().timeIntervalSince($0.at) > Self.fileListKeptFor ? nil : $0.files }
+        work(
+            for: client,
+            { () -> (all: [String]?, found: [String], among: Int) in
+                let files = kept ?? FileSearch.files(in: path)
+                return (kept == nil ? files : nil, FileSearch.rank(files, query: query), files.count)
+            }
+        ) { server, client, result in
+            if let all = result.all {
+                server.fileLists[path] = (all, Date())
+                if server.fileLists.count > Self.fileListsKept, let oldest = server.fileLists.min(by: { $0.value.at < $1.value.at })?.key { server.fileLists[oldest] = nil }
+            }
+            server.send(.filesFound(search: search, files: result.found, among: result.among), to: client)
+        }
+    }
+
+    private func findText(search: Int, in path: String, query: String, caseSensitive: Bool, for client: Client) {
+        // One at a time for each client: what was typed before is not wanted any more.
+        client.searches.values.forEach { $0.stop() }
+        let flag = SearchFlag()
+        client.searches[search] = flag
+        let id = client.id
+        workQueue.async { [weak self] in
+            let ending = FileSearch.text(query, in: path, caseSensitive: caseSensitive, isCancelled: { flag.isStopped }) { matches in
+                self?.queue.async {
+                    guard let self, let client = self.clients[id], !flag.isStopped else { return }
+                    self.send(.textFound(search: search, matches: matches), to: client)
+                }
+            }
+            self?.queue.async {
+                guard let self, let client = self.clients[id] else { return }
+                if client.searches[search] === flag { client.searches[search] = nil }
+                self.send(.searchEnded(search: search, truncated: ending.truncated, problem: ending.problem), to: client)
+            }
+        }
+    }
+
     // MARK: Worktrees (#23, #33)
 
     /// The command each folder runs in a new worktree before its session.
@@ -1131,6 +1198,8 @@ public final class HostServer {
     private func drop(_ client: Client) {
         guard clients.removeValue(forKey: client.id) != nil else { return }
         client.connection.cancel()
+        // Nobody is left to send what its searches find.
+        client.searches.values.forEach { $0.stop() }
         if client.inFront { updateMacInUse() }
         for id in client.attached {
             guard let session = sessions[id] else { continue }
@@ -1433,6 +1502,12 @@ public final class HostServer {
             // Asking again is allowed, but not in a tight loop.
             if refresh { refreshAccountUsage(olderThan: 15) }
             send(.accountUsage(accountUsageList()), to: client)
+        case .findFiles(let search, let path, let query):
+            findFiles(search: search, in: path, query: query, for: client)
+        case .findText(let search, let path, let query, let caseSensitive):
+            findText(search: search, in: path, query: query, caseSensitive: caseSensitive, for: client)
+        case .stopSearch(let search):
+            client.searches[search]?.stop()
         case .files(let path):
             work(for: client, { FileBrowser.list(path) }) { server, client, entries in
                 server.send(.files(path: path, entries: entries), to: client)

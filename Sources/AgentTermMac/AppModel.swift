@@ -644,6 +644,17 @@ final class AppModel: ObservableObject {
 
     /// The Files tab's tree and open file, for the selected folder.
     let files = FilesModel()
+    /// The search of the folder's files, in the Files tab (#45).
+    let search = SearchModel()
+
+    /// Shows the search of the side panel's folder, by name (⌘P) or by
+    /// text (⌘⇧F): in Sessions, the side panel shown, on its Files tab.
+    func showSearch(_ mode: SearchModel.Mode) {
+        if place != .sessions { show(.sessions, toggling: false) }
+        showDiff = true
+        UserDefaults.standard.set("files", forKey: "rightPanelTab")
+        search.show(mode)
+    }
 
     /// Devices that were paired with this Mac.
     @Published private(set) var devices: [DeviceInfo] = []
@@ -708,6 +719,7 @@ final class AppModel: ObservableObject {
         if let last = UserDefaults.standard.string(forKey: Self.currentMacKey), let mac = remoteMacs.first(where: { $0.id == last }) {
             remote = mac
             files.reset(remote: { [weak self] message in self?.connection?.send(message) })
+            search.reset(remote: { [weak self] message in self?.connection?.send(message) })
             // The tabs saved here are this Mac's.
             tabLayout = TabLayout()
             startOwnHost()
@@ -1014,6 +1026,7 @@ final class AppModel: ObservableObject {
         remoteHandoffPlan = nil
         browseListing = nil
         files.reset(remote: mac == nil ? nil : { [weak self] message in self?.connection?.send(message) })
+        search.reset(remote: mac == nil ? nil : { [weak self] message in self?.connection?.send(message) })
         connectAttempts = 0
         launchedDaemon = false
         status = .connecting
@@ -1153,6 +1166,7 @@ final class AppModel: ObservableObject {
             stoppingHost = false
             connection = nil
             files.connectionLost()
+            search.connectionLost()
             forgetHostState()
             retryConnection(reason: reason)
         }
@@ -1272,6 +1286,8 @@ final class AppModel: ObservableObject {
         case .worktrees(let folder, let list, let setup):
             worktrees[folder] = list
             worktreeSetups[folder] = setup
+        case .filesFound, .textFound, .searchEnded:
+            search.handle(message)
         case .worktreeSetups(let setups):
             worktreeSetups = setups
         case .worktreeFinished(_, _, let said):
@@ -1634,6 +1650,7 @@ final class AppModel: ObservableObject {
         if let selectedFolder { listWorktrees(selectedFolder) }
         // The diff tab stays: it belongs to its own folder, not to the one on show.
         files.setRoot(panelFolder)
+        search.setRoot(panelFolder)
         refreshDiff()
         folderHistory = nil
         refreshHistory(ofFolder: true)

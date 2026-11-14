@@ -770,3 +770,56 @@ public enum FileContent: Codable, Equatable, Sendable {
     /// asked, up to this size (#21).
     public static let largestOpenedAnyway = 20 * 1024 * 1024
 }
+
+/// A line of a file that holds what was searched for (#45).
+public struct TextMatch: Codable, Equatable, Hashable, Sendable {
+    /// The file, named from the folder that was searched.
+    public var file: String
+    /// The line's number, from 1.
+    public var line: Int
+    /// The line, without the blanks in front of it, and cut around the
+    /// text when it is very long.
+    public var text: String
+    /// Where the text is in `text`, and how long, in characters.
+    public var start: Int
+    public var length: Int
+
+    public init(file: String, line: Int, text: String, start: Int, length: Int) {
+        self.file = file
+        self.line = line
+        self.text = text
+        self.start = start
+        self.length = length
+    }
+}
+
+extension TextMatch {
+    /// The lines found, file by file in the order the files were first
+    /// found, each file's lines by their number.
+    public static func byFile(_ matches: [TextMatch]) -> [(file: String, lines: [TextMatch])] {
+        var order: [String] = []
+        var lines: [String: [TextMatch]] = [:]
+        for match in matches {
+            if lines[match.file] == nil { order.append(match.file) }
+            lines[match.file, default: []].append(match)
+        }
+        return order.map { ($0, (lines[$0] ?? []).sorted { $0.line < $1.line }) }
+    }
+
+    /// What is said under the lines found: how many, in how many files,
+    /// and that there were more than are shown.
+    public static func summary(of matches: [TextMatch], truncated: Bool, searching: Bool) -> String {
+        let files = Set(matches.map(\.file)).count
+        if matches.isEmpty { return searching ? "Searching…" : "Nothing found." }
+        var text = "\(matches.count) \(matches.count == 1 ? "line" : "lines") in \(files) \(files == 1 ? "file" : "files")"
+        if truncated { text += ". There are more: only the first \(matches.count) are shown, so make the search narrower" }
+        return text + (searching ? ", searching…" : ".")
+    }
+
+    /// What is said of a search by name: how many of the folder's files match.
+    public static func summary(ofFiles found: Int, among: Int, query: String) -> String {
+        if query.trimmingCharacters(in: .whitespaces).isEmpty { return "Type part of a file's name. \(among) \(among == 1 ? "file" : "files") in this folder." }
+        if found == 0 { return "No file's name matches." }
+        return found >= 100 ? "The best 100 of \(among) files." : "\(found) of \(among) files."
+    }
+}

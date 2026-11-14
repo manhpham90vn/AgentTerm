@@ -101,6 +101,8 @@ struct SessionsView: View {
                     PatchScreen(folder: folder, file: file, staged: staged)
                 case .document(let path):
                     DocumentScreen(path: path)
+                case .documentLine(let path, let line):
+                    DocumentScreen(path: path, line: line)
                 case .commits(let folder):
                     CommitsScreen(folder: folder)
                 case .commit(let folder, let hash):

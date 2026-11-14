@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 9
+public let agenttermProtocolVersion = 10
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -384,6 +384,18 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// skips permissions is refused unless its warning was accepted.
     case saveSchedule(Schedule)
     case removeSchedule(id: String)
+    /// The files of a folder whose name or path holds the letters of
+    /// `query`, the best first (#45). Answered with `filesFound` carrying
+    /// the same `search`, a number the client picks, so that an answer to
+    /// what was typed before is told from the answer to what is typed now.
+    /// An empty query has the host read the folder's files again.
+    case findFiles(search: Int, path: String, query: String)
+    /// The lines of a folder's files that hold `query`, as written, not as
+    /// a pattern. Answered with any number of `textFound` and then one
+    /// `searchEnded`. A client's search for text ends the one before it.
+    case findText(search: Int, path: String, query: String, caseSensitive: Bool)
+    /// Stops a search that is going on. It is still answered with `searchEnded`.
+    case stopSearch(search: Int)
     /// Starts a session in a new git worktree of `request.cwd`, on a branch
     /// of its own (#23) cut from the branch `from` names, or from the
     /// folder's current commit when it is nil (#43). Nil `branch` names it
@@ -527,6 +539,14 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// What became of `finishWorktree`: a pull request's address, or that
     /// it was merged or removed.
     case worktreeFinished(folder: String, path: String, said: String)
+    /// The files that match a `findFiles`, best first, at most a hundred,
+    /// and how many files the folder has that were looked through.
+    case filesFound(search: Int, files: [String], among: Int)
+    /// More lines found by a `findText`.
+    case textFound(search: Int, matches: [TextMatch])
+    /// A `findText` is over: whether there were more lines than were
+    /// given, and why it could not be done, when it could not.
+    case searchEnded(search: Int, truncated: Bool, problem: String?)
     /// The setup command of every folder that has one (#34): sent when a
     /// client connects and whenever one changes, so that it is known
     /// before a folder's worktrees were ever asked for.
