@@ -2,10 +2,10 @@
 
 # AgentTerm
 
-**A native macOS terminal for coding agents, with an iPhone remote.**
+**A native Mac terminal for AI agents, with built-in MCP tools and an iPhone remote.**
 
-Run Claude Code, Codex, Antigravity and GitHub Copilot CLI side by side on your Mac,
-and pick up any session from your iPhone.
+Run Claude Code, Codex, Antigravity and GitHub Copilot CLI on your Mac.
+Give them visible shells to work in, and steer the same sessions from your iPhone.
 
 [![CI](https://github.com/manhpham90vn/AgentTerm/actions/workflows/ci.yml/badge.svg)](https://github.com/manhpham90vn/AgentTerm/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/manhpham90vn/AgentTerm?include_prereleases&label=release)](https://github.com/manhpham90vn/AgentTerm/releases)
@@ -23,12 +23,89 @@ them over [Tailscale](https://tailscale.com).
 
 > **Status: beta.** Use matching versions of the Mac and iPhone apps; see [Compatibility](#compatibility).
 
+## Product direction
+
+AgentTerm puts the agent at the center of the workflow. You give it a task;
+it uses tools to observe, act and check the result. AgentTerm provides the
+working environment and lets you follow the work, answer questions, review
+results and take over from your Mac or iPhone.
+
+- **The Mac runs the work.** Agents, shells and the planned embedded browser
+  run on the Mac. Terminal sessions belong to the host daemon and keep
+  running when the app window closes.
+- **MCP connects agents to the environment.** The built-in Model Context
+  Protocol server already lets agents open visible shell tabs, run commands
+  and read their output. Browser tools will extend this to websites and web
+  apps, with explicit actions and observable results.
+- **Shells and a browser are the agent's tools.** Shells provide access to
+  code, Git, tests and development servers. The planned browser will let
+  agents read pages, fill forms, use web services and test interfaces, while
+  remaining useful for a person browsing directly.
+- **The iPhone keeps you involved away from the desk.** It controls the
+  sessions running on your Mac: start work, check progress, answer an agent
+  and review changes. The agent does not run on the phone.
+- **People and agents share visible work.** Make it clear which agent owns
+  a shell or controls a browser tab. Let the user inspect the work and take
+  control without competing input. Keep tools predictable, report failures
+  clearly and show unknown state as unknown.
+
+### Plug-and-play extensibility
+
+The product is being designed so new capabilities can be added through
+MCP servers and plugins. Shells and the planned browser are the first tools
+in an environment that can grow with the work people give their agents.
+
+- **Connect more tools through MCP.** Developers should be able to create
+  and connect additional MCP servers for services, data and specialized
+  workflows, alongside AgentTerm's built-in server.
+- **Extend the workspace through plugins.** Plugins should be able to add
+  agent integrations, panels, commands and other capabilities without
+  requiring a custom build of AgentTerm.
+- **Make extensions easy to manage.** Installation, configuration, enabling,
+  disabling and removal should be clear. Each extension should declare what
+  it provides and what access it needs, report failures visibly and follow
+  the same session ownership rules as the built-in tools.
+- **Keep the Mac and iPhone connected.** Extensions run through the Mac
+  host. Their everyday actions and results should be available on the phone
+  wherever the device allows, with clear limits for features that need the
+  Mac interface.
+
+This is the extension direction, not a shipped plugin API. The built-in
+shell MCP server exists today; management of additional servers and the
+plugin interfaces still need to be defined. The
+[plugin work](https://github.com/manhpham90vn/AgentTerm/issues/12) remains
+in the backlog, separate from the 0.8.0 milestone.
+
+### Next: 0.8.0
+
+The [0.8.0 milestone](https://github.com/manhpham90vn/AgentTerm/milestone/8)
+develops this direction through an attention inbox, split panes, a prompt
+composer, feedback on diffs, queued instructions, richer handoffs and results,
+PR and CI review, worktree setup, delegation and comparisons across agents.
+
+The [embedded browser](https://github.com/manhpham90vn/AgentTerm/issues/76)
+is planned for this release. It will combine everyday browsing with tools
+for agents to inspect pages, navigate, interact and verify outcomes in the
+same visible workspace. Its engine, profile boundaries and presentation on
+the iPhone still need to be decided.
+
+[Apple push notifications](https://github.com/manhpham90vn/AgentTerm/issues/66)
+are also planned so the iPhone can notify you when an agent needs you even
+while the app is suspended. The delivery infrastructure remains to be
+researched. The current app has neither Apple push nor an embedded browser.
+
+Release scope and decisions are tracked in the
+[roadmap](https://github.com/manhpham90vn/AgentTerm/issues/28).
+
 ## Features
 
 - **Every agent, one click.** Starts any agent CLI installed on your Mac, in a
   real terminal.
 - **Sessions that keep running.** Close the window or quit the app; they are
   still there, and the app can stay in the menu bar.
+- **Built-in MCP server.** Agents can open shell tabs you can see, send
+  commands and read their output. The user can interact with those shells
+  from the Mac or iPhone.
 - **Tabs you arrange.** Sessions, files and diffs in one strip: drag to
   reorder, pin, and group with a name and a color.
 - **Git, files and history** of each project folder next to the terminal:
