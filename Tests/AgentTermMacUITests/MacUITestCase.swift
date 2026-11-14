@@ -266,6 +266,9 @@ class MacUITestCase: XCTestCase {
         // What the host and the app take for the home folder, and give
         // their sessions as HOME: NSHomeDirectory() follows this, not HOME.
         environment["CFFIXED_USER_HOME"] = home.path
+        // What a test throws away goes here, never into the Trash of the
+        // person running the tests.
+        environment["AGENTTERM_TRASH_DIR"] = home.appendingPathComponent(".Trash-of-the-tests").path
         return environment
     }
 

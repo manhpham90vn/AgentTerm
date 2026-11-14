@@ -59,8 +59,20 @@ private struct ChangesList: View {
     /// "list" shows every file in one flat list, "tree" groups them by folder.
     @AppStorage("diffViewMode") private var viewMode = "list"
     @State private var collapsedFolders: Set<String> = []
+    /// The changes the user is asked about before they are discarded (#39).
+    @State private var discarding: [FileDiff]?
 
     private var isTree: Bool { viewMode == "tree" }
+    private var question: DiscardQuestion? { discarding.map(DiscardQuestion.init(files:)) }
+
+    /// Discards what was asked about. Every change is asked for as such,
+    /// so that one made since is not left out.
+    private func discardConfirmed() {
+        guard let asked = discarding else { return }
+        discarding = nil
+        let all = asked.count > 1 && asked.count == (model.diffs[folder]?.unstaged.count ?? -1)
+        model.discard(all ? [] : asked.map(\.path), in: folder)
+    }
 
     var body: some View {
         Group {
@@ -127,8 +139,10 @@ private struct ChangesList: View {
                                 rows(diff.staged)
                             }
                             if !diff.unstaged.isEmpty {
-                                SectionHeader(title: "Changes", count: diff.unstaged.count, action: "Stage All") { model.stage([], in: folder) }
-                                    .padding(.top, diff.staged.isEmpty ? 0 : 16)
+                                SectionHeader(
+                                    title: "Changes", count: diff.unstaged.count, action: "Stage All", second: ("Discard All…", { discarding = diff.unstaged })
+                                ) { model.stage([], in: folder) }
+                                .padding(.top, diff.staged.isEmpty ? 0 : 16)
                                 rows(diff.unstaged)
                             }
                         }
@@ -142,6 +156,15 @@ private struct ChangesList: View {
             }
         }
         .onAppear { model.loadDiff(folder) }
+        // Asked first: what is discarded does not come back (#39).
+        .confirmationDialog(
+            question?.title ?? "", isPresented: Binding(get: { discarding != nil }, set: { if !$0 { discarding = nil } }), titleVisibility: .visible
+        ) {
+            Button(question?.confirm ?? "Discard", role: .destructive) { discardConfirmed() }
+            Button("Cancel", role: .cancel) { discarding = nil }
+        } message: {
+            Text(question?.message ?? "")
+        }
     }
 
     /// The files of one of the two lists, flat or grouped by folder.
@@ -184,6 +207,20 @@ private struct ChangesList: View {
                 FileRow(file: file, showsDirectory: showsDirectory, depth: depth)
             }
             .buttonStyle(.plain)
+            .contextMenu {
+                Button(file.isStaged ? "Unstage" : "Stage") {
+                    if file.isStaged { model.unstage([file.path], in: folder) } else { model.stage([file.path], in: folder) }
+                }
+                if !file.isStaged {
+                    // Asked about first: what is discarded does not come back.
+                    Button(role: .destructive) {
+                        discarding = [file]
+                    } label: {
+                        Label(file.isUntracked ? "Move to the Trash…" : "Discard Changes…", systemImage: file.isUntracked ? "trash" : "arrow.uturn.backward")
+                    }
+                    .accessibilityLabel(file.discardLabel)
+                }
+            }
             Button {
                 if file.isStaged { model.unstage([file.path], in: folder) } else { model.stage([file.path], in: folder) }
             } label: {
@@ -339,7 +376,17 @@ private struct SectionHeader: View {
     let title: String
     let count: Int
     let action: String
+    /// One more thing to do with all of them, before the first.
+    var second: (title: String, perform: () -> Void)?
     let perform: () -> Void
+
+    init(title: String, count: Int, action: String, second: (String, () -> Void)? = nil, perform: @escaping () -> Void) {
+        self.title = title
+        self.count = count
+        self.action = action
+        self.second = second.map { (title: $0.0, perform: $0.1) }
+        self.perform = perform
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -350,6 +397,11 @@ private struct SectionHeader: View {
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.tertiary)
             Spacer()
+            if let second {
+                Button(second.title, role: .destructive, action: second.perform)
+                    .font(.footnote.weight(.medium))
+                    .padding(.trailing, 10)
+            }
             Button(action, action: perform)
                 .font(.footnote.weight(.medium))
         }

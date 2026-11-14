@@ -1471,6 +1471,8 @@ public final class HostServer {
             git(for: client, in: path) { GitActions.stage(files, in: path) }
         case .gitUnstage(let path, let files):
             git(for: client, in: path) { GitActions.unstage(files, in: path) }
+        case .gitDiscard(let path, let files):
+            git(for: client, in: path) { GitActions.discard(files, in: path) }
         case .gitCommit(let path, let message):
             git(for: client, in: path) { GitActions.commit(message: message, in: path) }
         case .gitPush(let path):

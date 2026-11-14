@@ -28,6 +28,8 @@ final class ProtocolTests: XCTestCase {
             .diffFile(path: "/Users/me/app", file: "src/a b.swift", staged: true),
             .gitStage(path: "/Users/me/app", files: ["src/a b.swift", "tên.txt"]),
             .gitStage(path: "/Users/me/app", files: []),
+            .gitDiscard(path: "/Users/me/app", files: ["src/a b.swift"]),
+            .gitDiscard(path: "/Users/me/app", files: []),
             .gitUnstage(path: "/Users/me/app", files: ["src/a b.swift"]),
             .gitCommit(path: "/Users/me/app", message: "feat: thêm dòng\n\nchi tiết"),
             .accountUsage(refresh: true),
@@ -347,5 +349,28 @@ final class ProtocolTests: XCTestCase {
         let asked = AgentNotice(session: 1, name: "fix", folder: "/p", state: .waitingForAnswer(AgentQuestion(text: "Which one?", choices: ["A", "B"])))
         XCTAssertEqual(asked.full, "Which one?\nA · B")
         XCTAssertFalse(asked.detailIsCut)
+    }
+
+    /// GIT-21 (#39): what is asked before changes are discarded, the same
+    /// on the Mac and the iPhone.
+    func testWhatIsAskedBeforeDiscarding() {
+        let changed = FileDiff(path: "src/notes.txt", added: 1, deleted: 0, isUntracked: false, patch: "")
+        let new = FileDiff(path: "docs/new guide.md", added: 3, deleted: 0, isUntracked: true, patch: "")
+        let one = DiscardQuestion(files: [changed])
+        XCTAssertEqual(one.title, "Discard the changes to notes.txt?")
+        XCTAssertTrue(one.message.contains("cannot be undone"))
+        XCTAssertEqual(one.confirm, "Discard Changes")
+        let trashed = DiscardQuestion(files: [new])
+        XCTAssertEqual(trashed.title, "Move new guide.md to the Trash?")
+        XCTAssertTrue(trashed.message.contains("put back from the Trash"))
+        XCTAssertEqual(trashed.confirm, "Move to Trash")
+        let all = DiscardQuestion(files: [changed, changed, new])
+        XCTAssertEqual(all.title, "Discard all 3 changes?")
+        XCTAssertEqual(
+            all.message, "2 files go back to what is staged or to the last commit, which cannot be undone. 1 new file is moved to the Trash of the Mac.")
+        XCTAssertEqual(all.confirm, "Discard All")
+        XCTAssertEqual(DiscardQuestion(files: [new, new]).message, "2 new files are moved to the Trash of the Mac.")
+        XCTAssertEqual(changed.discardLabel, "Discard changes to notes.txt")
+        XCTAssertEqual(new.discardLabel, "Move new guide.md to the Trash")
     }
 }

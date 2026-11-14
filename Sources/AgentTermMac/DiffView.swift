@@ -109,14 +109,27 @@ struct DiffView: View {
                     rows(staged)
                 }
                 if !unstaged.isEmpty {
-                    ChangesHeader(title: "Changes", count: unstaged.count, symbol: "plus", help: "Stage all") { model.stage([]) }
-                        .padding(.top, staged.isEmpty ? 0 : 6)
+                    ChangesHeader(
+                        title: "Changes", count: unstaged.count, symbol: "plus", help: "Stage all", second: ("arrow.uturn.backward", "Discard all", { model.requestDiscard([]) })
+                    ) { model.stage([]) }
+                    .padding(.top, staged.isEmpty ? 0 : 6)
                     rows(unstaged)
                 }
             }
             .padding(6)
         }
+        // Asked first: what is discarded does not come back (#39).
+        .confirmationDialog(
+            question?.title ?? "", isPresented: Binding(get: { model.discarding != nil }, set: { if !$0 { model.discarding = nil } }), titleVisibility: .visible
+        ) {
+            Button(question?.confirm ?? "Discard", role: .destructive) { model.discardConfirmed() }
+            Button("Cancel", role: .cancel) { model.discarding = nil }
+        } message: {
+            Text(question?.message ?? "")
+        }
     }
+
+    private var question: DiscardQuestion? { model.discarding.map(DiscardQuestion.init(files:)) }
 
     /// The files of one of the two lists, flat or grouped by folder.
     @ViewBuilder
@@ -297,7 +310,19 @@ private struct ChangesHeader: View {
     let count: Int
     let symbol: String
     let help: String
+    /// One more thing to do with all of them, before the first: its
+    /// symbol, what it is called, and what it does.
+    var second: (symbol: String, help: String, action: () -> Void)?
     let action: () -> Void
+
+    init(title: String, count: Int, symbol: String, help: String, second: (String, String, () -> Void)? = nil, action: @escaping () -> Void) {
+        self.title = title
+        self.count = count
+        self.symbol = symbol
+        self.help = help
+        self.second = second.map { (symbol: $0.0, help: $0.1, action: $0.2) }
+        self.action = action
+    }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -308,6 +333,15 @@ private struct ChangesHeader: View {
                 .font(.system(size: 10, weight: .medium, design: .monospaced))
                 .foregroundStyle(.tertiary)
             Spacer()
+            if let second {
+                Button(action: second.action) {
+                    Image(systemName: second.symbol).font(.system(size: 10, weight: .bold)).frame(width: 18, height: 16)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help(second.help)
+                .accessibilityLabel(second.help)
+            }
             Button(action: action) {
                 Image(systemName: symbol).font(.system(size: 10, weight: .bold)).frame(width: 18, height: 16)
             }
@@ -415,6 +449,23 @@ private struct FileRow: View {
             .accessibilityIdentifier((file.isStaged ? "staged-" : "change-") + file.path)
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { model.openDiff(file) }
+            if !file.isStaged {
+                // Discarding is asked about first. Faint until the row is
+                // under the pointer, as the button beside it is: one that
+                // is not drawn at all is not there for VoiceOver either.
+                Button {
+                    model.requestDiscard([file])
+                } label: {
+                    Image(systemName: file.isUntracked ? "trash" : "arrow.uturn.backward")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 18, height: 16)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .opacity(hovering || selected ? 1 : 0.35)
+                .help(file.isUntracked ? "Move to the Trash…" : "Discard Changes…")
+                .accessibilityLabel(file.discardLabel)
+            }
             Button(action: move) {
                 Image(systemName: file.isStaged ? "minus" : "plus")
                     .font(.system(size: 10, weight: .bold))
@@ -439,6 +490,9 @@ private struct FileRow: View {
         .help(file.path)
         .contextMenu {
             Button(file.isStaged ? "Unstage" : "Stage", action: move)
+            if !file.isStaged {
+                Button(file.isUntracked ? "Move to the Trash…" : "Discard Changes…", role: .destructive) { model.requestDiscard([file]) }
+            }
         }
     }
 

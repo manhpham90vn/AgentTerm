@@ -110,9 +110,28 @@ public enum FileBrowser {
         return target
     }
 
+    /// Names a folder that stands in for the Trash: a test's own, so that
+    /// what a test throws away never lands in the Trash of the person
+    /// running it.
+    public static let trashVariable = "AGENTTERM_TRASH_DIR"
+
     /// Moves a file or folder to the Trash, where it can be put back from.
     public static func trash(_ path: String) throws {
         do {
+            if let own = ProcessInfo.processInfo.environment[trashVariable], !own.isEmpty {
+                let directory = URL(fileURLWithPath: own, isDirectory: true)
+                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+                let name = (path as NSString).lastPathComponent
+                var target = directory.appendingPathComponent(name)
+                // As the Trash does: a name that is taken gets a number.
+                var number = 2
+                while FileManager.default.fileExists(atPath: target.path) {
+                    target = directory.appendingPathComponent("\(name) \(number)")
+                    number += 1
+                }
+                try FileManager.default.moveItem(at: URL(fileURLWithPath: path), to: target)
+                return
+            }
             try FileManager.default.trashItem(at: URL(fileURLWithPath: path), resultingItemURL: nil)
         } catch {
             throw FileBrowserError.failed(error.localizedDescription)

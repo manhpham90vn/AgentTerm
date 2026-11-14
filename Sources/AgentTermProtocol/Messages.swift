@@ -203,6 +203,10 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case gitStage(path: String, files: [String])
     /// Takes files out of the next commit. No files means all of them.
     case gitUnstage(path: String, files: [String])
+    /// Throws away changes that are not staged (#39): a file git tracks goes
+    /// back to what is staged or to the last commit, one it does not track
+    /// yet goes to the Mac's Trash. No files means every such change.
+    case gitDiscard(path: String, files: [String])
     /// Commits what is staged.
     case gitCommit(path: String, message: String)
     /// Pushes the branch that is checked out to its upstream. A branch

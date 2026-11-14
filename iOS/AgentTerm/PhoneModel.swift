@@ -1240,6 +1240,13 @@ final class PhoneModel: ObservableObject {
         connection?.send(.gitUnstage(path: folder, files: files))
     }
 
+    /// Discards changes that are not staged, once the user was asked (#39):
+    /// back to what is staged or committed, and to the Mac's Trash what git
+    /// does not track. No files means every such change.
+    func discard(_ files: [String], in folder: String) {
+        connection?.send(.gitDiscard(path: folder, files: files))
+    }
+
     /// Commits what is staged with the message written for the folder.
     func commit(in folder: String) {
         guard committing == nil, let message = commitDrafts[folder] else { return }

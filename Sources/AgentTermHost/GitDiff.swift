@@ -263,6 +263,40 @@ public enum GitActions {
         return run(["rm", "--cached", "-r", "--quiet", "--"] + (files.isEmpty ? ["."] : files), in: directory)
     }
 
+    /// Throws away changes that are not staged (#39). A file git tracks
+    /// goes back to what is staged of it, or to the last commit; one git
+    /// does not track yet is moved to the Trash, where it can be put back
+    /// from, since nothing else keeps it. No files means every change that
+    /// is not staged. What is staged is left as it is: it is taken out of
+    /// the next commit first, by whoever means to lose it.
+    public static func discard(_ files: [String], in directory: String) -> String? {
+        let all = files.isEmpty
+        let named = all ? ["."] : files
+        // Every change at once takes a folder git does not track whole,
+        // rather than leave it behind empty.
+        guard let changed = list(["diff", "--name-only", "--relative", "-z", "--"] + named, in: directory),
+            let untracked = list(["ls-files", "--others", "--exclude-standard", "-z"] + (all ? ["--directory", "--no-empty-directory"] : []) + ["--"] + named, in: directory)
+        else { return "git could not be started." }
+        guard !changed.isEmpty || !untracked.isEmpty else { return "There is no change to discard." }
+        if !changed.isEmpty, let problem = run(["restore", "--worktree", "--"] + changed, in: directory) { return problem }
+        for file in untracked {
+            let path = (directory as NSString).appendingPathComponent(file.hasSuffix("/") ? String(file.dropLast()) : file)
+            do {
+                try FileBrowser.trash(path)
+            } catch {
+                return "\(file) could not be moved to the Trash: \(error.localizedDescription)"
+            }
+        }
+        return nil
+    }
+
+    /// The paths a git command prints, separated by NUL. Nil when git
+    /// could not be run or refused.
+    private static func list(_ arguments: [String], in directory: String) -> [String]? {
+        guard let result = Subprocess.run(git, ["-C", directory, "--literal-pathspecs"] + arguments, timeout: 30), result.status == 0 else { return nil }
+        return String(decoding: result.output, as: UTF8.self).split(separator: "\0").map(String.init)
+    }
+
     /// Commits what is staged, with the identity and hooks the repository is
     /// set up with.
     public static func commit(message: String, in directory: String) -> String? {

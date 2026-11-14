@@ -1856,6 +1856,31 @@ final class AppModel: ObservableObject {
         git { GitActions.unstage(paths, in: $0) }
     }
 
+    /// The changes the user is asked about before they are discarded (#39).
+    @Published var discarding: [FileDiff]?
+
+    /// Asks before discarding changes that are not staged. No files means
+    /// every one of them.
+    func requestDiscard(_ files: [FileDiff]) {
+        let asked = files.isEmpty ? (diff?.unstaged ?? []) : files.filter { !$0.isStaged }
+        guard !asked.isEmpty else { return }
+        discarding = asked
+    }
+
+    /// Discards what was asked about: back to what is staged or committed,
+    /// and to the Trash what git does not track.
+    func discardConfirmed() {
+        guard let asked = discarding else { return }
+        discarding = nil
+        // Every change is asked for as such, so that one made since is not left out.
+        let paths = asked.count == (diff?.unstaged.count ?? -1) && asked.count > 1 ? [] : asked.map(\.path)
+        if isRemote, let directory = panelFolder {
+            sendForDiff(.gitDiscard(path: directory, files: paths), in: directory)
+            return
+        }
+        git { GitActions.discard(paths, in: $0) }
+    }
+
     /// Commits what is staged in the selected folder with the message written for it.
     func commit() {
         guard let directory = panelFolder, !isCommitting else { return }

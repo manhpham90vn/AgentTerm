@@ -45,6 +45,52 @@ public struct FileDiff: Codable, Identifiable, Equatable, Sendable {
     public var marker: String { isUntracked ? "U" : status.rawValue }
 }
 
+/// What the user is asked before changes are discarded (#39), the same on
+/// the Mac and the iPhone: discarding cannot be taken back for a file git
+/// tracks, and moves one it does not track to the Trash.
+public struct DiscardQuestion: Equatable, Sendable {
+    public var title: String
+    public var message: String
+    /// The button that does it.
+    public var confirm: String
+
+    /// - Parameter files: The changes to discard, none of them staged.
+    public init(files: [FileDiff]) {
+        let new = files.filter(\.isUntracked).count
+        let tracked = files.count - new
+        if files.count == 1, let file = files.first {
+            let name = (file.path as NSString).lastPathComponent
+            if file.isUntracked {
+                title = "Move \(name) to the Trash?"
+                message = "git does not track it yet, so nothing else keeps it. It can be put back from the Trash of the Mac."
+                confirm = "Move to Trash"
+            } else {
+                title = "Discard the changes to \(name)?"
+                message = "It goes back to what is staged of it, or to the last commit. This cannot be undone."
+                confirm = "Discard Changes"
+            }
+            return
+        }
+        title = "Discard all \(files.count) changes?"
+        var parts: [String] = []
+        if tracked > 0 {
+            parts.append(
+                "\(tracked) \(tracked == 1 ? "file goes" : "files go") back to what is staged or to the last commit, which cannot be undone.")
+        }
+        if new > 0 { parts.append("\(new) new \(new == 1 ? "file is" : "files are") moved to the Trash of the Mac.") }
+        message = parts.joined(separator: " ")
+        confirm = "Discard All"
+    }
+}
+
+extension FileDiff {
+    /// What discarding this change is called on its row.
+    public var discardLabel: String {
+        let name = (path as NSString).lastPathComponent
+        return isUntracked ? "Move \(name) to the Trash" : "Discard changes to \(name)"
+    }
+}
+
 public struct DiffSnapshot: Codable, Equatable, Sendable {
     public var isRepository: Bool
     public var branch: String?

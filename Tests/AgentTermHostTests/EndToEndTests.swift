@@ -765,6 +765,57 @@ final class EndToEndTests: XCTestCase {
         XCTAssertEqual(String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self), "feat: thêm dòng\ninit\n")
     }
 
+    /// GIT-20 (#39): a device discards changes through the host: one file,
+    /// then every change; what git does not track goes to the Trash, and
+    /// the device is sent the list as it is then.
+    func testAClientDiscardsChanges() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-discard-\(UUID().uuidString)").standardizedFileURL
+        let trash = directory.appendingPathComponent(".trash-of-the-test")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        setenv(FileBrowser.trashVariable, trash.path, 1)
+        defer {
+            unsetenv(FileBrowser.trashVariable)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        git("init", "-q", "-b", "main", in: directory)
+        git("config", "user.name", "Test", in: directory)
+        git("config", "user.email", "test@example.com", in: directory)
+        git("config", "commit.gpgsign", "false", in: directory)
+        try ".trash-of-the-test\n".write(to: directory.appendingPathComponent(".gitignore"), atomically: true, encoding: .utf8)
+        try "one\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "one\n".write(to: directory.appendingPathComponent("c.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: directory)
+        git("commit", "-q", "-m", "init", in: directory)
+        try "one\ntwo\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        try "changed\n".write(to: directory.appendingPathComponent("c.txt"), atomically: true, encoding: .utf8)
+        try "mới\n".write(to: directory.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+
+        let phone = connect("phone")
+        func latest() -> [String]? {
+            phone.messages.compactMap { message -> [String]? in
+                if case .diff(directory.path, let snapshot) = message { return snapshot.files.map { $0.marker + " " + $0.path } }
+                return nil
+            }.last
+        }
+        phone.connection.send(.diff(path: directory.path))
+        waitUntil("the changes") { latest() == ["M a.txt", "M c.txt", "U b.txt"] }
+
+        phone.connection.send(.gitDiscard(path: directory.path, files: ["a.txt"]))
+        waitUntil("one discarded") { latest() == ["M c.txt", "U b.txt"] }
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("a.txt"), encoding: .utf8), "one\n")
+
+        phone.connection.send(.gitDiscard(path: directory.path, files: []))
+        waitUntil("all discarded") { latest() == [] }
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("c.txt"), encoding: .utf8), "one\n")
+        XCTAssertEqual(try String(contentsOf: trash.appendingPathComponent("b.txt"), encoding: .utf8), "mới\n", "in the Trash, not gone")
+
+        // Nothing left: said, and the list is sent all the same.
+        phone.connection.send(.gitDiscard(path: directory.path, files: []))
+        waitUntil("told there is nothing") {
+            phone.messages.contains { if case .error(let text) = $0 { return text == "There is no change to discard." } else { return false } }
+        }
+    }
+
     func testAClientCanBrowseFolders() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-dirs-\(UUID().uuidString)").standardizedFileURL
         for name in ["beta", "Alpha", "alpha 2", ".hidden"] {

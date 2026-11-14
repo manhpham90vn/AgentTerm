@@ -33,6 +33,66 @@ final class GitActionsTests: XCTestCase {
     private func entries(_ files: [FileDiff]) -> [String] { files.map { "\($0.marker) \($0.path)" } }
     private var snapshot: DiffSnapshot { GitDiff.snapshot(directory: root.path) }
 
+    /// GIT-20 (#39): discarding takes back what is not staged, and moves a
+    /// file git does not track to the Trash; what is staged stays.
+    func testDiscardingChangesThatAreNotStaged() throws {
+        let trash = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-trash-\(UUID().uuidString)")
+        setenv(FileBrowser.trashVariable, trash.path, 1)
+        defer {
+            unsetenv(FileBrowser.trashVariable)
+            try? FileManager.default.removeItem(at: trash)
+        }
+        try write("a.txt", "one\n")
+        try write("b.txt", "one\n")
+        try write("gone.txt", "kept\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        try write("a.txt", "one\nstaged\n")
+        git("add", "a.txt")
+        try write("a.txt", "one\nstaged\nnot staged\n")
+        try write("b.txt", "changed\n")
+        try FileManager.default.removeItem(at: root.appendingPathComponent("gone.txt"))
+        try write("new file.txt", "mine\n")
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("made/deep"), withIntermediateDirectories: true)
+        try write("made/deep/x.txt", "x\n")
+        XCTAssertEqual(entries(snapshot.unstaged), ["M a.txt", "M b.txt", "D gone.txt", "U made/deep/x.txt", "U new file.txt"])
+
+        // One file git tracks: back to what is staged of it, not further.
+        XCTAssertNil(GitActions.discard(["a.txt"], in: root.path))
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8), "one\nstaged\n")
+        XCTAssertEqual(entries(snapshot.staged), ["M a.txt"], "what is staged stays")
+        // One git does not track: to the Trash, where it still is.
+        XCTAssertNil(GitActions.discard(["new file.txt"], in: root.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("new file.txt").path))
+        XCTAssertEqual(try String(contentsOf: trash.appendingPathComponent("new file.txt"), encoding: .utf8), "mine\n")
+        XCTAssertEqual(entries(snapshot.unstaged), ["M b.txt", "D gone.txt", "U made/deep/x.txt"])
+
+        // Every change: the changed file, the deleted one, and the new folder whole.
+        XCTAssertNil(GitActions.discard([], in: root.path))
+        XCTAssertEqual(entries(snapshot.unstaged), [])
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("b.txt"), encoding: .utf8), "one\n")
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("gone.txt"), encoding: .utf8), "kept\n")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent("made").path), "no empty folder is left behind")
+        XCTAssertEqual(try String(contentsOf: trash.appendingPathComponent("made/deep/x.txt"), encoding: .utf8), "x\n")
+        XCTAssertEqual(entries(snapshot.staged), ["M a.txt"])
+
+        // Nothing left to discard is said, not done silently.
+        XCTAssertEqual(GitActions.discard([], in: root.path), "There is no change to discard.")
+        XCTAssertEqual(GitActions.discard(["b.txt"], in: root.path), "There is no change to discard.")
+    }
+
+    /// GIT-20: a name that is a pattern to git is taken as the file it names.
+    func testDiscardingTakesANameAsItIs() throws {
+        try write("*.txt", "star\n")
+        try write("a.txt", "one\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        try write("*.txt", "star changed\n")
+        try write("a.txt", "a changed\n")
+        XCTAssertNil(GitActions.discard(["*.txt"], in: root.path))
+        XCTAssertEqual(entries(snapshot.unstaged), ["M a.txt"], "only the file of that name")
+    }
+
     func testStageUnstageAndCommit() throws {
         try write("a.txt", "one\n")
         try write("b.txt", "one\n")

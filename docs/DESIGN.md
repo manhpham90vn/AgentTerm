@@ -216,6 +216,7 @@ Client to host:
 | `addFolder(path)` / `removeFolder(path)` | Change the shared folder list. |
 | `diff(path)` / `diffFile(path, file, staged)` | A folder's uncommitted changes without the diffs, then one file's diff: its staged part, or what is only in the working tree. |
 | `gitStage(path, files)` / `gitUnstage(path, files)` / `gitCommit(path, message)` | Change what the next commit contains (no files means all), and commit it. Answered with `diff`, after an `error` carrying git's words if it failed. |
+| `gitDiscard(path, files)` | Throw away changes that are not staged (no files means all): `git restore --worktree` for what git tracks, the Trash for what it does not (`GitActions.discard`, `FileBrowser.trash`). Answered as `gitStage` is. The apps ask first, in the words of `DiscardQuestion`. |
 | `gitPush(path)` / `gitPull(path)` | Push the checked out branch, or bring in what its upstream has. Answered the same way, then with `gitSynced(path)`: a `diff` alone may answer something asked while git was still at work. |
 | `writeCommitMessage(path)` / `cancelCommitMessage(path)` | Have an agent write the message for what is staged, or stop it. Answered with `commitMessage(path, message)`, whose message is nil when it was stopped or failed. |
 | `setCommitWriter(settings)` | Which agent writes commit messages, on which model, with which prompt. |

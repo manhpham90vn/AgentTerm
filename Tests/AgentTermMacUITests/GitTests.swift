@@ -39,6 +39,38 @@ final class GitTests: MacUITestCase {
         wait("the push to reach the remote", timeout: 20) { self.git("log", "-1", "--format=%s", "main", in: self.remote) == "docs: a guide, and a second line" }
     }
 
+    /// GIT-22 (#39): a change is discarded from its row, and all of them
+    /// from the list's header, each after being asked; a new file goes to
+    /// the Trash.
+    func testDiscardingAChangeAndAllOfThem() throws {
+        let trash = home.appendingPathComponent(".Trash-of-the-tests")
+        app.press(.button("Git"))
+        app.wait(for: .button("Stage notes.txt"))
+
+        // Asked first, and Cancel leaves everything as it was.
+        app.press(.button("Discard changes to notes.txt"))
+        app.wait(for: .containing("Discard the changes to notes.txt?"))
+        shot("asked")
+        app.press(.button("Cancel"))
+        app.waitGone(.containing("Discard the changes to notes.txt?"))
+        XCTAssertTrue(git("status", "--porcelain", in: project).contains("notes.txt"))
+
+        app.press(.button("Discard changes to notes.txt"))
+        app.press(.button("Discard Changes"))
+        app.waitGone(.button("Stage notes.txt"))
+        XCTAssertFalse(git("status", "--porcelain", in: project).contains("notes.txt"), "back to what was committed")
+        XCTAssertTrue(app.exists(.button("Stage new.txt")), "the others are left")
+
+        // Every change: the new files are in the Trash, not gone.
+        app.press(.button("Discard all"))
+        app.wait(for: .containing("Discard all 2 changes?"))
+        app.press(.button("Discard All"))
+        app.wait(for: .containing("No uncommitted changes."))
+        XCTAssertEqual(git("status", "--porcelain", in: project), "")
+        XCTAssertEqual(try String(contentsOf: trash.appendingPathComponent("new.txt"), encoding: .utf8), "a file that is new\n")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: trash.appendingPathComponent("docs/guide.md").path), "its folder went whole")
+    }
+
     func testARefusedCommitSaysWhatGitSaid() throws {
         // A hook that refuses every commit, as a project's own checks may.
         let hook = project.appendingPathComponent(".git/hooks/pre-commit")
