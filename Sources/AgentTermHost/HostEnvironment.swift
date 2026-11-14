@@ -93,6 +93,28 @@ public enum HostEnvironment {
         if LoginShellPath.underTests { env["GIT_CONFIG_GLOBAL"] = "/dev/null" }
     }
 
+    /// What every command the host starts by itself is given, a session's
+    /// program not among them: the gits it starts take no lock they can do
+    /// without (`GIT_OPTIONAL_LOCKS=0`). Asked for a status, git otherwise
+    /// rewrites the index when a file's time changed, holding `index.lock`
+    /// meanwhile; the host asks whenever a file changes, and a commit made
+    /// in a terminal in that moment, by the user or by an agent, failed
+    /// with "Unable to create index.lock". A git that has to write, a
+    /// commit or an add the user asked for, still takes its lock.
+    ///
+    /// `git diff` rewrites the index too, whatever that says, when it finds
+    /// files whose time changed and whose text did not: it is told not to
+    /// (`diff.autoRefreshIndex=false`), after whatever settings the
+    /// environment already carries.
+    static func forTheHostsOwnCommands(_ env: inout [String: String]) {
+        keepGitOffTheirConfiguration(&env)
+        env["GIT_OPTIONAL_LOCKS"] = "0"
+        let count = env["GIT_CONFIG_COUNT"].flatMap(Int.init) ?? 0
+        env["GIT_CONFIG_KEY_\(count)"] = "diff.autoRefreshIndex"
+        env["GIT_CONFIG_VALUE_\(count)"] = "false"
+        env["GIT_CONFIG_COUNT"] = String(count + 1)
+    }
+
     /// What a command the host runs for the user through their login shell
     /// is given, as a worktree's setup command or `gh`: the host's own
     /// environment, and under XCTest none of the user's startup files, as
@@ -244,7 +266,7 @@ enum Subprocess {
         posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSID))
         let argv: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map { strdup($0) } + [nil]
         var given = environment ?? ProcessInfo.processInfo.environment
-        HostEnvironment.keepGitOffTheirConfiguration(&given)
+        HostEnvironment.forTheHostsOwnCommands(&given)
         let envp: [UnsafeMutablePointer<CChar>?] = given.map { strdup("\($0.key)=\($0.value)") } + [nil]
         defer {
             argv.forEach { free($0) }
@@ -278,7 +300,7 @@ enum Subprocess {
         posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
         let argv: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map { strdup($0) } + [nil]
         var given = environment ?? ProcessInfo.processInfo.environment
-        HostEnvironment.keepGitOffTheirConfiguration(&given)
+        HostEnvironment.forTheHostsOwnCommands(&given)
         let envp: [UnsafeMutablePointer<CChar>?] = given.map { strdup("\($0.key)=\($0.value)") } + [nil]
         defer {
             argv.forEach { free($0) }
@@ -342,7 +364,7 @@ enum Subprocess {
 
         let argv: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map { strdup($0) } + [nil]
         var given = environment ?? ProcessInfo.processInfo.environment
-        HostEnvironment.keepGitOffTheirConfiguration(&given)
+        HostEnvironment.forTheHostsOwnCommands(&given)
         let envp: [UnsafeMutablePointer<CChar>?] = given.map { strdup("\($0.key)=\($0.value)") } + [nil]
         defer {
             argv.forEach { free($0) }

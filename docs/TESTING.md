@@ -352,6 +352,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | GIT-63 | A host, a device that asked for a folder's changes | A file is staged, then committed, inside its submodule; the folder is asked for again each time | Answered with the submodule's changes; the folder says what is so now, at once: staged there, then the commit moved | H |
 | GIT-64 | The Mac app, a project with a submodule and a file changed in it | The Git tab; the file; Stage; Commit… with a message; Stage the submodule | Listed under the submodule and not as the folder's; its diff, said to be in the submodule; staged there; committed there, the list gone and the submodule's row in the folder's changes with its two commits; staged | M |
 | GIT-65 | The Mac app and the iPhone | Discard inside a submodule and of its commit; Commit… with no branch checked out; hunks of a file in a submodule; on the iPhone the submodule's lists and its commit box | Asked first, in the submodule's words for its commit; warned; applied in the submodule; the same as the Mac, committed from the box under the submodule | hand |
+| GIT-66 | A repository whose index is out of date: a file's time changed and its text did not; another file really changed | The host reads the changes, makes the diff, lists the branches and the files, notes how the folder is for a run and what changed since | Nothing is written into the repository: its index is byte for byte as it was, and no `index.lock` is left. Before the fix each of the first, the diff and the last two rewrote it | H |
 
 ### History
 

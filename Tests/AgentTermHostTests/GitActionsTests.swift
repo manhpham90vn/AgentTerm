@@ -33,6 +33,46 @@ final class GitActionsTests: XCTestCase {
     private func entries(_ files: [FileDiff]) -> [String] { files.map { "\($0.marker) \($0.path)" } }
     private var snapshot: DiffSnapshot { GitDiff.snapshot(directory: root.path) }
 
+    /// GIT-66: looking at a folder's changes writes nothing into its
+    /// repository. git, asked for the status, rewrites the index when a
+    /// file's time changed, and holds `index.lock` while it does: a commit
+    /// the user, an agent or a test makes in that moment fails with "Unable
+    /// to create index.lock". The host looks every time a file changes, so
+    /// it must not take that lock.
+    func testLookingAtTheChangesWritesNothingIntoTheRepository() throws {
+        try write("a.txt", "one\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        let index = root.appendingPathComponent(".git/index")
+        // The file's time is another, its text the same: the index is out of date.
+        let later = Date().addingTimeInterval(120)
+        try FileManager.default.setAttributes([.modificationDate: later], ofItemAtPath: root.appendingPathComponent("a.txt").path)
+        let before = try Data(contentsOf: index)
+
+        XCTAssertEqual(snapshot.files, [], "the text is the same: nothing is changed")
+        XCTAssertEqual(try Data(contentsOf: index), before, "the index was rewritten by reading the changes")
+        // With another file really changed, the diff is made too: it finds
+        // the first one's time changed and its text not.
+        try write("b.txt", "tracked\n")
+        git("add", "b.txt")
+        git("commit", "-q", "-m", "b")
+        try FileManager.default.setAttributes([.modificationDate: later], ofItemAtPath: root.appendingPathComponent("a.txt").path)
+        try write("b.txt", "tracked, and changed\n")
+        let withB = try Data(contentsOf: index)
+        XCTAssertEqual(entries(snapshot.files), ["M b.txt"])
+        XCTAssertEqual(try Data(contentsOf: index), withB, "the index was rewritten by making the diff")
+        _ = GitActions.branches(in: root.path)
+        XCTAssertEqual(try Data(contentsOf: index), withB, "the index was rewritten by listing the branches")
+        _ = FileSearch.files(in: root.path)
+        XCTAssertEqual(try Data(contentsOf: index), withB, "the index was rewritten by listing the files")
+        let start = try XCTUnwrap(GitActions.baseline(in: root.path))
+        XCTAssertEqual(try Data(contentsOf: index), withB, "the index was rewritten by noting how the folder is")
+        XCTAssertEqual(GitActions.changes(since: start, in: root.path), "Nothing changed")
+
+        XCTAssertEqual(try Data(contentsOf: index), withB, "the index was rewritten by a look")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: root.appendingPathComponent(".git/index.lock").path))
+    }
+
     /// GIT-53 (#40): a hunk of a file's change, or lines of one, is staged,
     /// unstaged and discarded, and the rest of the change is left as it was.
     func testStagingUnstagingAndDiscardingPartsOfAFile() throws {

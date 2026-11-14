@@ -1285,6 +1285,21 @@ toolbar, before the agents, switches between this Mac and the paired ones.
 - `AGENTTERM_STATE_DIR` moves the host's token, folder list and log to another
   folder, which keeps test hosts away from the real pairing.
 
+## The host's own gits
+
+Every command the host starts by itself (`Subprocess`), not a session's
+program, is given `GIT_OPTIONAL_LOCKS=0` and `diff.autoRefreshIndex=false`
+(`HostEnvironment.forTheHostsOwnCommands`). Asked for a status or a diff,
+git otherwise rewrites the index when a file's time changed, holding
+`index.lock` while it does; the host asks whenever a file changes, so a
+`git commit` typed in a terminal at that moment, by the user or by an
+agent, failed now and then with "Unable to create index.lock" (it made a
+Mac UI test fail once in three runs). A git that has to write, because
+the user asked for a commit or an add, still takes its lock. How a folder
+was when a scheduled run started is written as a tree through a copy of
+the index (`GIT_INDEX_FILE`), not with `git stash create`, which rewrote
+the index too.
+
 ## Reporting
 
 `AgentTermTelemetry` holds the choices and the gate; `AgentTermFirebase`

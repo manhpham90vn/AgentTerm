@@ -73,8 +73,8 @@ extension GitActions {
         /// The commit that was checked out; nil with none yet.
         public var head: String?
         /// The files as they were, changes that were not committed
-        /// included, as a commit nothing points to; the head when nothing
-        /// was changed.
+        /// included, as a tree nothing points to; the head when that could
+        /// not be written.
         public var tree: String?
         /// The files nobody tracked.
         public var untracked: Set<String>
@@ -85,12 +85,27 @@ extension GitActions {
         guard let untracked = list(["ls-files", "--others", "--exclude-standard", "-z"], in: directory) else { return nil }
         let head = head(in: directory)
         var tree = head
-        // Writes the state of the files as a commit, and changes nothing:
-        // no branch, no stash, not the index. It says nothing when the
-        // files are as the head has them.
-        if head != nil, let made = Subprocess.run("/usr/bin/git", ["-C", directory, "stash", "create"], timeout: 60), made.status == 0 {
-            let hash = String(decoding: made.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !hash.isEmpty { tree = hash }
+        // The files as they are, written as a tree through an index of this
+        // look's own: a copy of the repository's, brought up to date and
+        // thrown away. The repository's own index is not written, nor is
+        // its lock taken; no branch, no stash.
+        if head != nil,
+            let found = Subprocess.run("/usr/bin/git", ["-C", directory, "rev-parse", "--path-format=absolute", "--git-path", "index"], timeout: 15),
+            found.status == 0
+        {
+            let index = String(decoding: found.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            let copy = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-index-\(UUID().uuidString)")
+            defer { try? FileManager.default.removeItem(at: copy) }
+            if (try? FileManager.default.copyItem(atPath: index, toPath: copy.path)) != nil {
+                var environment = ProcessInfo.processInfo.environment
+                environment["GIT_INDEX_FILE"] = copy.path
+                if let added = Subprocess.run("/usr/bin/git", ["-C", directory, "add", "--update"], timeout: 60, environment: environment), added.status == 0,
+                    let written = Subprocess.run("/usr/bin/git", ["-C", directory, "write-tree"], timeout: 60, environment: environment), written.status == 0
+                {
+                    let hash = String(decoding: written.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !hash.isEmpty { tree = hash }
+                }
+            }
         }
         return Baseline(head: head, tree: tree, untracked: Set(untracked))
     }
