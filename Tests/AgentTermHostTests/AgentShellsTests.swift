@@ -742,6 +742,86 @@ final class AgentShellsHostTests: XCTestCase {
         XCTAssertEqual(agent.answers(to: waiting).count, 1, "answered once")
     }
 
+    /// MCP-26 (#63): a shell an agent opened connects on a device as fast
+    /// as a session the user started, with the lines above its screen,
+    /// also while its agent waits on it, reading its screen all the time.
+    func testAnAgentsShellConnectsAsFastAsAnyOtherAlsoWhileItsAgentWaits() throws {
+        let mac = Client(port: port, token: token)
+        waitUntil("connected") { !mac.messages.isEmpty }
+        let (agent, _) = try startAgent("claude", title: "busy", client: mac)
+        // Three thousand lines, and then a program that waits: in a shell
+        // the agent opened, and in a session the user started.
+        let lines = "sh -c 'seq 1 3000; exec cat'"
+        XCTAssertFalse(agent.tool("open_shell", ["command": lines, "title": "the agent's"], in: self).failed)
+        mac.connection.send(.create(CreateRequest(command: lines, cwd: root.path, title: "the user's")))
+        waitUntil("both") { mac.sessions.contains { $0.title == "the agent's" } && mac.sessions.contains { $0.title == "the user's" } }
+        let shell = try XCTUnwrap(mac.sessions.first { $0.title == "the agent's" }?.id)
+        let own = try XCTUnwrap(mac.sessions.first { $0.title == "the user's" }?.id)
+        XCTAssertTrue(agent.tool("wait", ["session": shell, "until_text": "3000", "timeout_seconds": 20], in: self).text.contains("3000"))
+        XCTAssertTrue(agent.tool("read_screen", ["session": own], in: self).failed, "the user's session is not the agent's to read")
+        Thread.sleep(forTimeInterval: 0.5)
+
+        /// A device that opens a session with 500 of the lines above its
+        /// screen: how long until its screen is there, and what came.
+        func open(_ session: SessionID) -> (took: TimeInterval, text: String) {
+            let device = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "phone")
+            var welcomed = false
+            var text = ""
+            device.onMessage = { if case .welcome = $0 { welcomed = true } }
+            device.onOutput = { id, data in if id == session { text += String(decoding: data, as: UTF8.self) } }
+            device.connect()
+            waitUntil("the device connected") { welcomed }
+            let started = Date()
+            device.send(.attach(session: session, size: TermSize(cols: 60, rows: 30), history: 500))
+            waitUntil("its screen", timeout: 30) { text.contains("3000") }
+            let took = Date().timeIntervalSince(started)
+            device.close()
+            return (took, text)
+        }
+
+        let users = open(own)
+        let idle = open(shell)
+        // Its agent waits on it, for a text that does not come.
+        let waiting = try agent.begin("wait", ["session": shell, "until_text": "never there", "timeout_seconds": 60])
+        Thread.sleep(forTimeInterval: 0.6)
+        let busy = open(shell)
+        XCTAssertEqual(agent.answers(to: waiting), [], "still waiting")
+        try agent.notify("notifications/cancelled", ["requestId": waiting])
+        print(
+            String(
+                format: "MEASURE a session of 3,000 lines opened on a device: the user's %.0f ms, an agent's shell %.0f ms, the same while its agent waits %.0f ms", users.took * 1000,
+                idle.took * 1000, busy.took * 1000))
+
+        // The lines above the screen came with it, each time.
+        for opened in [users, idle, busy] {
+            XCTAssertTrue(opened.text.contains("2600"), "a line above the screen is missing")
+            XCTAssertFalse(opened.text.contains("\r\n2400\r\n"), "more than the 500 lines asked for")
+        }
+        // As fast as any other: not slower than the user's by more than half a second.
+        XCTAssertLessThan(idle.took, users.took + 0.5)
+        XCTAssertLessThan(busy.took, users.took + 0.5)
+
+        // A program that clears the lines above its screen itself, as zsh's
+        // `clear` does (ESC [ 3 J): those lines are gone on the host, for
+        // every device, and that is the program's doing.
+        let cleared = "sh -c 'seq 1 3000; printf \"\\033[3J\\033[H\\033[2J\"; echo after-the-clear; exec cat'"
+        XCTAssertFalse(agent.tool("open_shell", ["command": cleared, "title": "cleared"], in: self).failed)
+        waitUntil("the cleared shell") { mac.sessions.contains { $0.title == "cleared" } }
+        let wiped = try XCTUnwrap(mac.sessions.first { $0.title == "cleared" }?.id)
+        XCTAssertTrue(agent.tool("wait", ["session": wiped, "until_text": "after-the-clear", "timeout_seconds": 20], in: self).text.contains("after-the-clear"))
+        let device = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "phone")
+        var text = ""
+        var welcomed = false
+        device.onMessage = { if case .welcome = $0 { welcomed = true } }
+        device.onOutput = { id, data in if id == wiped { text += String(decoding: data, as: UTF8.self) } }
+        device.connect()
+        waitUntil("connected") { welcomed }
+        device.send(.attach(session: wiped, size: TermSize(cols: 60, rows: 30), history: 500))
+        waitUntil("its screen") { text.contains("after-the-clear") }
+        XCTAssertFalse(text.contains("2600"), "the program cleared them: they are not kept behind its back")
+        device.close()
+    }
+
     func testAnAgentOpensAShellOfItsOwnThatOtherAgentsOnlyRead() throws {
         let mac = Client(port: port, token: token)
         waitUntil("connected") { !mac.messages.isEmpty }
