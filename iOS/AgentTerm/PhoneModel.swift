@@ -1066,6 +1066,8 @@ final class PhoneModel: ObservableObject {
         case .worktrees(let folder, let list, let setup):
             worktrees[folder] = list
             worktreeSetups[folder] = setup
+        case .worktreeSetups(let setups):
+            worktreeSetups = setups
         case .worktreeFinished(_, _, let said):
             worktreeSaid = said
         case .keepAwake(let on):
@@ -1331,6 +1333,23 @@ final class PhoneModel: ObservableObject {
         openCreatedSession = true
         Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
         connection?.send(.create(CreateRequest(command: agent?.id, cwd: folder, title: agent?.name, size: startingSize)))
+    }
+
+    /// Starts an agent, or a shell, in a new worktree of a folder (#34), on
+    /// a branch of its own cut from `from`, and opens it.
+    func launchInWorktree(_ agent: AgentInfo?, in folder: String, branch: String?, from: String?) {
+        guard status == .connected else { return }
+        openCreatedSession = true
+        Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
+        connection?.send(.createInWorktree(request: CreateRequest(command: agent?.id, cwd: folder, title: agent?.name, size: startingSize), branch: branch, from: from))
+    }
+
+    /// The folder a worktree belongs to: the one AgentTerm made it for, or
+    /// the one whose list of worktrees names it. Nil for a folder that is
+    /// no worktree of another.
+    func project(ofWorktree path: String) -> String? {
+        if let project = WorktreePath.project(of: path) { return project }
+        return worktrees.first { $0.value.contains { !$0.isMain && $0.path == path } }?.key
     }
 
     /// Attaches to a session so its terminal can be shown.

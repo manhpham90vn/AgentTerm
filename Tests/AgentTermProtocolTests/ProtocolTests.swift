@@ -355,6 +355,31 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(WorktreeInfo(path: "/gone", branch: "old", isMain: false, missing: true).menuDetail, "missing: its folder is gone")
     }
 
+    /// WT-18 (#43): what a worktree's chip says, and what is asked before
+    /// one is thrown away, the same on both apps.
+    func testWhatAWorktreesChipSays() {
+        let own = WorktreeInfo(path: "/code/project", branch: "main", isMain: true, changed: 1)
+        XCTAssertEqual(own.chipTitle, "main")
+        XCTAssertEqual(own.chipCounts, "1")
+        XCTAssertEqual(own.chipHelp, "The folder itself, 1 file changed")
+        let busy = WorktreeInfo(path: "/code/project/.agentterm/worktrees/x", branch: "x", isMain: false, ahead: 2, changed: 3, inUse: true, isAgentTerm: true)
+        XCTAssertEqual(busy.chipCounts, "3 ↑2")
+        XCTAssertEqual(busy.chipHelp, "A worktree, 3 files changed, 2 commits ahead, a session runs in it")
+        XCTAssertEqual(WorktreeInfo(path: "/code/review", branch: nil, isMain: false).chipTitle, "review", "a detached HEAD is named by its folder")
+        XCTAssertEqual(WorktreeInfo(path: "/code/clean", branch: "clean", isMain: false).chipCounts, "")
+        let gone = WorktreeInfo(path: "/gone", branch: "old", isMain: false, changed: 4, missing: true)
+        XCTAssertEqual(gone.chipCounts, "missing")
+        XCTAssertEqual(gone.chipHelp, "A worktree, its folder is gone")
+
+        XCTAssertEqual(WorktreeWords.discardTitle(busy), "Throw away x?")
+        XCTAssertEqual(WorktreeWords.discardMessage(busy), "It has work that is not merged: 2 ahead, 3 changed, in use. It will be lost.")
+        XCTAssertEqual(WorktreeWords.discardMessage(WorktreeInfo(path: "/code/clean", branch: "clean", isMain: false)), "Its folder is removed.")
+        XCTAssertEqual(WorktreeWords.merge(into: own), "Merge into main")
+        XCTAssertEqual(WorktreeWords.merge(into: nil), "Merge into the folder's branch")
+        XCTAssertEqual(WorktreeWords.setupSaid("npm install"), "Its setup command runs first: npm install")
+        XCTAssertEqual(WorktreeWords.setupSaid(""), "No setup command is run in it.")
+    }
+
     /// NOTE-13 (#62): what an agent said at the end is told by its end,
     /// and all of it is there for where it can be read.
     func testAllOfWhatAnAgentSaidCanBeHad() {

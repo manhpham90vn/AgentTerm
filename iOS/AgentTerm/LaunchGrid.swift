@@ -23,6 +23,7 @@ struct LaunchGrid: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Start \(agent.name)\(labelSuffix)")
+                .contextMenu { worktreeItem(Launch(agent: agent)) }
             }
             Button {
                 model.launch(nil, in: folder)
@@ -31,6 +32,7 @@ struct LaunchGrid: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Start Shell\(labelSuffix)")
+            .contextMenu { worktreeItem(Launch(agent: nil)) }
             if showsSSH, !model.sshHosts.isEmpty {
                 // The hosts of the Mac's SSH configuration: the session
                 // runs on the Mac, which is the way to that host.
@@ -50,6 +52,28 @@ struct LaunchGrid: View {
         }
         .disabled(model.status != .connected)
         .opacity(model.status == .connected ? 1 : 0.45)
+        .sheet(item: $inWorktree) { launch in
+            if let folder { NewWorktreeSheet(project: folder, main: model.worktrees[folder]?.first, start: launch.agent, shell: launch.agent == nil) }
+        }
+    }
+
+    /// What is started in a new worktree, asked about in a sheet.
+    private struct Launch: Identifiable {
+        let agent: AgentInfo?
+        var id: String { agent?.id ?? "" }
+    }
+    @State private var inWorktree: Launch?
+
+    /// "Start in a New Worktree…", in the menu of what can be started in a
+    /// folder (#34). Not where there is no folder to make one of.
+    @ViewBuilder private func worktreeItem(_ launch: Launch) -> some View {
+        if folder != nil {
+            Button {
+                inWorktree = launch
+            } label: {
+                Label("Start \(launch.agent?.name ?? "a Shell") in a New Worktree…", systemImage: "arrow.triangle.branch")
+            }
+        }
     }
 
     /// The first word of an agent's name, which is what fits under a

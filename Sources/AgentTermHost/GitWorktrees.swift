@@ -81,10 +81,10 @@ public enum GitWorktrees {
     }
 
     /// Makes a worktree of the folder's repository on a new branch cut from
-    /// its current commit, and returns where to start the session: the same
-    /// folder inside it. Nothing is brought along: no uncommitted change,
-    /// nothing git ignores.
-    public static func create(in folder: String, agent: String, branch wanted: String?) throws -> (directory: String, branch: String) {
+    /// its current commit, or from the branch named (#43), and returns
+    /// where to start the session: the same folder inside it. Nothing is
+    /// brought along: no uncommitted change, nothing git ignores.
+    public static func create(in folder: String, agent: String, branch wanted: String?, from: String? = nil) throws -> (directory: String, branch: String) {
         let top = try top(of: folder).asWritten
         // A worktree made from one made by AgentTerm goes next to the others.
         let projectTop = WorktreePath.project(of: top) ?? top
@@ -95,7 +95,13 @@ public enum GitWorktrees {
         let root = URL(fileURLWithPath: projectTop).appendingPathComponent(WorktreePath.folder).appendingPathComponent(branch).path
         Handoff.keepOutOfGit(projectTop)
         try FileManager.default.createDirectory(atPath: (root as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
-        _ = try run(["worktree", "add", "-b", branch, root, "HEAD"], in: folder, timeout: 120)
+        let start = (from?.trimmingCharacters(in: .whitespaces)).flatMap { $0.isEmpty ? nil : $0 } ?? "HEAD"
+        guard start == "HEAD" || git(["rev-parse", "--verify", "--quiet", "--end-of-options", start + "^{commit}"], in: folder).status == 0 else {
+            throw Failure(text: "There is no branch “\(start)” to start from.")
+        }
+        // The new branch follows nothing: cut from a branch of a remote, it
+        // would otherwise be set to push to that one.
+        _ = try run(["worktree", "add", "--no-track", "-b", branch, root, start], in: folder, timeout: 120)
         // The folder's place in its own checkout, in the new one: from the
         // top of the worktree it is in, not from the project's.
         let inside = folder.hasPrefix(top + "/") ? String(folder.dropFirst(top.count)) : ""
@@ -114,8 +120,12 @@ public enum GitWorktrees {
             guard worktree.changed == 0 else { throw Failure(text: "It has changes that are not committed: commit or discard them first.") }
             let merged = git(["merge", "--no-edit", branch], in: folder, timeout: 120, environment: GitActions.actionEnvironment)
             guard merged.status == 0 else {
-                _ = git(["merge", "--abort"], in: folder)
-                throw Failure(text: "The merge ran into conflicts and was undone. Merge in a terminal to resolve them.\n\n\(merged.output)")
+                // Stopped on conflicts: left to be resolved in the folder
+                // and continued, or aborted (#42). The worktree stays.
+                guard GitActions.operation(in: folder) == .merge else { throw Failure(text: merged.output) }
+                throw Failure(
+                    text: GitActions.stoppedOnConflicts("Merging \(branch)", as: "merge", said: merged.output)
+                        + "\n\nThe worktree is kept: once the merge is finished, throw it away from its menu.")
             }
             _ = try run(["worktree", "remove", path], in: folder)
             if deleteBranch { _ = try run(["branch", "-d", branch], in: folder) }

@@ -6,10 +6,40 @@ import SwiftUI
 /// files: what the Mac shows in its side panel.
 struct FolderScreen: View {
     @EnvironmentObject private var model: PhoneModel
+    /// The folder, or a worktree of one: the screen is then that folder's,
+    /// with the worktree on show (#34).
     let folder: String
     @AppStorage("folderTab") private var tab = "git"
+    /// The worktree picked from the chips; nil for what the screen was opened with.
+    @State private var picked: String?
+
+    /// The folder's worktrees are asked for under its own path; a worktree
+    /// made elsewhere is only known for one once they were listed.
+    private var key: String { model.project(ofWorktree: folder) ?? folder }
+    private var worktrees: [WorktreeInfo] { model.worktrees[key] ?? model.worktrees[folder] ?? [] }
+    /// The repository's own folder: where a worktree is merged into.
+    private var project: String { worktrees.first { $0.isMain }?.path ?? key }
+    /// What Git, History and Files are about.
+    private var shownPath: String {
+        let wanted = picked ?? folder
+        // One that was thrown away meanwhile is not shown any more.
+        return worktrees.isEmpty || worktrees.contains { $0.path == wanted && !$0.missing } ? wanted : project
+    }
 
     var body: some View {
+        content(of: shownPath)
+            .onAppear { model.listWorktrees(key) }
+            // What the chips say of the one on show is then stale.
+            .onChange(of: model.diffs[shownPath]?.files.count) { old, _ in if old != nil { model.listWorktrees(project) } }
+            .onChange(of: project) { _, project in if model.worktrees[project] == nil { model.listWorktrees(project) } }
+            .alert("Worktree", isPresented: Binding(get: { model.worktreeSaid != nil }, set: { if !$0 { model.worktreeSaid = nil } })) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(model.worktreeSaid ?? "")
+            }
+    }
+
+    private func content(of folder: String) -> some View {
         VStack(spacing: 0) {
             Picker("Show", selection: $tab) {
                 Text("Git").tag("git")
@@ -19,6 +49,7 @@ struct FolderScreen: View {
             .pickerStyle(.segmented)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
+            WorktreeChips(project: project, list: worktrees, picked: $picked, shownPath: folder)
             if tab == "history" {
                 HistoryList(folder: folder)
             } else if tab == "files" {
@@ -28,16 +59,16 @@ struct FolderScreen: View {
             }
         }
         .background(Palette.canvas.ignoresSafeArea())
-        .navigationTitle((folder as NSString).lastPathComponent)
+        .navigationTitle((project as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
         .keyboardDismissButton()
         .toolbar {
-            if model.folders.contains(folder) {
+            if model.folders.contains(project) {
                 ToolbarItem(placement: .topBarTrailing) {
                     Menu {
                         Button(role: .destructive) {
-                            model.removeFolder(folder)
+                            model.removeFolder(project)
                             if !model.path.isEmpty { model.path.removeLast() }
                         } label: {
                             Label("Remove from List", systemImage: "minus.circle")

@@ -668,22 +668,33 @@ What cannot be known:
 
 ## Worktrees
 
-`GitWorktrees` (host): `create(in:agent:branch:)` runs `git worktree add -b
-<branch> <top>/.agentterm/worktrees/<branch> HEAD` after listing
+`GitWorktrees` (host): `create(in:agent:branch:from:)` runs `git worktree
+add --no-track -b <branch> <top>/.agentterm/worktrees/<branch> <from or
+HEAD>` after listing
 `.agentterm/` in the exclude file, and returns the folder's place inside
 the new worktree. Paths are written the way the folder is: git gives real
 paths, and a folder opened through a symbolic link (`/var`, `/tmp`) would
 otherwise not be found in them. `list(folder:inUse:)` reads `git worktree
 list --porcelain`: each worktree's branch, commits ahead of the folder's
 branch, files changed, and whether its folder is gone; a session counts
-for the deepest worktree it is in. `finish` merges (`--no-edit`, undone on
-a conflict, refused with uncommitted changes) and removes, pushes and runs
+for the deepest worktree it is in. `finish` merges (`--no-edit`, left to
+be resolved on a conflict as #42 has it, refused with uncommitted changes) and removes, pushes and runs
 `gh pr create --fill` through the login shell, or removes with `--force`.
 
-Messages: `createInWorktree(request:branch:)`, `listWorktrees(folder:)`,
+`GitDiff.snapshot` leaves out of the untracked files a folder whose `.git`
+is a file pointing into the repository's own `worktrees` folder: a
+worktree made inside the repository (#43), which `git status` lists as a
+folder nobody tracks. Both apps ask for the list again when the changes on
+show change in number, in branch or in what they are ahead by, so that a
+chip's counts are not stale.
+
+Messages: `createInWorktree(request:branch:from:)`, `listWorktrees(folder:)`,
 `finishWorktree(folder:path:finish:deleteBranch:)` (refused while a session
 runs in it), `setWorktreeSetup(folder:command:)`, kept in `worktrees.json`;
-answered with `worktrees(folder:list:setup:)` and `worktreeFinished`.
+answered with `worktrees(folder:list:setup:)` and `worktreeFinished`;
+`worktreeSetups` carries every folder's setup command to a client that
+connects and whenever one changes (#34). What both apps say of a worktree
+is in `WorktreeWords` and `WorktreeInfo.chipTitle/chipCounts/chipHelp`.
 `SessionInfo.branch` names a session's worktree branch; `WorktreePath`
 tells which folder a session in `.agentterm/worktrees` belongs to. The setup
 command runs through the login shell in the new worktree before the

@@ -101,17 +101,33 @@ itself.
   setup command (`npm install`) that is run in each new worktree first.
 - The session is listed under its folder with its branch, on the Mac and
   the iPhone. Selecting it, the Git, History and Files tabs show its
-  worktree.
-- **The worktrees of the folder that is open** (#33): when a folder's
-  repository has more than its own, a bar at the top of the side panel
-  lists them all, whoever made them, with their branch, how far ahead they
-  are, what is changed, and those whose folder is gone, as missing; ones
-  outside the folder show their path. Picking one shows its changes,
-  history and files, with the same actions as the folder.
-- **Bringing the work back**: for a worktree, Finish merges its branch into
-  the folder's and removes it (with its branch, for one AgentTerm made),
-  opens a pull request with `gh`, or throws it away, which asks first and
-  says what is not merged. A worktree a session runs in is not removed.
+  worktree; on the iPhone its menu has "Changes, History and Files",
+  which opens its folder on that worktree.
+- **The worktree bar** (#33, #43): at the top of the side panel of a
+  folder that is a repository, its worktrees as chips. The folder's own
+  branch is always the first; each worktree follows, whoever made it
+  (AgentTerm, Claude Code in `.claude/worktrees`, `git worktree add`), with
+  how many files are changed in it, how many commits it is ahead by, a dot
+  when a session runs in it, and "missing" when its folder is gone. A
+  click makes Git, History and Files about that one, with the same actions
+  as the folder; the first chip goes back to the folder. A worktree that
+  lies inside the repository is not listed among the folder's changes as
+  a file nobody tracks.
+- **+** makes a new one: the branch's name, suggested and editable, the
+  branch it starts from (the folder's own unless another, local or of a
+  remote, is picked; the new branch follows none), and what is started
+  there, an agent or a shell. The sheet says which setup command will run,
+  and when the folder has changes that the worktree will not have.
+- **⋯** is for the worktree on show: merge its branch into the folder's
+  and remove it (with its branch, for one AgentTerm made), open a pull
+  request with `gh`, or throw it away, which asks first and says what is
+  not merged; and the folder's setup command. A merge that conflicts is
+  left in the folder to be resolved and continued, or aborted, as any
+  other, and the worktree is kept. A worktree a session runs in is not
+  removed.
+- The iPhone has all of it, the same, in a folder's screen (#34); "Start
+  … in a New Worktree…" in the menu of a launch button opens the same
+  sheet.
 - `.agentterm/` is listed in the repository's own exclude file and is not
   shown in the Files tab.
 

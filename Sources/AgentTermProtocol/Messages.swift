@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 8
+public let agenttermProtocolVersion = 9
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -385,9 +385,10 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case saveSchedule(Schedule)
     case removeSchedule(id: String)
     /// Starts a session in a new git worktree of `request.cwd`, on a branch
-    /// of its own cut from the folder's current commit (#23). Nil `branch`
-    /// names it after the agent.
-    case createInWorktree(request: CreateRequest, branch: String?)
+    /// of its own (#23) cut from the branch `from` names, or from the
+    /// folder's current commit when it is nil (#43). Nil `branch` names it
+    /// after the agent.
+    case createInWorktree(request: CreateRequest, branch: String?, from: String?)
     /// The worktrees of a folder's repository (#23, #33). Answered with `worktrees`.
     case listWorktrees(folder: String)
     /// Merges, opens a pull request for, or throws away a worktree, and
@@ -526,6 +527,10 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// What became of `finishWorktree`: a pull request's address, or that
     /// it was merged or removed.
     case worktreeFinished(folder: String, path: String, said: String)
+    /// The setup command of every folder that has one (#34): sent when a
+    /// client connects and whenever one changes, so that it is known
+    /// before a folder's worktrees were ever asked for.
+    case worktreeSetups([String: String])
 }
 
 public enum MessageCoding {

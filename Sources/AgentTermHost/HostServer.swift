@@ -850,13 +850,13 @@ public final class HostServer {
 
     /// Makes the worktree off the queue the sessions use, runs the folder's
     /// setup command in it, then starts the session there.
-    private func createInWorktree(_ request: CreateRequest, branch: String?, for client: Client) {
+    private func createInWorktree(_ request: CreateRequest, branch: String?, from: String?, for client: Client) {
         let folder = request.cwd ?? configuration.home
         let agent = SessionSummaries.agent(forCommand: request.command) ?? "shell"
         let setup = worktreeSetups[WorktreePath.project(of: folder) ?? folder]
         let id = client.id
         workQueue.async { [weak self] in
-            let made = Result { try GitWorktrees.create(in: folder, agent: agent, branch: branch) }
+            let made = Result { try GitWorktrees.create(in: folder, agent: agent, branch: branch, from: from) }
             var problem: String?
             if case .success(let worktree) = made, let setup {
                 // As in a terminal, with the user's PATH.
@@ -1253,8 +1253,8 @@ public final class HostServer {
             used(by: client)
         case .saveSchedule(let schedule):
             if let problem = save(schedule) { send(.error(problem), to: client) }
-        case .createInWorktree(let request, let branch):
-            createInWorktree(request, branch: branch, for: client)
+        case .createInWorktree(let request, let branch, let from):
+            createInWorktree(request, branch: branch, from: from, for: client)
         case .listWorktrees(let folder):
             sendWorktrees(of: folder, to: [client.id])
         case .finishWorktree(let folder, let path, let finish, let deleteBranch):
@@ -1263,6 +1263,7 @@ public final class HostServer {
             let command = command?.trimmingCharacters(in: .whitespacesAndNewlines)
             worktreeSetups[folder] = command?.isEmpty == false ? command : nil
             saveWorktreeSetups()
+            for other in clients.values where other.authenticated { send(.worktreeSetups(worktreeSetups), to: other) }
             sendWorktrees(of: folder, to: clients.values.filter(\.authenticated).map(\.id))
         case .removeSchedule(let id):
             schedules.removeAll { $0.id == id }
@@ -1950,6 +1951,7 @@ public final class HostServer {
         noticesSeen = noticesSeen.filter { sessions[$0.key]?.info.state == $0.value }
         for (id, state) in noticesSeen { send(.noticeSeen(session: id, state: state), to: client) }
         send(.schedules(schedules), to: client)
+        send(.worktreeSetups(worktreeSetups), to: client)
         send(.commitWriter(commitWriter), to: client)
         if let item = configuration.loginItem { send(.startAtLogin(item.isOn), to: client) }
         // Without any yet, the client is sent none and hands over its own.

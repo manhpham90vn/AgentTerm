@@ -40,7 +40,10 @@ public enum GitDiff {
         }
         // The working tree against the index is what is not staged.
         if read.unstaged { files += parse(run(["diff"] + options, in: directory) ?? "") }
-        for path in read.untracked.prefix(maxUntrackedFiles) { files.append(newFile(path, in: directory)) }
+        // A worktree of this repository that lies inside it, as Claude Code's
+        // `.claude/worktrees` do, is not a file nobody tracks (#43).
+        let untracked = read.untracked.filter { !($0.hasSuffix("/") && isOwnWorktree($0, in: directory, gitDirectory: gitDirectory)) }
+        for path in untracked.prefix(maxUntrackedFiles) { files.append(newFile(path, in: directory)) }
         // The files a merge, a rebase or a pick stopped on (#42): first, and
         // each with the file as it is now, markers and all, against both sides.
         if !read.conflicts.isEmpty {
@@ -65,6 +68,20 @@ public enum GitDiff {
             }
         }
         return snapshot
+    }
+
+    /// Whether a folder git lists as untracked is a worktree of the same
+    /// repository: its `.git` is then a file that points into the
+    /// repository's own `worktrees` folder.
+    static func isOwnWorktree(_ path: String, in directory: String, gitDirectory: String) -> Bool {
+        let file = URL(fileURLWithPath: directory).appendingPathComponent(path).appendingPathComponent(".git").path
+        guard let said = try? String(contentsOfFile: file, encoding: .utf8), said.hasPrefix("gitdir: ") else { return false }
+        func real(_ path: String) -> String { URL(fileURLWithPath: path).resolvingSymlinksInPath().path }
+        // From inside a worktree the repository's own folder is two up.
+        var common = URL(fileURLWithPath: gitDirectory)
+        if common.deletingLastPathComponent().lastPathComponent == "worktrees" { common = common.deletingLastPathComponent().deletingLastPathComponent() }
+        let pointed = real(String(said.dropFirst("gitdir: ".count)).trimmingCharacters(in: .whitespacesAndNewlines))
+        return pointed.hasPrefix(real(common.path) + "/worktrees/")
     }
 
     /// What git is stopped in the middle of, by what it keeps in its own

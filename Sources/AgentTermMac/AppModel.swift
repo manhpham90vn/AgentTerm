@@ -1269,6 +1269,8 @@ final class AppModel: ObservableObject {
         case .worktrees(let folder, let list, let setup):
             worktrees[folder] = list
             worktreeSetups[folder] = setup
+        case .worktreeSetups(let setups):
+            worktreeSetups = setups
         case .worktreeFinished(_, _, let said):
             worktreeSaid = said
         case .macInUse(let inUse):
@@ -1490,7 +1492,9 @@ final class AppModel: ObservableObject {
     /// Starts an agent, or a shell, in a new git worktree of the selected
     /// folder, on a branch of its own (#23). With changes not committed, the
     /// user is asked first: the agent there will not see them.
-    func launchInWorktree(_ agent: AgentInfo?, confirmed: Bool = false) {
+    /// From the worktree bar's sheet (#43) the branch is named and the
+    /// branch it starts from picked; the sheet says what the question asks.
+    func launchInWorktree(_ agent: AgentInfo?, branch: String? = nil, from: String? = nil, confirmed: Bool = false) {
         guard status == .connected, let folder = selectedFolder else { return }
         if !confirmed, let diff, !(diff.staged.isEmpty && diff.unstaged.isEmpty) {
             worktreeQuestion = agent.map { .agent($0) } ?? .shell
@@ -1499,7 +1503,7 @@ final class AppModel: ObservableObject {
         lastError = nil
         selectNextAttached = true
         Telemetry.shared.record(.sessionStart(agent: .init(id: agent?.id)))
-        connection?.send(.createInWorktree(request: CreateRequest(command: agent?.id, cwd: folder, title: agent?.name, size: startingSize), branch: nil))
+        connection?.send(.createInWorktree(request: CreateRequest(command: agent?.id, cwd: folder, title: agent?.name, size: startingSize), branch: branch, from: from))
     }
 
     enum WorktreeLaunch: Equatable {
@@ -1898,6 +1902,11 @@ final class AppModel: ObservableObject {
 
     /// Shows a folder's changes as they are now, and has the diff's tab follow.
     private func apply(_ snapshot: DiffSnapshot, to directory: String) {
+        // What the worktrees' chips say of this one is then stale (#43):
+        // how many files are changed, its branch, what it is ahead by.
+        if let diff, let selectedFolder, diff.files.count != snapshot.files.count || diff.branch != snapshot.branch || diff.ahead != snapshot.ahead {
+            listWorktrees(selectedFolder)
+        }
         if diff != snapshot { diff = snapshot }
         // A commit's diff is what it is: only a change not yet committed follows the list.
         guard let tab = diffTab, tab.folder == directory, tab.commit == nil else { return }
