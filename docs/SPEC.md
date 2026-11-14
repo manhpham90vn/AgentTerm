@@ -522,6 +522,21 @@ panel.
     git's message. A pull that stops on a conflict is undone, and says so.
     The count of commits to pull is as of the last time the remote was
     asked; pulling asks.
+    **Commits**, beside **Changes** under the buttons, lists the history of
+    the branch that is checked out, or of another branch picked above the
+    list: newest first, each with its author and how long ago, the branches
+    and tags that point at it, and a graph at the left with a line for
+    every line of history, so that where branches part and meet shows.
+    Older commits are read a page at a time as the list is scrolled. A
+    commit that is pressed opens out to its hash, with a button that copies
+    it, the rest of its message, and the files it changed; a file shows
+    what the commit did to it in the middle pane, in the same views as a
+    change, under the commit's hash and with nothing to stage. A merge
+    shows what it brought in. From a commit's menu it is **reverted**, by
+    a new commit that takes its change back, or **cherry-picked** onto the
+    checked out branch; each is asked first, and one that runs into
+    conflicts is undone and says so. A merge commit is not reverted or
+    picked here: git has to be told which side to keep.
     Not part of it: staging part of a file, amending,
     choosing a remote, and resolving a pull
     that conflicts.
@@ -767,7 +782,10 @@ button at the top right of Sessions goes back to the list of Macs.
   Mac; the branch's name lists the branches, to switch to one or make one
   (renaming and deleting a branch are on the Mac); Fetch, pulling by merge
   or by rebase and Force Push… are there as on the Mac, and the remotes
-  are asked by themselves while the folder's changes are on screen, the branch pushed and pulled, and the commit message written by an
+  are asked by themselves while the folder's changes are on screen;
+  **Commits** opens the history of the checked out branch, with the graph,
+  and a commit shows its message, its hash to copy, and its files with
+  their diffs (reverting and picking a commit are on the Mac), the branch pushed and pulled, and the commit message written by an
   agent. **History**: the conversations each agent had in the
   folder only, as on the Mac; every conversation is in the History tab. **Files**: see
   Files above.

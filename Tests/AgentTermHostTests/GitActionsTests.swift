@@ -33,6 +33,118 @@ final class GitActionsTests: XCTestCase {
     private func entries(_ files: [FileDiff]) -> [String] { files.map { "\($0.marker) \($0.path)" } }
     private var snapshot: DiffSnapshot { GitDiff.snapshot(directory: root.path) }
 
+    /// GIT-37 (#36): the commits of a branch, newest first and a page at a
+    /// time, with their parents and what points at them; and what one of
+    /// them changed.
+    func testTheHistoryOfABranchAndWhatACommitChanged() throws {
+        try write("a.txt", "one\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        for number in 1...5 {
+            try write("a.txt", "one\n" + String(repeating: "more\n", count: number))
+            git("commit", "-q", "-am", "change \(number)")
+        }
+        git("tag", "v1")
+        git("switch", "-q", "-c", "side", "HEAD~2")
+        try write("b.txt", "side\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "on the side\n\nWith a body\nof two lines.")
+        git("switch", "-q", "main")
+        git("merge", "-q", "--no-ff", "--no-edit", "side")
+
+        // Commits made in the same second are in no order git promises:
+        // they are looked up by what they say.
+        let all = GitActions.log(in: root.path, limit: 50).commits
+        XCTAssertEqual(all.first?.subject, "Merge branch 'side'", "the newest first")
+        XCTAssertEqual(all.last?.subject, "init")
+        XCTAssertEqual(Set(all.map(\.subject)), ["Merge branch 'side'", "on the side", "change 5", "change 4", "change 3", "change 2", "change 1", "init"])
+        func commit(_ subject: String) throws -> CommitInfo { try XCTUnwrap(all.first { $0.subject == subject }) }
+        let merge = try commit("Merge branch 'side'")
+        XCTAssertTrue(merge.isMerge)
+        XCTAssertEqual(merge.parents, [try commit("change 5").hash, try commit("on the side").hash])
+        XCTAssertEqual(merge.refs, ["main"])
+        XCTAssertEqual(try commit("on the side").refs, ["side"])
+        XCTAssertEqual(try commit("change 5").refs, ["tag: v1"])
+        XCTAssertEqual(try commit("on the side").author, "Test")
+        XCTAssertEqual(try commit("on the side").parents, [try commit("change 3").hash])
+        XCTAssertEqual(merge.short.count, 7)
+
+        // A page at a time: the same commits, in the same order, and whether there are more.
+        let first = GitActions.log(in: root.path, limit: 3)
+        XCTAssertEqual(first.commits, Array(all.prefix(3)))
+        XCTAssertTrue(first.more)
+        let rest = GitActions.log(in: root.path, skip: 3, limit: 50)
+        XCTAssertEqual(rest.commits, Array(all.dropFirst(3)))
+        XCTAssertFalse(rest.more)
+        // Another branch's, by name.
+        XCTAssertEqual(GitActions.log(in: root.path, branch: "side", limit: 2).commits.map(\.subject), ["on the side", "change 3"])
+        XCTAssertEqual(GitActions.log(in: root.path, branch: "no-such", limit: 2).commits, [])
+
+        // What a commit changed, with the rest of its message.
+        let side = try XCTUnwrap(GitActions.show(try commit("on the side").hash, in: root.path))
+        XCTAssertEqual(side.commit, try commit("on the side"))
+        XCTAssertEqual(side.body, "With a body\nof two lines.")
+        XCTAssertEqual(side.files.map { "\($0.marker) \($0.path)" }, ["A b.txt"])
+        XCTAssertTrue(side.files[0].patch.contains("+side"))
+        XCTAssertFalse(side.diffsLeftOut)
+        // A merge: what it brought in, against its first parent.
+        let brought = try XCTUnwrap(GitActions.show(merge.hash, in: root.path))
+        XCTAssertEqual(brought.files.map(\.path), ["b.txt"])
+        XCTAssertNil(GitActions.show("0000000000000000000000000000000000000000", in: root.path))
+    }
+
+    /// GIT-38 (#36): a commit is reverted, and one of another branch is
+    /// picked onto this one; one that conflicts is undone and says so; a
+    /// merge is said to be for a terminal.
+    func testRevertingAndCherryPickingACommit() throws {
+        try write("a.txt", "one\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        try write("a.txt", "one\ntwo\n")
+        git("commit", "-q", "-am", "add two")
+        let addTwo = git("rev-parse", "HEAD")
+
+        XCTAssertNil(GitActions.revert(addTwo, in: root.path))
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8), "one\n")
+        XCTAssertTrue(git("log", "-1", "--format=%s").hasPrefix("Revert \"add two\""))
+
+        git("switch", "-q", "-c", "side")
+        try write("c.txt", "from the side\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "a file on the side")
+        let onSide = git("rev-parse", "HEAD")
+        try write("a.txt", "side's line\n")
+        git("commit", "-q", "-am", "side rewrites a")
+        let rewrites = git("rev-parse", "HEAD")
+        git("switch", "-q", "main")
+
+        XCTAssertNil(GitActions.cherryPick(onSide, in: root.path))
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("c.txt"), encoding: .utf8), "from the side\n")
+        XCTAssertEqual(git("log", "-1", "--format=%s"), "a file on the side")
+
+        // One that conflicts is undone: nothing is left half done.
+        try write("a.txt", "main's line\n")
+        git("commit", "-q", "-am", "main rewrites a")
+        let head = git("rev-parse", "HEAD")
+        let refused = try XCTUnwrap(GitActions.cherryPick(rewrites, in: root.path))
+        XCTAssertTrue(refused.hasPrefix("Picking \(rewrites.prefix(7)) ran into conflicts and was undone."), refused)
+        XCTAssertEqual(git("rev-parse", "HEAD"), head)
+        XCTAssertEqual(git("status", "--porcelain"), "")
+        XCTAssertFalse(GitActions.marks("CHERRY_PICK_HEAD", in: root.path))
+        // So is a revert: the line "add two" added is no longer what is there.
+        let undone = try XCTUnwrap(GitActions.revert(addTwo, in: root.path))
+        XCTAssertTrue(undone.hasPrefix("Reverting \(addTwo.prefix(7)) ran into conflicts and was undone."), undone)
+        XCTAssertEqual(git("rev-parse", "HEAD"), head)
+        XCTAssertEqual(git("status", "--porcelain"), "")
+        XCTAssertFalse(GitActions.marks("REVERT_HEAD", in: root.path))
+
+        // A merge needs to be told which side to keep.
+        git("merge", "-q", "--no-ff", "--no-edit", "-X", "ours", "side")
+        let merge = git("rev-parse", "HEAD")
+        XCTAssertTrue(try XCTUnwrap(GitActions.revert(merge, in: root.path)).contains("is a merge of 2 lines of history"))
+        XCTAssertEqual(GitActions.revert("0000000000000000000000000000000000000000", in: root.path), "There is no commit 0000000000000000000000000000000000000000 here.")
+    }
+
     /// GIT-24 (#35): the branches of a repository, its own and a remote's,
     /// with which is checked out, what each follows and how far it is.
     func testTheBranchesOfARepository() throws {

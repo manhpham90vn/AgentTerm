@@ -21,6 +21,12 @@ enum Route: Hashable {
     case file(folder: String, file: String, staged: Bool)
     /// A file on the Mac, to read or edit.
     case document(path: String)
+    /// The commits of a folder's checked out branch (#36).
+    case commits(folder: String)
+    /// One commit: its message and the files it changed.
+    case commit(folder: String, hash: String)
+    /// What a commit did to one file.
+    case commitFile(folder: String, hash: String, file: String)
 }
 
 /// A file on the Mac as it was last read.
@@ -336,6 +342,38 @@ final class PhoneModel: ObservableObject {
     @Published var tab = "sessions"
     /// A folder's uncommitted changes, by folder. Without the diffs.
     @Published private(set) var diffs: [String: DiffSnapshot] = [:]
+    // MARK: Commits (#36)
+
+    /// The commits of each folder's checked out branch, newest first, as
+    /// far as they were asked for, and whether there are older ones.
+    @Published private(set) var commits: [String: [CommitInfo]] = [:]
+    @Published private(set) var commitsMore: [String: Bool] = [:]
+    /// The folders a page of commits is on its way for.
+    @Published private(set) var loadingCommits: Set<String> = []
+    /// What each commit that was opened changed, by its hash.
+    @Published private(set) var commitDetails: [String: CommitDetails] = [:]
+    static let commitsPage = 50
+
+    /// Reads the first page of a folder's commits again.
+    func loadCommits(_ folder: String) {
+        commits[folder] = []
+        commitsMore[folder] = false
+        loadingCommits.insert(folder)
+        connection?.send(.gitLog(path: folder, branch: nil, skip: 0, limit: Self.commitsPage))
+    }
+
+    /// Reads the next page, when there is one and none is on its way.
+    func loadMoreCommits(_ folder: String) {
+        guard commitsMore[folder] == true, !loadingCommits.contains(folder) else { return }
+        loadingCommits.insert(folder)
+        connection?.send(.gitLog(path: folder, branch: nil, skip: commits[folder]?.count ?? 0, limit: Self.commitsPage))
+    }
+
+    func loadCommit(_ hash: String, in folder: String) {
+        guard commitDetails[hash] == nil else { return }
+        connection?.send(.gitShow(path: folder, hash: hash))
+    }
+
     /// The branches of each folder that was asked about (#35), its own first.
     @Published private(set) var branches: [String: [BranchInfo]] = [:]
 
@@ -1113,6 +1151,16 @@ final class PhoneModel: ObservableObject {
             }
         case .gitBranches(let folder, let list):
             branches[folder] = list
+        case .gitLog(let folder, nil, let skip, let list, let more):
+            loadingCommits.remove(folder)
+            // A page that does not follow what is listed is another list's.
+            guard skip == (commits[folder]?.count ?? 0) else { break }
+            commits[folder, default: []] += list
+            commitsMore[folder] = more
+        case .gitLog:
+            break
+        case .gitShow(let folder, let hash, let details):
+            commitDetails[hash] = details ?? commits[folder]?.first { $0.hash == hash }.map { CommitDetails(commit: $0) }
         case .diff(let folder, let snapshot):
             diffs[folder] = snapshot
             if committing == folder {

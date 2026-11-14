@@ -8,6 +8,9 @@ struct DiffView: View {
     /// "list" shows every file in one flat list, "tree" groups them by folder.
     @AppStorage("diffViewMode") private var viewMode = "list"
     @State private var collapsedFolders: Set<String> = []
+    /// What the tab lists: "changes", what is not committed yet, or
+    /// "commits", the history (#36).
+    @AppStorage("gitPane") private var pane = "changes"
 
     private var isTree: Bool { viewMode == "tree" }
 
@@ -24,9 +27,27 @@ struct DiffView: View {
                 SyncBar(diff: diff)
                 Theme.hairline.frame(height: 1)
             }
-            content
+            if model.diff?.isRepository == true {
+                Picker("Show", selection: $pane) {
+                    Text("Changes").tag("changes")
+                    Text("Commits").tag("commits")
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .controlSize(.small)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .accessibilityIdentifier("git-pane")
+                Theme.hairline.frame(height: 1)
+            }
+            if pane == "commits", model.diff?.isRepository == true {
+                CommitsList()
+            } else {
+                content
+            }
         }
         .background(Theme.panel)
+        .modifier(GitQuestions())
     }
 
     private var header: some View {
@@ -151,6 +172,49 @@ struct DiffView: View {
                     .onTapGesture { model.openDiff(file) }
             }
         }
+    }
+}
+
+/// What is asked before git does something that is not undone by a click:
+/// a commit that reverts or picks another (#36), and a forced push (#37).
+private struct GitQuestions: ViewModifier {
+    @EnvironmentObject private var model: AppModel
+
+    private func question(_ pending: AppModel.PendingCommitAction) -> CommitActionQuestion {
+        CommitActionQuestion(pending.action, commit: pending.commit, onto: model.diff?.branch)
+    }
+
+    private var askingCommit: Binding<Bool> {
+        Binding(get: { model.pendingCommitAction != nil }, set: { if !$0 { model.pendingCommitAction = nil } })
+    }
+
+    private var askingForce: Binding<Bool> {
+        Binding(get: { model.pendingForcePush != nil }, set: { if !$0 { model.pendingForcePush = nil } })
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .confirmationDialog(
+                model.pendingCommitAction.map { question($0).title } ?? "", isPresented: askingCommit, titleVisibility: .visible,
+                presenting: model.pendingCommitAction
+            ) { pending in
+                Button(question(pending).confirm) { model.commitActionConfirmed(pending) }
+                Button("Cancel", role: .cancel) {}
+            } message: { pending in
+                Text(question(pending).message)
+            }
+            .confirmationDialog(
+                model.pendingForcePush?.question.title ?? "", isPresented: askingForce, titleVisibility: .visible, presenting: model.pendingForcePush
+            ) { push in
+                if push.question.isNeeded {
+                    Button(push.question.confirm, role: .destructive) { model.forcePushConfirmed(push) }
+                } else {
+                    Button("Push") { model.push() }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { push in
+                Text(push.question.message)
+            }
     }
 }
 
@@ -556,7 +620,8 @@ struct DiffDocumentView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
-                Text(file.isStaged ? "STAGED" : "CHANGES")
+                // Of a commit, its hash; else which of the two lists it is in.
+                Text(model.diffTabCommit.map { $0.short } ?? (file.isStaged ? "STAGED" : "CHANGES"))
                     .font(.system(size: 9.5, weight: .bold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
@@ -579,10 +644,12 @@ struct DiffDocumentView: View {
                 .foregroundStyle(.secondary)
                 .help(isSplit ? "Show the diff in one panel" : "Show before and after side by side")
                 .accessibilityLabel(isSplit ? "Show in one panel" : "Show side by side")
-                Button(file.isStaged ? "Unstage" : "Stage") {
-                    if file.isStaged { model.unstage([file]) } else { model.stage([file]) }
+                if model.diffTabCommit == nil {
+                    Button(file.isStaged ? "Unstage" : "Stage") {
+                        if file.isStaged { model.unstage([file]) } else { model.stage([file]) }
+                    }
+                    .controlSize(.small)
                 }
-                .controlSize(.small)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 6)

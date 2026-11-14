@@ -73,6 +73,9 @@ final class AppModel: ObservableObject {
     struct OpenDiff: Equatable {
         let folder: String
         var file: FileDiff
+        /// The commit whose change to the file this is (#36); nil for a
+        /// change that is not committed yet, which the Git tab's list follows.
+        var commit: CommitInfo?
     }
     /// Whether the diff's tab is the one in front.
     @Published private(set) var diffInFront = false
@@ -1383,6 +1386,10 @@ final class AppModel: ObservableObject {
             accountUsage = Dictionary(list.map { ($0.agent, $0) }, uniquingKeysWith: { $1 })
         case .gitBranches(let path, let list):
             if path == panelFolder { branches = list }
+        case .gitLog(let path, let branch, let skip, let list, let more):
+            if path == panelFolder, branch == commitsBranch { took(list, skip: skip, more: more) }
+        case .gitShow(_, let hash, let details):
+            if let details { commitDetails[hash] = details } else if let commit = commits.first(where: { $0.hash == hash }) { commitDetails[hash] = CommitDetails(commit: commit) }
         case .gitFetched(let path, let problem, let automatic):
             fetched(path, problem: problem, automatic: automatic)
         case .gitForcePushPreview(let path, let upstream, let loses):
@@ -1408,7 +1415,7 @@ final class AppModel: ObservableObject {
             apply(snapshot, to: path)
         case .diffFile(let path, let file):
             loadingDiffFile = false
-            guard isRemote, let tab = diffTab, tab.folder == path else { break }
+            guard isRemote, let tab = diffTab, tab.folder == path, tab.commit == nil else { break }
             if let file {
                 if file.path == tab.file.path, file.isStaged == tab.file.isStaged, file != tab.file { diffTab = OpenDiff(folder: path, file: file) }
             } else {
@@ -1881,7 +1888,8 @@ final class AppModel: ObservableObject {
     /// Shows a folder's changes as they are now, and has the diff's tab follow.
     private func apply(_ snapshot: DiffSnapshot, to directory: String) {
         if diff != snapshot { diff = snapshot }
-        guard let tab = diffTab, tab.folder == directory else { return }
+        // A commit's diff is what it is: only a change not yet committed follows the list.
+        guard let tab = diffTab, tab.folder == directory, tab.commit == nil else { return }
         // The tab shows the change as it is now. A file that was
         // just staged or unstaged is followed into its new list.
         guard var now = snapshot.files.first(where: { $0.id == tab.file.id }) ?? snapshot.files.first(where: { $0.path == tab.file.path }) else {
@@ -1903,7 +1911,10 @@ final class AppModel: ObservableObject {
 
     /// The change to mark in the Git tab's list: the diff tab's, while the
     /// list is of its folder.
-    var diffTabFileInList: FileDiff? { diffTab?.folder == panelFolder ? diffTab?.file : nil }
+    var diffTabFileInList: FileDiff? { diffTab?.folder == panelFolder && diffTab?.commit == nil ? diffTab?.file : nil }
+
+    /// The commit the diff tab's change belongs to, when it is a commit's.
+    var diffTabCommit: CommitInfo? { diffTab?.commit }
 
     /// Shows a change's diff in the middle pane. There is one diff tab; it
     /// follows the change picked in the Git tab.
@@ -1950,6 +1961,113 @@ final class AppModel: ObservableObject {
             return
         }
         git { GitActions.unstage(paths, in: $0) }
+    }
+
+    // MARK: Commits (#36)
+
+    /// The commits of the folder the side panel shows, newest first, as
+    /// far as they were asked for, and whether there are older ones.
+    @Published private(set) var commits: [CommitInfo] = []
+    @Published private(set) var commitsMore = false
+    @Published private(set) var loadingCommits = false
+    /// The branch whose commits are listed; nil for the checked out one.
+    @Published var commitsBranch: String? { didSet { if commitsBranch != oldValue { loadCommits() } } }
+    /// What each commit that was opened changed, by its hash.
+    @Published private(set) var commitDetails: [String: CommitDetails] = [:]
+    /// The commit that is opened out in the list, with its message and files.
+    @Published var openedCommit: String?
+    /// A revert or a cherry-pick that waits to be confirmed.
+    @Published var pendingCommitAction: PendingCommitAction?
+
+    struct PendingCommitAction: Identifiable {
+        let action: CommitActionQuestion.Action
+        let commit: CommitInfo
+        var id: String { action.rawValue + commit.hash }
+    }
+
+    /// How many commits are asked for at a time.
+    static let commitsPage = 50
+    /// Tells an answer for the list as it is from one for a list since replaced.
+    private var commitsGeneration = 0
+
+    /// Reads the first page of commits again.
+    func loadCommits() {
+        commitsGeneration += 1
+        commits = []
+        commitsMore = false
+        loadCommits(skip: 0)
+    }
+
+    /// Reads the next page, when there is one and none is on its way.
+    func loadMoreCommits() {
+        guard commitsMore, !loadingCommits else { return }
+        loadCommits(skip: commits.count)
+    }
+
+    private func loadCommits(skip: Int) {
+        guard let directory = panelFolder else { return }
+        loadingCommits = true
+        let branch = commitsBranch
+        if isRemote {
+            connection?.send(.gitLog(path: directory, branch: branch, skip: skip, limit: Self.commitsPage))
+            return
+        }
+        let generation = commitsGeneration
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let found = GitActions.log(in: directory, branch: branch, skip: skip, limit: Self.commitsPage)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, generation == self.commitsGeneration, self.panelFolder == directory else { return }
+                self.took(found.commits, skip: skip, more: found.more)
+            }
+        }
+    }
+
+    private func took(_ list: [CommitInfo], skip: Int, more: Bool) {
+        loadingCommits = false
+        // A page that no longer follows what is listed is another list's.
+        guard skip == commits.count else { return }
+        commits += list
+        commitsMore = more
+    }
+
+    /// Opens a commit out in the list, or closes it, and reads what it changed.
+    func toggle(_ commit: CommitInfo) {
+        if openedCommit == commit.hash {
+            openedCommit = nil
+            return
+        }
+        openedCommit = commit.hash
+        guard commitDetails[commit.hash] == nil, let directory = panelFolder else { return }
+        if isRemote {
+            connection?.send(.gitShow(path: directory, hash: commit.hash))
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let details = GitActions.show(commit.hash, in: directory)
+            DispatchQueue.main.async { self?.commitDetails[commit.hash] = details ?? CommitDetails(commit: commit) }
+        }
+    }
+
+    /// Shows what a commit did to one file, in the diff's tab.
+    func openDiff(_ file: FileDiff, of commit: CommitInfo) {
+        guard let folder = panelFolder else { return }
+        diffTab = OpenDiff(folder: folder, file: file, commit: commit)
+        loadingDiffFile = false
+        showDiffTab()
+    }
+
+    func copyHash(of commit: CommitInfo) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(commit.hash, forType: .string)
+    }
+
+    func commitActionConfirmed(_ pending: PendingCommitAction) {
+        guard let directory = panelFolder else { return }
+        let hash = pending.commit.hash
+        let revert = pending.action == .revert
+        sync(revert ? "revert" : "cherry-pick", in: directory, revert ? .gitRevert(path: directory, hash: hash) : .gitCherryPick(path: directory, hash: hash)) {
+            revert ? GitActions.revert(hash, in: $0) : GitActions.cherryPick(hash, in: $0)
+        }
     }
 
     // MARK: Branches (#35)

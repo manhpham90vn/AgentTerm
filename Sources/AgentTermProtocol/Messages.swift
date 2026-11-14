@@ -222,6 +222,18 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Deletes a branch of the repository's own. One with commits that are
     /// on no other branch is deleted only with `force`.
     case gitDeleteBranch(path: String, name: String, force: Bool)
+    /// Asks for commits of a branch (#36), the checked out one when nil,
+    /// newest first: `limit` of them after the first `skip`. Answered with
+    /// `gitLog`.
+    case gitLog(path: String, branch: String?, skip: Int, limit: Int)
+    /// Asks for a commit's message and what it changed. Answered with `gitShow`.
+    case gitShow(path: String, hash: String)
+    /// Makes a commit on the checked out branch that takes back what the
+    /// named one changed. One that conflicts is undone, and says so.
+    case gitRevert(path: String, hash: String)
+    /// Makes the change of the named commit on the checked out branch too.
+    /// One that conflicts is undone, and says so.
+    case gitCherryPick(path: String, hash: String)
     /// Commits what is staged.
     case gitCommit(path: String, message: String)
     /// Pushes the branch that is checked out to its upstream. A branch
@@ -380,6 +392,12 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// The paired devices. Sent to the host's own machine when they change.
     case devices([DeviceInfo])
     case diff(path: String, snapshot: DiffSnapshot)
+    /// Commits of `branch` (the checked out one when nil), newest first,
+    /// after the first `skip`; `more` when there are older ones still.
+    case gitLog(path: String, branch: String?, skip: Int, commits: [CommitInfo], more: Bool)
+    /// A commit's message and what it changed. `details` nil when there is
+    /// no such commit.
+    case gitShow(path: String, hash: String, details: CommitDetails?)
     /// A fetch is over: `problem` is what git said when it failed. One that
     /// was `automatic` is not to interrupt anyone with it.
     case gitFetched(path: String, problem: String?, automatic: Bool)

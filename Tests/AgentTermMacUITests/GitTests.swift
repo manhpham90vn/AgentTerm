@@ -137,6 +137,36 @@ final class GitTests: MacUITestCase {
         XCTAssertFalse(git("log", "--format=%s", "main", in: remote).contains("theirs: a file"))
     }
 
+    /// GIT-41 (#36): Commits lists the history; a commit opens out to its
+    /// message and its files, a file shows its diff under the commit's
+    /// hash, and the commit is reverted after being asked.
+    func testTheCommitsOfABranchAndRevertingOne() throws {
+        git("add", "notes.txt", in: project)
+        git("commit", "-q", "-m", "docs: more notes\n\nWith a body of its own.", in: project)
+        let hash = git("rev-parse", "--short=7", "HEAD", in: project)
+
+        app.press(.button("Git"))
+        app.press(.button("Commits"))
+        app.wait(for: .id("commit-\(hash)"))
+        XCTAssertTrue(app.exists(.containing("init")), "the commit before it is listed too")
+
+        app.press(.id("commit-\(hash)"))
+        app.wait(for: .containing("With a body of its own."))
+        app.press(.id("commit-file-notes.txt"))
+        // The diff's tab is of the commit: its hash, and nothing to stage.
+        app.wait(for: .text(hash))
+        XCTAssertFalse(app.exists(.button("Stage")))
+        shot("commit")
+
+        app.perform("Revert", on: .id("commit-\(hash)"))
+        app.wait(for: .containing("Revert \(hash)?"))
+        app.press(.button("Revert"))
+        wait("the revert to be committed", timeout: 20) { self.git("log", "-1", "--format=%s", in: self.project).hasPrefix("Revert") }
+        // The list follows: the new commit is first.
+        app.wait(for: .containing("Revert \"docs: more notes\""), timeout: 15)
+        XCTAssertEqual(read("notes.txt"), "first line\n")
+    }
+
     func testARefusedCommitSaysWhatGitSaid() throws {
         // A hook that refuses every commit, as a project's own checks may.
         let hook = project.appendingPathComponent(".git/hooks/pre-commit")

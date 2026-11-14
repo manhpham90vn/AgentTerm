@@ -410,7 +410,7 @@ public enum GitActions {
     /// Runs `action`, and once more when git could not find a program and the
     /// user's shell has another `PATH` since it was asked: the program may
     /// have been installed in between.
-    private static func findingTools(_ action: () -> String?) -> String? {
+    static func findingTools(_ action: () -> String?) -> String? {
         guard let problem = action() else { return nil }
         guard missesAProgram(problem), shellPath.refresh() else { return problem }
         return action()
@@ -478,8 +478,17 @@ public enum GitActions {
         return name.isEmpty ? nil : name
     }
 
+    /// Whether git's own folder of the repository holds `marker`: the file
+    /// git keeps while a revert (`REVERT_HEAD`) or a cherry-pick
+    /// (`CHERRY_PICK_HEAD`) is under way.
+    static func marks(_ marker: String, in directory: String) -> Bool {
+        guard let result = Subprocess.run(git, ["-C", directory, "rev-parse", "--absolute-git-dir"], timeout: 15), result.status == 0 else { return false }
+        let gitDirectory = String(decoding: result.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return FileManager.default.fileExists(atPath: (gitDirectory as NSString).appendingPathComponent(marker))
+    }
+
     /// "merge" or "rebase" when one is under way in the repository.
-    private static func unfinished(in directory: String) -> String? {
+    static func unfinished(in directory: String) -> String? {
         guard let result = Subprocess.run(git, ["-C", directory, "rev-parse", "--absolute-git-dir"], timeout: 15), result.status == 0 else { return nil }
         let gitDirectory = URL(fileURLWithPath: String(decoding: result.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
         func exists(_ name: String) -> Bool { FileManager.default.fileExists(atPath: gitDirectory.appendingPathComponent(name).path) }

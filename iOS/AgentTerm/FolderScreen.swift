@@ -89,6 +89,7 @@ private struct ChangesList: View {
                                 .padding(.horizontal, 6)
                                 .padding(.bottom, 10)
                             if diff.canPush || diff.canPull { SyncBar(folder: folder, diff: diff) }
+                            CommitsLink(folder: folder).padding(.top, 12)
                             Text("No uncommitted changes.")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
@@ -120,6 +121,7 @@ private struct ChangesList: View {
                                 SyncBar(folder: folder, diff: diff)
                                     .padding(.bottom, 12)
                             }
+                            CommitsLink(folder: folder).padding(.bottom, 12)
                             CommitBox(folder: folder, stagedCount: diff.staged.count)
                                 .padding(.bottom, 14)
                             if !diff.staged.isEmpty {
@@ -995,6 +997,218 @@ struct ConversationSheet: View {
             }
             .onChange(of: model.handoffPlan) { _, plan in
                 if let plan { prompt = plan.prompt }
+            }
+        }
+    }
+}
+
+/// The way from a folder's changes to its history (#36).
+private struct CommitsLink: View {
+    let folder: String
+
+    var body: some View {
+        NavigationLink(value: Route.commits(folder: folder)) {
+            HStack(spacing: 10) {
+                Image(systemName: "clock.arrow.circlepath").foregroundStyle(Palette.tint)
+                Text("Commits").font(.subheadline.weight(.medium))
+                Spacer()
+                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 12)
+            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.panel))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("git-commits")
+    }
+}
+
+/// The commits of the checked out branch, newest first, with the graph of
+/// where branches part and meet, as on the Mac. Reverting and picking a
+/// commit are on the Mac.
+struct CommitsScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+    let folder: String
+
+    private static let ago: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    var body: some View {
+        let commits = model.commits[folder] ?? []
+        let rows = CommitGraphRow.rows(for: commits)
+        let lanes = min(rows.map(\.width).max() ?? 1, CommitGraphLines.mostLanes)
+        return Group {
+            if commits.isEmpty && model.loadingCommits.contains(folder) {
+                LoadingView("Reading the history…")
+            } else if commits.isEmpty {
+                Placeholder(text: "No commits yet.")
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(commits.enumerated()), id: \.element.hash) { index, commit in
+                            NavigationLink(value: Route.commit(folder: folder, hash: commit.hash)) {
+                                HStack(alignment: .top, spacing: 8) {
+                                    CommitGraphLines(row: rows[index], lanes: lanes)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(commit.subject).font(.subheadline).lineLimit(2).multilineTextAlignment(.leading)
+                                        Text(commit.author + " · " + Self.ago.localizedString(for: commit.date, relativeTo: Date()))
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        if !commit.refs.isEmpty {
+                                            Text(commit.refs.joined(separator: " · ")).font(.caption2.weight(.medium)).foregroundStyle(Palette.tint).lineLimit(1)
+                                        }
+                                    }
+                                    .padding(.vertical, 8)
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 14)
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("commit-" + commit.short)
+                        }
+                        if model.commitsMore[folder] == true {
+                            // Coming into view, it asks for the next page.
+                            ProgressView().frame(maxWidth: .infinity).padding(.vertical, 12).onAppear { model.loadMoreCommits(folder) }
+                        }
+                    }
+                }
+                .refreshable { model.loadCommits(folder) }
+            }
+        }
+        .background(Palette.canvas.ignoresSafeArea())
+        .navigationTitle("Commits")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { model.loadCommits(folder) }
+    }
+}
+
+/// The lines and the dot of one row of the graph, as the Mac draws them.
+private struct CommitGraphLines: View {
+    let row: CommitGraphRow
+    let lanes: Int
+    static let dotY: CGFloat = 18
+    static let laneWidth: CGFloat = 12
+    static let mostLanes = 5
+    static let colors: [Color] = [.blue, .orange, .green, .purple, .pink, .teal]
+
+    private func x(_ lane: Int) -> CGFloat { (CGFloat(min(lane, Self.mostLanes - 1)) + 0.5) * Self.laneWidth }
+
+    var body: some View {
+        Canvas { context, size in
+            func line(from: CGPoint, to: CGPoint, lane: Int) {
+                var path = Path()
+                path.move(to: from)
+                if from.x == to.x {
+                    path.addLine(to: to)
+                } else {
+                    let middle = (from.y + to.y) / 2
+                    path.addCurve(to: to, control1: CGPoint(x: from.x, y: middle), control2: CGPoint(x: to.x, y: middle))
+                }
+                context.stroke(path, with: .color(Self.colors[lane % Self.colors.count].opacity(0.85)), lineWidth: 1.5)
+            }
+            for (from, to) in row.incoming { line(from: CGPoint(x: x(from), y: 0), to: CGPoint(x: x(to), y: Self.dotY), lane: from) }
+            for (to, from) in row.outgoing { line(from: CGPoint(x: x(from), y: Self.dotY), to: CGPoint(x: x(to), y: size.height), lane: to) }
+            let dot = CGRect(x: x(row.lane) - 4, y: Self.dotY - 4, width: 8, height: 8)
+            context.fill(Path(ellipseIn: dot), with: .color(Self.colors[row.lane % Self.colors.count]))
+        }
+        .frame(width: CGFloat(lanes) * Self.laneWidth)
+        .accessibilityHidden(true)
+    }
+}
+
+/// One commit: its message, and the files it changed.
+struct CommitScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+    let folder: String
+    let hash: String
+
+    var body: some View {
+        Group {
+            if let details = model.commitDetails[hash] {
+                List {
+                    Section {
+                        Text(details.commit.subject).font(.headline)
+                        if !details.body.isEmpty { Text(details.body).font(.callout).foregroundStyle(.secondary).textSelection(.enabled) }
+                        LabeledContent("Author", value: details.commit.author)
+                        LabeledContent("When", value: details.commit.date.formatted(date: .abbreviated, time: .shortened))
+                        Button {
+                            UIPasteboard.general.string = details.commit.hash
+                        } label: {
+                            LabeledContent("Hash") {
+                                HStack(spacing: 6) {
+                                    Text(details.commit.short).font(.callout.monospaced())
+                                    Image(systemName: "doc.on.doc").font(.footnote)
+                                }
+                            }
+                        }
+                        .accessibilityLabel("Copy the hash \(details.commit.short)")
+                        .accessibilityIdentifier("copy-hash")
+                    }
+                    Section(details.files.isEmpty ? "It changed no file" : "\(details.files.count) \(details.files.count == 1 ? "file" : "files")") {
+                        if details.diffsLeftOut { Text("Its diffs are too large to show here.").font(.footnote).foregroundStyle(.secondary) }
+                        ForEach(details.files) { file in
+                            NavigationLink(value: Route.commitFile(folder: folder, hash: hash, file: file.path)) {
+                                HStack(spacing: 8) {
+                                    Text(file.marker).font(.caption.weight(.bold).monospaced()).frame(width: 14)
+                                    Text((file.path as NSString).lastPathComponent).lineLimit(1)
+                                    Spacer(minLength: 4)
+                                    DiffCount(added: file.added, deleted: file.deleted)
+                                }
+                            }
+                            .disabled(file.patch.isEmpty)
+                            .accessibilityIdentifier("commit-file-" + file.path)
+                        }
+                    }
+                }
+            } else {
+                LoadingView("Reading the commit…")
+            }
+        }
+        .navigationTitle(String(hash.prefix(7)))
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { model.loadCommit(hash, in: folder) }
+    }
+}
+
+/// What a commit did to one file.
+struct CommitFileScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+    let folder: String
+    let hash: String
+    let file: String
+    @AppStorage("diffLayout") private var layout = "unified"
+
+    private var isSplit: Bool { layout == "split" }
+
+    var body: some View {
+        Group {
+            if let diff = model.commitDetails[hash]?.files.first(where: { $0.path == file }), !diff.patch.isEmpty {
+                if isSplit {
+                    SplitDiffView(patch: diff.patch, fontSize: 11)
+                } else {
+                    PatchLines(patch: diff.patch)
+                }
+            } else {
+                Placeholder(text: "Nothing to show for this file: it is empty or not text.")
+            }
+        }
+        .background(Palette.canvas.ignoresSafeArea())
+        .navigationTitle((file as NSString).lastPathComponent)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button {
+                    model.setDisplay { $0.diffLayout = isSplit ? "unified" : "split" }
+                } label: {
+                    Image(systemName: isSplit ? "rectangle" : "rectangle.split.2x1")
+                }
+                .accessibilityLabel(isSplit ? "Show in one panel" : "Show side by side")
             }
         }
     }

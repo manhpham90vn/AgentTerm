@@ -101,6 +101,12 @@ struct SessionsView: View {
                     PatchScreen(folder: folder, file: file, staged: staged)
                 case .document(let path):
                     DocumentScreen(path: path)
+                case .commits(let folder):
+                    CommitsScreen(folder: folder)
+                case .commit(let folder, let hash):
+                    CommitScreen(folder: folder, hash: hash)
+                case .commitFile(let folder, let hash, let file):
+                    CommitFileScreen(folder: folder, hash: hash, file: file)
                 }
             }
             .sheet(isPresented: $model.showBrowser) {

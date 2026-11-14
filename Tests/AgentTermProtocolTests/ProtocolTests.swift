@@ -34,6 +34,10 @@ final class ProtocolTests: XCTestCase {
             .gitPull(path: "/Users/me/app", mode: "rebase"),
             .gitPush(path: "/Users/me/app", force: true),
             .gitForcePushPreview(path: "/Users/me/app"),
+            .gitLog(path: "/Users/me/app", branch: nil, skip: 50, limit: 50),
+            .gitShow(path: "/Users/me/app", hash: "abc1234"),
+            .gitRevert(path: "/Users/me/app", hash: "abc1234"),
+            .gitCherryPick(path: "/Users/me/app", hash: "abc1234"),
             .gitBranches(path: "/Users/me/app"),
             .gitSwitch(path: "/Users/me/app", branch: "origin/feature/login"),
             .gitCreateBranch(path: "/Users/me/app", name: "feature/x", from: nil, checkout: true),
@@ -435,5 +439,35 @@ final class ProtocolTests: XCTestCase {
         for message in [ServerMessage.gitFetched(path: "/p", problem: "no route", automatic: true), .gitForcePushPreview(path: "/p", upstream: nil, loses: [])] {
             XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
         }
+    }
+
+    /// GIT-39 (#36): where the commits of a list are drawn in the graph
+    /// beside them: one lane for a line of history, a second where a branch
+    /// parts and until it meets again.
+    func testTheGraphBesideAListOfCommits() {
+        func commit(_ hash: String, _ parents: String...) -> CommitInfo { CommitInfo(hash: hash, parents: parents, subject: hash) }
+        // A straight line: everything in the first lane.
+        let line = CommitGraphRow.rows(for: [commit("c", "b"), commit("b", "a"), commit("a")])
+        XCTAssertEqual(line.map(\.lane), [0, 0, 0])
+        XCTAssertEqual(line.map(\.width), [1, 1, 1])
+        XCTAssertEqual(line[0].incoming, [:])
+        XCTAssertEqual(line[0].outgoing, [0: 0])
+        XCTAssertEqual(line[2].outgoing, [:], "the first commit goes on to nothing")
+
+        // m merges s into the line: s is drawn beside it until b, where they parted.
+        let merged = CommitGraphRow.rows(for: [commit("m", "c", "s"), commit("c", "b"), commit("s", "b"), commit("b", "a"), commit("a")])
+        XCTAssertEqual(merged.map(\.lane), [0, 0, 1, 0, 0])
+        XCTAssertEqual(merged[0].outgoing, [0: 0, 1: 0], "the second parent's lane starts at the merge")
+        XCTAssertEqual(merged[1].incoming, [0: 0, 1: 1], "the side passes by")
+        XCTAssertEqual(merged[2].incoming, [0: 0, 1: 1])
+        XCTAssertEqual(merged[3].incoming, [0: 0, 1: 0], "both end at the commit they parted from")
+        XCTAssertEqual(merged[3].outgoing, [0: 0])
+        XCTAssertEqual(merged.map(\.width), [2, 2, 2, 2, 1])
+        XCTAssertEqual(CommitGraphRow.rows(for: []), [])
+
+        let question = CommitActionQuestion(.revert, commit: CommitInfo(hash: "abcdef1234", subject: "add two"), onto: "main")
+        XCTAssertEqual(question.title, "Revert abcdef1?")
+        XCTAssertTrue(question.message.contains("takes back what “add two” changed"))
+        XCTAssertEqual(CommitActionQuestion(.cherryPick, commit: CommitInfo(hash: "abcdef1234", subject: "x"), onto: nil).title, "Pick abcdef1 onto the checked out commit?")
     }
 }

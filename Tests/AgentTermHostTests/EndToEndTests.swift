@@ -874,6 +874,58 @@ final class EndToEndTests: XCTestCase {
         waitUntil("deleted") { branches() == ["* main"] }
     }
 
+    /// GIT-40 (#36): a device reads the history a page at a time, what a
+    /// commit changed, and reverts one; a commit that is not there is said
+    /// to be so.
+    func testAClientReadsTheHistoryAndRevertsACommit() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-history-\(UUID().uuidString)").standardizedFileURL
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        git("init", "-q", "-b", "main", in: directory)
+        git("config", "user.name", "Test", in: directory)
+        git("config", "user.email", "test@example.com", in: directory)
+        git("config", "commit.gpgsign", "false", in: directory)
+        for number in 1...3 {
+            try String(repeating: "line\n", count: number).write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+            git("add", ".", in: directory)
+            git("commit", "-q", "-m", "change \(number)", in: directory)
+        }
+
+        let phone = connect("phone")
+        func pages() -> [(skip: Int, subjects: [String], more: Bool)] {
+            phone.messages.compactMap { message in
+                if case .gitLog(directory.path, nil, let skip, let commits, let more) = message { return (skip, commits.map(\.subject), more) }
+                return nil
+            }
+        }
+        phone.connection.send(.gitLog(path: directory.path, branch: nil, skip: 0, limit: 2))
+        waitUntil("the first page") { pages().count == 1 }
+        XCTAssertEqual(pages()[0].subjects, ["change 3", "change 2"])
+        XCTAssertTrue(pages()[0].more)
+        phone.connection.send(.gitLog(path: directory.path, branch: nil, skip: 2, limit: 2))
+        waitUntil("the second page") { pages().count == 2 }
+        XCTAssertEqual(pages()[1].subjects, ["change 1"])
+        XCTAssertFalse(pages()[1].more)
+
+        let newest = try XCTUnwrap(
+            phone.messages.compactMap { message -> CommitInfo? in
+                if case .gitLog(_, _, 0, let commits, _) = message { return commits.first } else { return nil }
+            }.first)
+        phone.connection.send(.gitShow(path: directory.path, hash: newest.hash))
+        waitUntil("what it changed") {
+            phone.messages.contains {
+                if case .gitShow(_, newest.hash, let details?) = $0 { return details.files.map(\.path) == ["a.txt"] && details.files[0].patch.contains("+line") }
+                return false
+            }
+        }
+        phone.connection.send(.gitShow(path: directory.path, hash: "0000000"))
+        waitUntil("none such") { phone.messages.contains { if case .gitShow(_, "0000000", nil) = $0 { return true } else { return false } } }
+
+        phone.connection.send(.gitRevert(path: directory.path, hash: newest.hash))
+        waitUntil("reverted") { phone.messages.contains { if case .gitSynced(directory.path) = $0 { return true } else { return false } } }
+        XCTAssertEqual(try String(contentsOf: directory.appendingPathComponent("a.txt"), encoding: .utf8), "line\nline\n")
+    }
+
     func testAClientCanBrowseFolders() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-dirs-\(UUID().uuidString)").standardizedFileURL
         for name in ["beta", "Alpha", "alpha 2", ".hidden"] {

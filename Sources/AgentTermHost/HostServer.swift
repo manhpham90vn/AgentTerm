@@ -1473,6 +1473,20 @@ public final class HostServer {
             git(for: client, in: path) { GitActions.unstage(files, in: path) }
         case .gitDiscard(let path, let files):
             git(for: client, in: path) { GitActions.discard(files, in: path) }
+        case .gitLog(let path, let branch, let skip, let limit):
+            // No more at once than a list shows a page of.
+            let count = min(max(limit, 1), 200)
+            work(for: client, { GitActions.log(in: path, branch: branch, skip: skip, limit: count) }) { server, client, found in
+                server.send(.gitLog(path: path, branch: branch, skip: skip, commits: found.commits, more: found.more), to: client)
+            }
+        case .gitShow(let path, let hash):
+            work(for: client, { GitActions.show(hash, in: path) }) { server, client, details in
+                server.send(.gitShow(path: path, hash: hash, details: details), to: client)
+            }
+        case .gitRevert(let path, let hash):
+            git(for: client, in: path, sync: true) { GitActions.revert(hash, in: path) }
+        case .gitCherryPick(let path, let hash):
+            git(for: client, in: path, sync: true) { GitActions.cherryPick(hash, in: path) }
         case .gitBranches(let path):
             work(for: client, { GitActions.branches(in: path) }) { server, client, list in server.send(.gitBranches(path: path, branches: list), to: client) }
         case .gitSwitch(let path, let branch):
