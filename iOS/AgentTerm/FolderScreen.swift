@@ -79,23 +79,16 @@ private struct ChangesList: View {
             if let diff = model.diffs[folder] {
                 if !diff.isRepository {
                     Placeholder(text: "This folder is not a git repository.")
-                } else if diff.files.isEmpty && !diff.canPush && !diff.canPull {
-                    Placeholder(text: "No uncommitted changes.")
                 } else if diff.files.isEmpty {
                     // Nothing to commit, but a commit that was just made is
-                    // what there is to push.
+                    // what there is to push, and the branch can be another.
                     ScrollView {
                         VStack(spacing: 0) {
-                            if let branch = diff.branch {
-                                Label(branch, systemImage: "arrow.triangle.branch")
-                                    .font(.footnote.weight(.medium))
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.horizontal, 6)
-                                    .padding(.bottom, 10)
-                            }
-                            SyncBar(folder: folder, diff: diff)
+                            BranchButton(folder: folder, branch: diff.branch)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 6)
+                                .padding(.bottom, 10)
+                            if diff.canPush || diff.canPull { SyncBar(folder: folder, diff: diff) }
                             Text("No uncommitted changes.")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
@@ -109,12 +102,7 @@ private struct ChangesList: View {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             HStack(spacing: 8) {
-                                if let branch = diff.branch {
-                                    Label(branch, systemImage: "arrow.triangle.branch")
-                                        .font(.footnote.weight(.medium))
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(1)
-                                }
+                                BranchButton(folder: folder, branch: diff.branch)
                                 Spacer()
                                 DiffCount(added: diff.files.reduce(0) { $0 + $1.added }, deleted: diff.files.reduce(0) { $0 + $1.deleted })
                                 Button {
@@ -961,6 +949,129 @@ struct ConversationSheet: View {
             }
             .onChange(of: model.handoffPlan) { _, plan in
                 if let plan { prompt = plan.prompt }
+            }
+        }
+    }
+}
+
+/// The checked out branch (#35). Touched, it lists the repository's
+/// branches, to switch to one or make one; renaming and deleting are on
+/// the Mac.
+struct BranchButton: View {
+    let folder: String
+    /// Nil for a detached HEAD.
+    let branch: String?
+    @State private var showing = false
+
+    var body: some View {
+        Button {
+            showing = true
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "arrow.triangle.branch")
+                Text(branch ?? "detached HEAD").lineLimit(1).truncationMode(.middle)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
+            }
+            .font(.footnote.weight(.medium))
+            .foregroundStyle(.secondary)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Branch \(branch ?? "detached HEAD")")
+        .accessibilityIdentifier("branch-menu")
+        .sheet(isPresented: $showing) {
+            BranchesSheet(folder: folder)
+        }
+    }
+}
+
+/// The branches of a folder on the Mac: touch one to check it out, or make
+/// a new one.
+private struct BranchesSheet: View {
+    @EnvironmentObject private var model: PhoneModel
+    @Environment(\.dismiss) private var dismiss
+    let folder: String
+    @State private var filter = ""
+    @State private var making = false
+    @State private var newName = ""
+    @State private var from = ""
+    @State private var checkout = true
+
+    private var all: [BranchInfo] { model.branches[folder] ?? [] }
+
+    private func shown(remote: Bool) -> [BranchInfo] {
+        let wanted = filter.trimmingCharacters(in: .whitespaces).lowercased()
+        return all.filter { $0.isRemote == remote && (wanted.isEmpty || $0.name.lowercased().contains(wanted)) }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if making {
+                    Section("New Branch") {
+                        TextField("Name", text: $newName)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .accessibilityIdentifier("new-branch-name")
+                        Picker("From", selection: $from) {
+                            ForEach(all) { branch in Text(branch.name).tag(branch.name) }
+                        }
+                        Toggle("Switch to it", isOn: $checkout)
+                        Button("Create Branch") {
+                            model.createBranch(named: newName.trimmingCharacters(in: .whitespaces), from: from.isEmpty ? nil : from, checkout: checkout, in: folder)
+                            making = false
+                            if checkout { dismiss() }
+                        }
+                        .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
+                        .accessibilityIdentifier("new-branch-create")
+                    }
+                }
+                section("Branches", shown(remote: false))
+                section("Remote Branches", shown(remote: true))
+                if all.isEmpty { Text("Reading the branches…").foregroundStyle(.secondary) }
+            }
+            .searchable(text: $filter, prompt: "Find a branch")
+            .navigationTitle("Branches")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        from = all.first(where: \.isCurrent)?.name ?? ""
+                        making.toggle()
+                    } label: {
+                        Label("New Branch", systemImage: "plus")
+                    }
+                    .accessibilityIdentifier("new-branch")
+                }
+            }
+        }
+        .onAppear { model.loadBranches(folder) }
+    }
+
+    @ViewBuilder
+    private func section(_ title: String, _ list: [BranchInfo]) -> some View {
+        if !list.isEmpty {
+            Section(title) {
+                ForEach(list) { branch in
+                    Button {
+                        model.switchBranch(branch, in: folder)
+                        dismiss()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "checkmark").font(.footnote.weight(.bold)).opacity(branch.isCurrent ? 1 : 0)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(branch.name).font(.body.weight(branch.isCurrent ? .semibold : .regular)).lineLimit(1).truncationMode(.middle)
+                                let detail = [branch.tracking, branch.worktree == nil ? "" : "in a worktree", branch.subject].filter { !$0.isEmpty }.joined(separator: " · ")
+                                if !detail.isEmpty { Text(detail).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
+                            }
+                        }
+                    }
+                    .foregroundStyle(.primary)
+                    // The one that is checked out, and one another worktree holds, stay where they are.
+                    .disabled(branch.isCurrent || branch.worktree != nil)
+                    .accessibilityIdentifier("branch-" + branch.id)
+                }
             }
         }
     }

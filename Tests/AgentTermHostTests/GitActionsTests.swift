@@ -33,6 +33,123 @@ final class GitActionsTests: XCTestCase {
     private func entries(_ files: [FileDiff]) -> [String] { files.map { "\($0.marker) \($0.path)" } }
     private var snapshot: DiffSnapshot { GitDiff.snapshot(directory: root.path) }
 
+    /// GIT-24 (#35): the branches of a repository, its own and a remote's,
+    /// with which is checked out, what each follows and how far it is.
+    func testTheBranchesOfARepository() throws {
+        let remote = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-gitactions-remote-\(UUID().uuidString).git")
+        defer { try? FileManager.default.removeItem(at: remote) }
+        _ = Subprocess.run("/usr/bin/git", ["init", "-q", "--bare", "-b", "main", remote.path])
+        try write("a.txt", "one\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        git("remote", "add", "origin", remote.path)
+        git("push", "-q", "-u", "origin", "main")
+        git("switch", "-q", "-c", "feature/login")
+        try write("a.txt", "one\ntwo\n")
+        git("commit", "-q", "-am", "feat: a second line\twith a tab")
+        git("push", "-q", "-u", "origin", "feature/login")
+        try write("a.txt", "one\ntwo\nthree\n")
+        git("commit", "-q", "-am", "feat: a third line")
+        git("branch", "merged-already", "main")
+        git("switch", "-q", "main")
+
+        let all = GitActions.branches(in: root.path)
+        XCTAssertEqual(
+            all.map(\.id),
+            ["main", "feature/login", "merged-already", "remote:origin/feature/login", "remote:origin/main"].sorted { a, b in
+                // Its own first, the checked out one before the rest; then the remote's.
+                let order = ["main", "feature/login", "merged-already", "remote:origin/feature/login", "remote:origin/main"]
+                return order.firstIndex(of: a)! < order.firstIndex(of: b)!
+            })
+        let main = try XCTUnwrap(all.first { $0.id == "main" })
+        XCTAssertTrue(main.isCurrent)
+        XCTAssertEqual(main.upstream, "origin/main")
+        XCTAssertEqual(main.tracking, "")
+        let feature = try XCTUnwrap(all.first { $0.id == "feature/login" })
+        XCTAssertFalse(feature.isCurrent)
+        XCTAssertEqual(feature.upstream, "origin/feature/login")
+        XCTAssertEqual(feature.ahead, 1)
+        XCTAssertEqual(feature.tracking, "1 ahead")
+        XCTAssertEqual(feature.subject, "feat: a third line")
+        XCTAssertFalse(feature.isMerged, "it has commits main has not")
+        XCTAssertTrue(try XCTUnwrap(all.first { $0.id == "merged-already" }).isMerged)
+        let theirs = try XCTUnwrap(all.first { $0.id == "remote:origin/feature/login" })
+        XCTAssertTrue(theirs.isRemote)
+        XCTAssertEqual(theirs.localName, "feature/login")
+        XCTAssertEqual(theirs.subject, "feat: a second line\twith a tab")
+        XCTAssertEqual(GitActions.branches(in: FileManager.default.temporaryDirectory.path), [], "not a repository")
+    }
+
+    /// GIT-25 (#35): a branch is checked out, made, renamed and deleted; a
+    /// switch that would lose changes is refused in words; a branch with
+    /// commits of its own is deleted only when forced.
+    func testSwitchingMakingRenamingAndDeletingABranch() throws {
+        try write("a.txt", "one\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+
+        // Made from the checked out commit, and checked out or not.
+        XCTAssertNil(GitActions.createBranch(" feature/x ", from: nil, checkout: true, in: root.path))
+        XCTAssertEqual(git("branch", "--show-current"), "feature/x")
+        try write("a.txt", "one\non the feature\n")
+        git("commit", "-q", "-am", "feat: on the feature")
+        XCTAssertNil(GitActions.createBranch("from-main", from: "main", checkout: false, in: root.path))
+        XCTAssertEqual(git("branch", "--show-current"), "feature/x")
+        XCTAssertEqual(git("rev-parse", "from-main"), git("rev-parse", "main"))
+        XCTAssertEqual(GitActions.createBranch("  ", from: nil, checkout: false, in: root.path), "Give the branch a name.")
+        XCTAssertTrue(GitActions.createBranch("has space", from: nil, checkout: false, in: root.path)?.contains("cannot be the name of a branch") == true)
+        XCTAssertNotNil(GitActions.createBranch("main", from: nil, checkout: false, in: root.path), "a name that is taken is refused by git")
+
+        // Switching that would lose a change is refused, and nothing is lost.
+        XCTAssertNil(GitActions.switchTo("main", in: root.path))
+        XCTAssertEqual(git("branch", "--show-current"), "main")
+        try write("a.txt", "one\nmine, not committed\n")
+        let refused = try XCTUnwrap(GitActions.switchTo("feature/x", in: root.path))
+        XCTAssertTrue(refused.hasPrefix("Switching to feature/x would lose changes that are not committed."), refused)
+        XCTAssertEqual(git("branch", "--show-current"), "main")
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8), "one\nmine, not committed\n")
+        git("checkout", "-q", "--", "a.txt")
+        XCTAssertNotNil(GitActions.switchTo("no-such-branch", in: root.path))
+
+        // Renamed.
+        XCTAssertNil(GitActions.renameBranch("from-main", to: "spare", in: root.path))
+        XCTAssertTrue(GitActions.branches(in: root.path).contains { $0.name == "spare" })
+        XCTAssertFalse(GitActions.branches(in: root.path).contains { $0.name == "from-main" })
+        XCTAssertNotNil(GitActions.renameBranch("spare", to: "bad name", in: root.path))
+
+        // A merged branch is deleted; one with commits of its own only when forced.
+        XCTAssertNil(GitActions.deleteBranch("spare", force: false, in: root.path))
+        let kept = try XCTUnwrap(GitActions.deleteBranch("feature/x", force: false, in: root.path))
+        XCTAssertTrue(kept.contains("not fully merged"), kept)
+        XCTAssertTrue(GitActions.branches(in: root.path).contains { $0.name == "feature/x" })
+        XCTAssertNil(GitActions.deleteBranch("feature/x", force: true, in: root.path))
+        XCTAssertEqual(GitActions.branches(in: root.path).map(\.name), ["main"])
+        XCTAssertNotNil(GitActions.deleteBranch("main", force: true, in: root.path), "the checked out branch is not deleted")
+    }
+
+    /// GIT-25: a remote's branch is checked out as one of the repository's
+    /// own that follows it, made the first time and used from then on.
+    func testSwitchingToARemotesBranch() throws {
+        let remote = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-gitactions-remote-\(UUID().uuidString).git")
+        defer { try? FileManager.default.removeItem(at: remote) }
+        _ = Subprocess.run("/usr/bin/git", ["init", "-q", "--bare", "-b", "main", remote.path])
+        try write("a.txt", "one\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        git("remote", "add", "origin", remote.path)
+        git("push", "-q", "-u", "origin", "main")
+        git("push", "-q", "origin", "main:review")
+        git("fetch", "-q", "origin")
+        XCTAssertFalse(GitActions.branches(in: root.path).contains { !$0.isRemote && $0.name == "review" })
+
+        XCTAssertNil(GitActions.switchTo("origin/review", in: root.path))
+        XCTAssertEqual(git("branch", "--show-current"), "review")
+        XCTAssertEqual(GitActions.branches(in: root.path).first { $0.name == "review" }?.upstream, "origin/review")
+        XCTAssertNil(GitActions.switchTo("main", in: root.path))
+        XCTAssertNil(GitActions.switchTo("origin/review", in: root.path), "the branch that is there is used")
+        XCTAssertEqual(git("branch", "--show-current"), "review")
+    }
+
     /// GIT-20 (#39): discarding takes back what is not staged, and moves a
     /// file git does not track to the Trash; what is staged stays.
     func testDiscardingChangesThatAreNotStaged() throws {

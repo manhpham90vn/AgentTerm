@@ -291,6 +291,20 @@ final class PhoneModel: ObservableObject {
     @Published var tab = "sessions"
     /// A folder's uncommitted changes, by folder. Without the diffs.
     @Published private(set) var diffs: [String: DiffSnapshot] = [:]
+    /// The branches of each folder that was asked about (#35), its own first.
+    @Published private(set) var branches: [String: [BranchInfo]] = [:]
+
+    func loadBranches(_ folder: String) { connection?.send(.gitBranches(path: folder)) }
+
+    /// Checks a branch out on the Mac. Refused there, in words, when
+    /// changes that are not committed would be lost.
+    func switchBranch(_ branch: BranchInfo, in folder: String) {
+        connection?.send(.gitSwitch(path: folder, branch: branch.name))
+    }
+
+    func createBranch(named name: String, from start: String?, checkout: Bool, in folder: String) {
+        connection?.send(.gitCreateBranch(path: folder, name: name, from: start, checkout: checkout))
+    }
     /// The diff of a file, by `patchKey`. A missing file is stored as nil.
     @Published private(set) var patches: [String: FileDiff?] = [:]
     /// What each agent's account has used and has left, by agent.
@@ -1052,6 +1066,8 @@ final class PhoneModel: ObservableObject {
                 savingFile = nil
                 self.message = text
             }
+        case .gitBranches(let folder, let list):
+            branches[folder] = list
         case .diff(let folder, let snapshot):
             diffs[folder] = snapshot
             if committing == folder {

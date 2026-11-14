@@ -816,6 +816,64 @@ final class EndToEndTests: XCTestCase {
         }
     }
 
+    /// GIT-26 (#35): a device lists the branches, makes one, switches, is
+    /// refused a switch that would lose a change, and deletes a branch;
+    /// each change is answered with the branches and the folder's changes.
+    func testAClientWorksWithBranches() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-branches-\(UUID().uuidString)").standardizedFileURL
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        git("init", "-q", "-b", "main", in: directory)
+        git("config", "user.name", "Test", in: directory)
+        git("config", "user.email", "test@example.com", in: directory)
+        git("config", "commit.gpgsign", "false", in: directory)
+        try "one\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: directory)
+        git("commit", "-q", "-m", "init", in: directory)
+
+        let phone = connect("phone")
+        func branches() -> [String]? {
+            phone.messages.compactMap { message -> [String]? in
+                if case .gitBranches(directory.path, let list) = message { return list.map { ($0.isCurrent ? "* " : "") + $0.name } }
+                return nil
+            }.last
+        }
+        func branch() -> String? {
+            phone.messages.compactMap { message -> String? in
+                if case .diff(directory.path, let snapshot) = message { return snapshot.branch } else { return nil }
+            }.last
+        }
+        phone.connection.send(.gitBranches(path: directory.path))
+        waitUntil("the branches") { branches() == ["* main"] }
+
+        phone.connection.send(.gitCreateBranch(path: directory.path, name: "feature/x", from: nil, checkout: true))
+        waitUntil("made and checked out") { branches() == ["* feature/x", "main"] && branch() == "feature/x" }
+        try "one\non the feature\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("commit", "-q", "-am", "feat: on the feature", in: directory)
+
+        phone.connection.send(.gitSwitch(path: directory.path, branch: "main"))
+        waitUntil("switched") { branch() == "main" }
+
+        // A change that the switch would lose: refused, in words.
+        try "mine\n".write(to: directory.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        phone.connection.send(.gitSwitch(path: directory.path, branch: "feature/x"))
+        waitUntil("refused") {
+            phone.messages.contains { if case .error(let text) = $0 { return text.hasPrefix("Switching to feature/x would lose changes") } else { return false } }
+        }
+        XCTAssertEqual(branch(), "main")
+        git("checkout", "-q", "--", "a.txt", in: directory)
+
+        // Not merged: kept unless forced.
+        phone.connection.send(.gitDeleteBranch(path: directory.path, name: "feature/x", force: false))
+        waitUntil("kept") {
+            phone.messages.contains { if case .error(let text) = $0 { return text.contains("not fully merged") } else { return false } }
+        }
+        phone.connection.send(.gitRenameBranch(path: directory.path, from: "feature/x", to: "feature/y"))
+        waitUntil("renamed") { branches() == ["* main", "feature/y"] }
+        phone.connection.send(.gitDeleteBranch(path: directory.path, name: "feature/y", force: true))
+        waitUntil("deleted") { branches() == ["* main"] }
+    }
+
     func testAClientCanBrowseFolders() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-e2e-dirs-\(UUID().uuidString)").standardizedFileURL
         for name in ["beta", "Alpha", "alpha 2", ".hidden"] {

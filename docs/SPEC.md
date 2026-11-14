@@ -484,6 +484,22 @@ panel.
     Commit Messages in the iPhone's Settings tab; the default is the first agent
     installed, on a cheap model where AgentTerm knows one (Claude Code:
     Haiku).
+    The name of the branch that is checked out, at the top, opens the
+    **branches**: the repository's own, the checked out one first and the
+    rest by their last commit, then its remotes', each with how far it is
+    from the branch it follows and when it was last committed to; a field
+    narrows them down. A branch is switched to by choosing it; a remote's
+    is checked out as a branch of the repository's own that follows it,
+    made the first time. Switching is refused, in words, when changes that
+    are not committed would be lost, and nothing is changed then; a branch
+    that another worktree has checked out cannot be switched to, and says
+    where it is. **New Branch…** makes one from any branch, the checked
+    out one unless another is picked, and switches to it or not. A branch
+    of the repository's own is renamed and deleted from its menu: deleting
+    is asked first, once when everything on the branch is on the checked
+    out branch too, and twice, the second time saying its commits would be
+    lost, when it has commits of its own. The checked out branch is not
+    deleted, and a remote's branches are not changed from here.
     Above the changes, **Pull** and **Push** act on the branch that is
     checked out, each with the number of commits waiting, next to the name
     of the branch it follows. A branch that follows none yet shows
@@ -494,7 +510,7 @@ panel.
     The count of commits to pull is as of the last time the remote was
     asked; pulling asks.
     Not part of it: staging part of a file, amending,
-    force push, choosing a remote or another branch, and resolving a pull
+    force push, choosing a remote, and resolving a pull
     that conflicts.
 - **History**, the place in the bar at the left: every conversation the
     agents had on the Mac, one section per agent, newest first, each with a
@@ -735,7 +751,8 @@ button at the top right of Sessions goes back to the list of Macs.
   scrolls sideways and can be shown as two panels as on the Mac; files can
   be staged, unstaged, discarded (from a file's menu, or all of them, asked
   first as on the Mac) and committed as on the
-  Mac, the branch pushed and pulled, and the commit message written by an
+  Mac; the branch's name lists the branches, to switch to one or make one
+  (renaming and deleting a branch are on the Mac), the branch pushed and pulled, and the commit message written by an
   agent. **History**: the conversations each agent had in the
   folder only, as on the Mac; every conversation is in the History tab. **Files**: see
   Files above.

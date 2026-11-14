@@ -31,11 +31,9 @@ struct DiffView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            if let branch = model.diff?.branch {
-                Label(branch, systemImage: "arrow.triangle.branch")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+            if model.diff?.isRepository == true {
+                // The branch that is checked out; pressed, the branches.
+                BranchButton(branch: model.diff?.branch)
             } else {
                 Text("Changes")
                     .font(.system(size: 11, weight: .medium))

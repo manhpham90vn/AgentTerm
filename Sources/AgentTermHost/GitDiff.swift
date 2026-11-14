@@ -292,7 +292,7 @@ public enum GitActions {
 
     /// The paths a git command prints, separated by NUL. Nil when git
     /// could not be run or refused.
-    private static func list(_ arguments: [String], in directory: String) -> [String]? {
+    static func list(_ arguments: [String], in directory: String) -> [String]? {
         guard let result = Subprocess.run(git, ["-C", directory, "--literal-pathspecs"] + arguments, timeout: 30), result.status == 0 else { return nil }
         return String(decoding: result.output, as: UTF8.self).split(separator: "\0").map(String.init)
     }
@@ -432,7 +432,7 @@ public enum GitActions {
         return names
     }
 
-    private static func currentBranch(in directory: String) -> String? {
+    static func currentBranch(in directory: String) -> String? {
         guard let result = Subprocess.run(git, ["-C", directory, "branch", "--show-current"], timeout: 15), result.status == 0 else { return nil }
         let name = String(decoding: result.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         return name.isEmpty ? nil : name
@@ -447,7 +447,7 @@ public enum GitActions {
         return exists("MERGE_HEAD") ? "merge" : nil
     }
 
-    private static func run(
+    static func run(
         _ arguments: [String], in directory: String, timeout: TimeInterval = 30, environment: [String: String]? = nil
     ) -> String? {
         // File names are taken as they are, not as patterns. No program is

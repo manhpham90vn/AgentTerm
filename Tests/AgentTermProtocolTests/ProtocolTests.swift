@@ -30,6 +30,11 @@ final class ProtocolTests: XCTestCase {
             .gitStage(path: "/Users/me/app", files: []),
             .gitDiscard(path: "/Users/me/app", files: ["src/a b.swift"]),
             .gitDiscard(path: "/Users/me/app", files: []),
+            .gitBranches(path: "/Users/me/app"),
+            .gitSwitch(path: "/Users/me/app", branch: "origin/feature/login"),
+            .gitCreateBranch(path: "/Users/me/app", name: "feature/x", from: nil, checkout: true),
+            .gitRenameBranch(path: "/Users/me/app", from: "a", to: "b"),
+            .gitDeleteBranch(path: "/Users/me/app", name: "old", force: false),
             .gitUnstage(path: "/Users/me/app", files: ["src/a b.swift"]),
             .gitCommit(path: "/Users/me/app", message: "feat: thêm dòng\n\nchi tiết"),
             .accountUsage(refresh: true),
@@ -372,5 +377,32 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(DiscardQuestion(files: [new, new]).message, "2 new files are moved to the Trash of the Mac.")
         XCTAssertEqual(changed.discardLabel, "Discard changes to notes.txt")
         XCTAssertEqual(new.discardLabel, "Move new guide.md to the Trash")
+    }
+
+    /// GIT-27 (#35): a branch in words, and what is asked before one is
+    /// deleted: once when nothing is lost, twice when its commits would be.
+    func testABranchInWordsAndWhatIsAskedBeforeDeletingOne() throws {
+        let merged = BranchInfo(name: "spare", isMerged: true)
+        let own = BranchInfo(name: "feature/x", upstream: "origin/feature/x", ahead: 2, behind: 1)
+        XCTAssertEqual(own.tracking, "2 ahead, 1 behind")
+        XCTAssertEqual(BranchInfo(name: "old", upstream: "origin/old", upstreamGone: true).tracking, "its remote branch is gone")
+        XCTAssertEqual(merged.tracking, "")
+        XCTAssertEqual(BranchInfo(name: "origin/feature/login", isRemote: true).localName, "feature/login")
+        XCTAssertEqual(own.localName, "feature/x")
+        XCTAssertNotEqual(BranchInfo(name: "x").id, BranchInfo(name: "x", isRemote: true).id)
+
+        let once = DeleteBranchQuestion(branch: merged, into: "main")
+        XCTAssertEqual(once.title, "Delete the branch “spare”?")
+        XCTAssertEqual(once.message, "Everything on it is on “main” too, so nothing is lost.")
+        XCTAssertEqual(once.confirm, "Delete Branch")
+        let first = DeleteBranchQuestion(branch: own, into: "main")
+        XCTAssertTrue(first.message.contains("asked once more"))
+        XCTAssertEqual(first.confirm, "Delete…")
+        let second = DeleteBranchQuestion(branch: own, into: "main", again: true)
+        XCTAssertEqual(second.title, "Delete “feature/x” and lose its commits?")
+        XCTAssertEqual(second.confirm, "Delete and Lose Its Commits")
+
+        let message = ServerMessage.gitBranches(path: "/p", branches: [merged, own])
+        XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
     }
 }

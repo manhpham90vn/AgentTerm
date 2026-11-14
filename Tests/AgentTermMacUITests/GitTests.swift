@@ -71,6 +71,39 @@ final class GitTests: MacUITestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: trash.appendingPathComponent("docs/guide.md").path), "its folder went whole")
     }
 
+    /// GIT-28 (#35): the header's branch opens the branches; one is made
+    /// and checked out, the first is switched back to, and the new one is
+    /// deleted after being asked.
+    func testMakingSwitchingAndDeletingABranch() throws {
+        app.press(.button("Git"))
+        app.wait(for: .id("branch-menu"))
+        XCTAssertEqual(git("branch", "--show-current", in: project), "main")
+
+        app.press(.id("branch-menu"))
+        app.wait(for: .id("branch-main"))
+        shot("branches")
+        app.press(.id("new-branch"))
+        app.write("feature/ui", into: .id("new-branch-name"))
+        app.press(.id("new-branch-create"))
+        wait("the new branch to be checked out") { self.git("branch", "--show-current", in: self.project) == "feature/ui" }
+        app.wait(for: .containing("Branch feature/ui"))
+        // The changes that were not committed came along: nothing is lost.
+        XCTAssertTrue(app.exists(.button("Stage notes.txt")))
+
+        app.press(.id("branch-menu"))
+        app.press(.id("branch-main"))
+        wait("main to be checked out again") { self.git("branch", "--show-current", in: self.project) == "main" }
+
+        // Everything on the new branch is on main: asked once.
+        app.press(.id("branch-menu"))
+        app.wait(for: .id("branch-feature/ui"))
+        app.perform("Delete", on: .id("branch-feature/ui"))
+        app.wait(for: .containing("Delete the branch “feature/ui”?"))
+        app.press(.button("Delete Branch"))
+        wait("the branch to be deleted") { !self.git("branch", "--list", "feature/ui", in: self.project).contains("feature/ui") }
+        app.waitGone(.id("branch-feature/ui"))
+    }
+
     func testARefusedCommitSaysWhatGitSaid() throws {
         // A hook that refuses every commit, as a project's own checks may.
         let hook = project.appendingPathComponent(".git/hooks/pre-commit")

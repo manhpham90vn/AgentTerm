@@ -207,6 +207,21 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// back to what is staged or to the last commit, one it does not track
     /// yet goes to the Mac's Trash. No files means every such change.
     case gitDiscard(path: String, files: [String])
+    /// Asks for the repository's branches, its own and its remotes' (#35).
+    /// Answered with `gitBranches`.
+    case gitBranches(path: String)
+    /// Checks a branch out. A remote's (`origin/feature`) is checked out as
+    /// a branch of the repository's own that follows it, made if there is
+    /// none. Refused, in words, when changes that are not committed would
+    /// be lost. Answered with `gitBranches` and the folder's changes.
+    case gitSwitch(path: String, branch: String)
+    /// Makes a branch from another branch or a commit (`from`, the checked
+    /// out commit when nil), and checks it out when asked.
+    case gitCreateBranch(path: String, name: String, from: String?, checkout: Bool)
+    case gitRenameBranch(path: String, from: String, to: String)
+    /// Deletes a branch of the repository's own. One with commits that are
+    /// on no other branch is deleted only with `force`.
+    case gitDeleteBranch(path: String, name: String, force: Bool)
     /// Commits what is staged.
     case gitCommit(path: String, message: String)
     /// Pushes the branch that is checked out to its upstream. A branch
@@ -351,6 +366,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// The paired devices. Sent to the host's own machine when they change.
     case devices([DeviceInfo])
     case diff(path: String, snapshot: DiffSnapshot)
+    /// The repository's branches: its own, the checked out one first, then
+    /// its remotes'. None for a folder that is not a repository.
+    case gitBranches(path: String, branches: [BranchInfo])
     /// `file` is nil when it no longer has changes.
     case diffFile(path: String, file: FileDiff?)
     case history(path: String?, conversations: [Conversation])

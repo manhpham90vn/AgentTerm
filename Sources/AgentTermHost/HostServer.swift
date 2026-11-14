@@ -1473,6 +1473,16 @@ public final class HostServer {
             git(for: client, in: path) { GitActions.unstage(files, in: path) }
         case .gitDiscard(let path, let files):
             git(for: client, in: path) { GitActions.discard(files, in: path) }
+        case .gitBranches(let path):
+            work(for: client, { GitActions.branches(in: path) }) { server, client, list in server.send(.gitBranches(path: path, branches: list), to: client) }
+        case .gitSwitch(let path, let branch):
+            git(for: client, in: path, branches: true) { GitActions.switchTo(branch, in: path) }
+        case .gitCreateBranch(let path, let name, let from, let checkout):
+            git(for: client, in: path, branches: true) { GitActions.createBranch(name, from: from, checkout: checkout, in: path) }
+        case .gitRenameBranch(let path, let from, let to):
+            git(for: client, in: path, branches: true) { GitActions.renameBranch(from, to: to, in: path) }
+        case .gitDeleteBranch(let path, let name, let force):
+            git(for: client, in: path, branches: true) { GitActions.deleteBranch(name, force: force, in: path) }
         case .gitCommit(let path, let message):
             git(for: client, in: path) { GitActions.commit(message: message, in: path) }
         case .gitPush(let path):
@@ -1557,16 +1567,20 @@ public final class HostServer {
     /// now, so the client's list is right whether it worked or not. A push
     /// or a pull (`sync`) takes long enough for other answers about the
     /// folder to come in between, so its end is said in so many words.
-    private func git(for client: Client, in path: String, sync: Bool = false, _ action: @escaping () -> String?) {
+    ///
+    /// A change to the branches (`branches`) is answered with them as well,
+    /// before the changes, whose branch may be another now.
+    private func git(for client: Client, in path: String, sync: Bool = false, branches: Bool = false, _ action: @escaping () -> String?) {
         work(
             for: client,
-            { () -> (String?, DiffSnapshot) in
+            { () -> (String?, DiffSnapshot, [BranchInfo]?) in
                 let problem = action()
-                return (problem, GitDiff.snapshot(directory: path))
+                return (problem, GitDiff.snapshot(directory: path), branches ? GitActions.branches(in: path) : nil)
             }
         ) { server, client, result in
             server.diffCache[path] = (result.1, Date())
             if let problem = result.0 { server.send(.error(problem), to: client) }
+            if let list = result.2 { server.send(.gitBranches(path: path, branches: list), to: client) }
             server.send(.diff(path: path, snapshot: result.1.withoutPatches), to: client)
             if sync { server.send(.gitSynced(path: path), to: client) }
         }

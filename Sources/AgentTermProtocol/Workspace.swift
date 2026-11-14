@@ -45,6 +45,97 @@ public struct FileDiff: Codable, Identifiable, Equatable, Sendable {
     public var marker: String { isUntracked ? "U" : status.rawValue }
 }
 
+/// A branch of a repository (#35): one of its own, or one of a remote's as
+/// of the last time the remote was asked.
+public struct BranchInfo: Codable, Equatable, Hashable, Identifiable, Sendable {
+    /// "main", or "origin/main" for a remote's.
+    public var name: String
+    public var isRemote: Bool
+    /// Checked out in the folder that was asked about.
+    public var isCurrent: Bool
+    /// The branch on a remote it follows, "origin/main". Nil when none.
+    public var upstream: String?
+    /// Commits it has that its upstream has not, and the other way round.
+    /// Nil without an upstream, or when the upstream is gone.
+    public var ahead: Int?
+    public var behind: Int?
+    /// The branch it followed has been deleted on the remote.
+    public var upstreamGone: Bool
+    /// Everything on it is on the checked out branch too: deleting it
+    /// loses nothing. Always false for a remote's.
+    public var isMerged: Bool
+    /// When its last commit was made, and what that commit says.
+    public var committedAt: Date?
+    public var subject: String
+    /// The folder of another worktree it is checked out in, which is why
+    /// it cannot be switched to here. Nil when in none, or in this one.
+    public var worktree: String?
+
+    public var id: String { (isRemote ? "remote:" : "") + name }
+
+    public init(
+        name: String, isRemote: Bool = false, isCurrent: Bool = false, upstream: String? = nil, ahead: Int? = nil, behind: Int? = nil,
+        upstreamGone: Bool = false, isMerged: Bool = false, committedAt: Date? = nil, subject: String = "", worktree: String? = nil
+    ) {
+        self.name = name
+        self.isRemote = isRemote
+        self.isCurrent = isCurrent
+        self.upstream = upstream
+        self.ahead = ahead
+        self.behind = behind
+        self.upstreamGone = upstreamGone
+        self.isMerged = isMerged
+        self.committedAt = committedAt
+        self.subject = subject
+        self.worktree = worktree
+    }
+
+    /// The name a branch of the repository's own has when it is made from
+    /// this one: "feature" for "origin/feature", its own name otherwise.
+    public var localName: String {
+        guard isRemote, let slash = name.firstIndex(of: "/") else { return name }
+        return String(name[name.index(after: slash)...])
+    }
+
+    /// How far it is from the branch it follows, in a few words for a row:
+    /// "2 ahead, 1 behind", "its remote branch is gone", or nothing.
+    public var tracking: String {
+        if upstreamGone { return "its remote branch is gone" }
+        var parts: [String] = []
+        if let ahead, ahead > 0 { parts.append("\(ahead) ahead") }
+        if let behind, behind > 0 { parts.append("\(behind) behind") }
+        return parts.joined(separator: ", ")
+    }
+}
+
+/// What is asked before a branch is deleted (#35), the same on every
+/// device. A branch whose commits are on the checked out branch too is
+/// asked about once; one that has commits of its own is asked about twice,
+/// the second time saying what would be lost.
+public struct DeleteBranchQuestion: Equatable, Sendable {
+    public var title: String
+    public var message: String
+    public var confirm: String
+
+    /// - Parameter again: The second question, for a branch that is not merged.
+    public init(branch: BranchInfo, into current: String?, again: Bool = false) {
+        let onto = current.map { "“\($0)”" } ?? "the checked out commit"
+        if again {
+            title = "Delete “\(branch.name)” and lose its commits?"
+            message = "Its commits are on no other branch here. Once it is deleted, git forgets them after a while, and nothing in AgentTerm brings them back."
+            confirm = "Delete and Lose Its Commits"
+        } else if branch.isMerged {
+            title = "Delete the branch “\(branch.name)”?"
+            message = "Everything on it is on \(onto) too, so nothing is lost."
+            confirm = "Delete Branch"
+        } else {
+            title = "Delete the branch “\(branch.name)”?"
+            message = "It has commits that are not on \(onto). You are asked once more before they are lost."
+            confirm = "Delete…"
+        }
+    }
+}
+
 /// What the user is asked before changes are discarded (#39), the same on
 /// the Mac and the iPhone: discarding cannot be taken back for a file git
 /// tracks, and moves one it does not track to the Trash.

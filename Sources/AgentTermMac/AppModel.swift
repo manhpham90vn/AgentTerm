@@ -1291,6 +1291,8 @@ final class AppModel: ObservableObject {
             devices = list
         case .accountUsage(let list):
             accountUsage = Dictionary(list.map { ($0.agent, $0) }, uniquingKeysWith: { $1 })
+        case .gitBranches(let path, let list):
+            if path == panelFolder { branches = list }
         case .diff(let path, let snapshot):
             // Only asked for on another Mac: this Mac's changes are read
             // from its own disk.
@@ -1854,6 +1856,74 @@ final class AppModel: ObservableObject {
             return
         }
         git { GitActions.unstage(paths, in: $0) }
+    }
+
+    // MARK: Branches (#35)
+
+    /// The branches of the folder the side panel shows, its own first.
+    /// Read when the list of them is opened, and after each change to them.
+    @Published private(set) var branches: [BranchInfo] = []
+    /// The branch the user is asked about before it is deleted, and whether
+    /// this is the second question, for one with commits of its own.
+    @Published var deletingBranch: (branch: BranchInfo, again: Bool)?
+
+    func loadBranches() {
+        guard let directory = panelFolder else {
+            branches = []
+            return
+        }
+        if isRemote {
+            connection?.send(.gitBranches(path: directory))
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let list = GitActions.branches(in: directory)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.panelFolder == directory else { return }
+                self.branches = list
+            }
+        }
+    }
+
+    /// Runs a change to the branches here or on the other Mac, then shows
+    /// the branches and the changes as they are.
+    private func changeBranches(_ message: (String) -> ClientMessage, _ action: @escaping (String) -> String?) {
+        guard let directory = panelFolder else { return }
+        if isRemote {
+            sendForDiff(message(directory), in: directory)
+            return
+        }
+        git(action) { [weak self] _ in self?.loadBranches() }
+    }
+
+    func switchBranch(_ branch: BranchInfo) {
+        changeBranches({ .gitSwitch(path: $0, branch: branch.name) }) { GitActions.switchTo(branch.name, in: $0) }
+    }
+
+    func createBranch(named name: String, from start: String?, checkout: Bool) {
+        changeBranches({ .gitCreateBranch(path: $0, name: name, from: start, checkout: checkout) }) {
+            GitActions.createBranch(name, from: start, checkout: checkout, in: $0)
+        }
+    }
+
+    func renameBranch(_ branch: BranchInfo, to name: String) {
+        changeBranches({ .gitRenameBranch(path: $0, from: branch.name, to: name) }) { GitActions.renameBranch(branch.name, to: name, in: $0) }
+    }
+
+    /// Asked first; a branch with commits of its own is asked about twice.
+    func requestDeleteBranch(_ branch: BranchInfo) { deletingBranch = (branch, false) }
+
+    func deleteBranchConfirmed() {
+        guard let asked = deletingBranch else { return }
+        if !asked.branch.isMerged && !asked.again {
+            deletingBranch = (asked.branch, true)
+            return
+        }
+        deletingBranch = nil
+        let force = !asked.branch.isMerged
+        changeBranches({ .gitDeleteBranch(path: $0, name: asked.branch.name, force: force) }) {
+            GitActions.deleteBranch(asked.branch.name, force: force, in: $0)
+        }
     }
 
     /// The changes the user is asked about before they are discarded (#39).
