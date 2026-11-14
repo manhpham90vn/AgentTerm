@@ -188,12 +188,16 @@ enum Subprocess {
             }
         }
         close(pipe[0])
-        var status: Int32 = 0
-        while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
+        // Seen to end but not reaped, so that its number is still its own
+        // while the timer may yet signal it; reaped once the timer cannot.
+        var info = siginfo_t()
+        while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) < 0 && errno == EINTR {}
         lock.lock()
         ended = true
         lock.unlock()
         timer.cancel()
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) < 0 && errno == EINTR {}
         let signal = status & 0x7f
         return (signal == 0 ? (status >> 8) & 0xff : signal, output)
     }
