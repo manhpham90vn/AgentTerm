@@ -289,20 +289,10 @@ private struct WorktreeBar: View {
     private var list: [WorktreeInfo] { folder.flatMap { model.worktrees[$0] } ?? [] }
     private var shown: WorktreeInfo? { list.first { $0.path == (model.shownWorktree ?? folder) } ?? list.first }
 
-    private func title(_ worktree: WorktreeInfo) -> String {
-        if worktree.isMain { return (worktree.path as NSString).lastPathComponent + (worktree.branch.map { " · \($0)" } ?? "") }
-        return worktree.branch ?? (worktree.path as NSString).lastPathComponent
-    }
-
-    private func detail(_ worktree: WorktreeInfo) -> String {
-        if worktree.missing { return "missing: its folder is gone" }
-        var parts: [String] = []
-        if worktree.ahead > 0 { parts.append("\(worktree.ahead) ahead") }
-        if worktree.changed > 0 { parts.append("\(worktree.changed) changed") }
-        if !worktree.isAgentTerm && !worktree.isMain { parts.append((worktree.path as NSString).abbreviatingWithTildeInPath) }
-        if worktree.inUse { parts.append("in use") }
-        return parts.joined(separator: ", ")
-    }
+    private func title(_ worktree: WorktreeInfo) -> String { worktree.menuTitle }
+    private func detail(_ worktree: WorktreeInfo) -> String { worktree.menuDetail }
+    /// Where it is, in full: said by a tooltip, not in the row (#56).
+    private func place(_ worktree: WorktreeInfo) -> String { (worktree.path as NSString).abbreviatingWithTildeInPath }
 
     var body: some View {
         if let folder, list.count > 1, let shown {
@@ -317,6 +307,7 @@ private struct WorktreeBar: View {
                             Text(title(worktree) + (more.isEmpty ? "" : " — \(more)"))
                         }
                         .disabled(worktree.missing)
+                        .help(place(worktree))
                     }
                     Divider()
                     Button("Setup Command for New Worktrees…") {
@@ -329,7 +320,9 @@ private struct WorktreeBar: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 .accessibilityIdentifier("worktree-menu")
-                Text(detail(shown)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                Text(detail(shown)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    .help(place(shown))
+                    .accessibilityIdentifier("worktree-detail")
                 Spacer(minLength: 0)
                 if !shown.isMain {
                     Menu("Finish") {

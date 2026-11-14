@@ -62,6 +62,33 @@ public struct WorktreeInfo: Codable, Equatable, Hashable, Identifiable, Sendable
     }
 }
 
+// MARK: In words
+
+extension WorktreeInfo {
+    /// What a worktree is called where the folder's worktrees are listed:
+    /// its branch, and for the folder's own the folder first.
+    public var menuTitle: String {
+        let folder = (path as NSString).lastPathComponent
+        if isMain { return folder + (branch.map { " · \($0)" } ?? "") }
+        return branch ?? folder
+    }
+
+    /// What is said of it after its name, short enough for a row to be
+    /// read at a glance (#56). A worktree AgentTerm did not make is told
+    /// from another by the name of its folder, not by its whole path,
+    /// which is what a tooltip is for.
+    public var menuDetail: String {
+        if missing { return "missing: its folder is gone" }
+        var parts: [String] = []
+        if ahead > 0 { parts.append("\(ahead) ahead") }
+        if changed > 0 { parts.append("\(changed) changed") }
+        let folder = (path as NSString).lastPathComponent
+        if !isAgentTerm && !isMain && folder != menuTitle { parts.append("in \(folder)") }
+        if inUse { parts.append("in use") }
+        return parts.joined(separator: ", ")
+    }
+}
+
 /// What to do with a worktree whose work is finished (#23).
 public enum WorktreeFinish: String, Codable, Sendable {
     /// Merge its branch into the folder's branch, then remove it.

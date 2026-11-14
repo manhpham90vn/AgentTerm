@@ -298,4 +298,22 @@ final class ProtocolTests: XCTestCase {
         for frame in other { second = joiner.add(frame) ?? second }
         XCTAssertEqual(second, Data(repeating: 1, count: 300_000))
     }
+    /// WT-12 (#56): a worktree's row is short: the name of its folder
+    /// stands for its path.
+    func testAWorktreesRowNamesItsFolderNotItsPath() {
+        let own = WorktreeInfo(path: "/Users/someone/code/project", branch: "main", isMain: true, changed: 1)
+        XCTAssertEqual(own.menuTitle, "project · main")
+        XCTAssertEqual(own.menuDetail, "1 changed")
+        let made = WorktreeInfo(path: "/Users/someone/code/project/.agentterm/worktrees/agentterm/claude-1", branch: "agentterm/claude-1", isMain: false, ahead: 2, inUse: true, isAgentTerm: true)
+        XCTAssertEqual(made.menuDetail, "2 ahead, in use")
+        let elsewhere = WorktreeInfo(
+            path: "/Users/someone/a/long/path/to/the/worktrees/of/project/review-copy", branch: "feature/login", isMain: false, ahead: 2, changed: 3, inUse: true)
+        XCTAssertEqual(elsewhere.menuTitle, "feature/login")
+        XCTAssertEqual(elsewhere.menuDetail, "2 ahead, 3 changed, in review-copy, in use")
+        XCTAssertFalse(elsewhere.menuDetail.contains("/"), "no path in the row")
+        // A folder named as its branch is not said twice.
+        XCTAssertEqual(WorktreeInfo(path: "/Users/someone/wt/hotfix", branch: "hotfix", isMain: false).menuDetail, "")
+        XCTAssertEqual(WorktreeInfo(path: "/gone", branch: "old", isMain: false, missing: true).menuDetail, "missing: its folder is gone")
+    }
+
 }

@@ -442,6 +442,7 @@ A second host stands in for the other Mac, with a project of its own.
 | WT-9 | A worktree whose changes are watched | Its branch is pushed in a terminal (its remote branch written in the repository's own git folder) | The watch sees it, so ahead and behind are read again | H |
 | WT-10 | A folder inside a worktree AgentTerm made | A worktree is made from it; one from the top of the first | Next to the first, the session in the same folder inside it; then at the top of the new one | H |
 | WT-11 | A host started by a test, a folder with a setup command | A session is started in a new worktree | The setup command's login shell reads its startup files where a session's does: none of the person running the tests is read (TEST-1) | H |
+| WT-12 | Worktrees: the folder's own, one AgentTerm made, one made elsewhere at a long path, one whose folder is named as its branch, one that is missing | What the menu's row says of each | The branch, how far ahead, how many changed, in use; for one made elsewhere the name of its folder and never its path, which the tooltip says; a folder named as the branch is not said twice | U; the tooltip by hand |
 
 ### Schedules
 
