@@ -102,8 +102,8 @@ extension GitActions {
     }
 
     /// Makes a commit on the checked out branch that takes back what
-    /// `hash` changed. When that conflicts it is undone: there is nowhere
-    /// here to resolve it yet.
+    /// `hash` changed. When that conflicts it is left to be resolved and
+    /// continued, or aborted (#42).
     public static func revert(_ hash: String, in directory: String) -> String? {
         apply("revert", ["revert", "--no-edit"], hash, in: directory)
     }
@@ -124,8 +124,8 @@ extension GitActions {
         return findingTools { () -> String? in
             guard let problem = run(command + [hash], in: directory, timeout: 120, environment: actionEnvironment) else { return nil }
             guard !before, marks(marker, in: directory) else { return problem }
-            _ = run([what, "--abort"], in: directory)
-            return "\(what == "revert" ? "Reverting" : "Picking") \(details.commit.short) ran into conflicts and was undone. Do it in a terminal to resolve them.\n\n\(problem)"
+            // Left as it is, to be resolved and continued, or aborted (#42).
+            return stoppedOnConflicts("\(what == "revert" ? "Reverting" : "Picking") \(details.commit.short)", as: what, said: problem)
         }
     }
 }

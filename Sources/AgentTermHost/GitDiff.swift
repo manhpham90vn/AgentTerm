@@ -15,11 +15,12 @@ public enum GitDiff {
     /// only for what status says is staged or not, and the patches of new
     /// files are made here rather than by a git for each (#21).
     public static func snapshot(directory: String) -> DiffSnapshot {
-        guard let head = run(["rev-parse", "--is-inside-work-tree", "--show-prefix"], in: directory) else { return .notARepository }
+        guard let head = run(["rev-parse", "--is-inside-work-tree", "--show-prefix", "--absolute-git-dir"], in: directory) else { return .notARepository }
         let lines = head.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         guard lines.first == "true" else { return .notARepository }
         // The folder's place in its repository: status names paths from the top.
         let prefix = lines.count > 1 ? lines[1] : ""
+        let gitDirectory = lines.count > 2 ? lines[2] : ""
         guard let status = run(["status", "--porcelain=v2", "-z", "--branch", "--untracked-files=all", "--no-renames", "--", "."], in: directory)
         else { return .notARepository }
         let read = readStatus(status, prefix: prefix)
@@ -40,8 +41,17 @@ public enum GitDiff {
         // The working tree against the index is what is not staged.
         if read.unstaged { files += parse(run(["diff"] + options, in: directory) ?? "") }
         for path in read.untracked.prefix(maxUntrackedFiles) { files.append(newFile(path, in: directory)) }
+        // The files a merge, a rebase or a pick stopped on (#42): first, and
+        // each with the file as it is now, markers and all, against both sides.
+        if !read.conflicts.isEmpty {
+            let combined = run(["diff", "--no-color", "--no-ext-diff", "--relative"], in: directory) ?? ""
+            let conflicts = read.conflicts.map { conflict -> FileDiff in
+                FileDiff(path: conflict.path, added: 0, deleted: 0, isUntracked: false, patch: combinedPatch(of: conflict.path, in: combined), conflict: conflict.code)
+            }
+            files = conflicts + files.filter { file in !conflicts.contains { $0.path == file.path } }
+        }
 
-        var snapshot = DiffSnapshot(isRepository: true, branch: read.branch, files: files)
+        var snapshot = DiffSnapshot(isRepository: true, branch: read.branch, files: files, operation: operation(inGitDirectory: gitDirectory))
         if snapshot.branch != nil {
             snapshot.upstream = read.upstream
             snapshot.ahead = read.upstream == nil ? nil : read.ahead
@@ -57,11 +67,45 @@ public enum GitDiff {
         return snapshot
     }
 
+    /// What git is stopped in the middle of, by what it keeps in its own
+    /// folder meanwhile.
+    static func operation(inGitDirectory directory: String) -> GitOperation? {
+        guard !directory.isEmpty else { return nil }
+        func exists(_ name: String) -> Bool { FileManager.default.fileExists(atPath: (directory as NSString).appendingPathComponent(name)) }
+        if exists("rebase-merge") || exists("rebase-apply") { return .rebase }
+        if exists("CHERRY_PICK_HEAD") { return .cherryPick }
+        if exists("REVERT_HEAD") { return .revert }
+        return exists("MERGE_HEAD") ? .merge : nil
+    }
+
+    /// One file's part of a diff of files that conflict (`diff --cc`), from
+    /// its first hunk header: the file as it is, with what each side has.
+    static func combinedPatch(of path: String, in diff: String) -> String {
+        var body: [Substring] = []
+        var inFile = false
+        var inHunks = false
+        for line in diff.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("diff --cc ") || line.hasPrefix("diff --combined ") || line.hasPrefix("diff --git ") {
+                if inFile { break }
+                inFile = line == "diff --cc \(path)" || line == "diff --combined \(path)"
+                inHunks = false
+            } else if inFile {
+                if line.hasPrefix("@@@") { inHunks = true }
+                if inHunks { body.append(line) }
+            }
+        }
+        if body.last == "" { body.removeLast() }
+        let patch = body.joined(separator: "\n")
+        return patch.utf8.count > maxPatchBytes ? String(patch.prefix(maxPatchBytes)) + "\n… diff truncated …" : patch
+    }
+
     /// What `git status --porcelain=v2 -z --branch` says, for the paths
     /// under `prefix`, named from there.
     static func readStatus(_ text: String, prefix: String) -> (
-        branch: String?, upstream: String?, ahead: Int?, behind: Int?, staged: Bool, unstaged: Bool, untracked: [String]
+        branch: String?, upstream: String?, ahead: Int?, behind: Int?, staged: Bool, unstaged: Bool, untracked: [String],
+        conflicts: [(path: String, code: String)]
     ) {
+        var conflicts: [(path: String, code: String)] = []
         var branch: String?
         var upstream: String?
         var ahead: Int?
@@ -82,7 +126,13 @@ public enum GitDiff {
             } else if record.hasPrefix("1 ") || record.hasPrefix("2 ") || record.hasPrefix("u ") {
                 let code = record.dropFirst(2).prefix(2)
                 if record.hasPrefix("u ") {
-                    unstaged = true
+                    // "u XY sub m1 m2 m3 mW h1 h2 h3 path": the path is the
+                    // eleventh word, and may hold spaces itself.
+                    let words = record.split(separator: " ", maxSplits: 10, omittingEmptySubsequences: false)
+                    if words.count == 11 {
+                        let path = String(words[10])
+                        if path.hasPrefix(prefix) { conflicts.append((String(path.dropFirst(prefix.count)), String(code))) }
+                    }
                 } else {
                     if code.first != "." { staged = true }
                     if code.last != "." { unstaged = true }
@@ -92,7 +142,7 @@ public enum GitDiff {
                 if path.hasPrefix(prefix) { untracked.append(String(path.dropFirst(prefix.count))) }
             }
         }
-        return (branch, upstream, ahead, behind, staged, unstaged, untracked)
+        return (branch, upstream, ahead, behind, staged, unstaged, untracked, conflicts)
     }
 
     /// The largest new file whose lines are shown.
@@ -248,7 +298,12 @@ public enum GitActions {
     /// Stages files for the next commit. No files means every change,
     /// new and deleted files included.
     public static func stage(_ files: [String], in directory: String) -> String? {
-        files.isEmpty ? run(["add", "--all"], in: directory) : run(["add", "--"] + files, in: directory)
+        // Staging a file that conflicts is how git is told it is resolved:
+        // everything at once would say so of files nobody looked at (#42).
+        if files.isEmpty, list(["diff", "--name-only", "--diff-filter=U", "-z"], in: directory)?.isEmpty == false {
+            return "Some files conflict. Resolve each of them first: staging everything would take them as they are, markers and all."
+        }
+        return files.isEmpty ? run(["add", "--all"], in: directory) : run(["add", "--"] + files, in: directory)
     }
 
     /// Takes files out of the next commit, leaving the working tree as it
@@ -392,22 +447,28 @@ public enum GitActions {
 
     /// Brings in what the upstream has, the way the repository is set up to
     /// unless a merge or a rebase is asked for. A pull that stops on a
-    /// conflict is undone, since there is nowhere here to resolve it.
+    /// conflict is left as it is, to be resolved and continued, or aborted
+    /// (#42): it says so.
     public static func pull(in directory: String, mode: PullMode = .asSetUp) -> String? {
         guard let branch = currentBranch(in: directory) else { return "Check out a branch to pull: this is a detached HEAD." }
         guard GitDiff.tracking(of: branch, in: directory).upstream != nil else {
             return "\(branch) does not follow a branch on a remote yet. Push it first."
         }
-        // A merge or rebase the user left unfinished is theirs, not this pull's.
         let before = unfinished(in: directory)
         let problem = findingTools { () -> String? in
             let how = mode == .merge ? ["--no-rebase"] : mode == .rebase ? ["--rebase"] : []
             guard let problem = run(["pull", "--no-edit"] + how, in: directory, timeout: remoteTimeout, environment: actionEnvironment) else { return nil }
+            // Stopped by this pull, not left from before: said, with what to do.
             guard before == nil, let left = unfinished(in: directory) else { return problem }
-            _ = run([left, "--abort"], in: directory)
-            return "The pull ran into conflicts and was undone. Pull in a terminal to resolve them.\n\n\(problem)"
+            return stoppedOnConflicts("The pull", as: left, said: problem)
         }
         return problem.map(explainingSignIn)
+    }
+
+    /// What is said when something stopped on conflicts that are now to be
+    /// resolved in the app.
+    static func stoppedOnConflicts(_ what: String, as operation: String, said: String) -> String {
+        "\(what) stopped on conflicts. The files that conflict are listed under Changes: resolve each, then Continue, or Abort to put everything back.\n\n\(said)"
     }
 
     private static let remoteTimeout: TimeInterval = 120

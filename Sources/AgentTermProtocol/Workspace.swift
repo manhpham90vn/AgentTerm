@@ -24,13 +24,17 @@ public struct FileDiff: Codable, Identifiable, Equatable, Sendable {
     /// of each kind.
     public var isStaged: Bool
     public var status: Status
+    /// How the file conflicts, while a merge, a rebase, a cherry-pick or a
+    /// revert is stopped on it (#42): git's two letters, "UU" when both
+    /// sides changed it. Nil for a file that does not conflict.
+    public var conflict: String?
 
     /// Staged and unstaged entries of one file are different rows.
-    public var id: String { (isStaged ? "staged:" : "") + path }
+    public var id: String { (conflict != nil ? "conflict:" : isStaged ? "staged:" : "") + path }
 
     public init(
         path: String, added: Int, deleted: Int, isUntracked: Bool, patch: String,
-        isStaged: Bool = false, status: Status = .modified
+        isStaged: Bool = false, status: Status = .modified, conflict: String? = nil
     ) {
         self.path = path
         self.added = added
@@ -39,10 +43,82 @@ public struct FileDiff: Codable, Identifiable, Equatable, Sendable {
         self.patch = patch
         self.isStaged = isStaged
         self.status = status
+        self.conflict = conflict
     }
 
-    /// One letter for a list: git's letter, or "U" for a file git does not track yet.
-    public var marker: String { isUntracked ? "U" : status.rawValue }
+    /// One letter for a list: git's letter, "U" for a file git does not
+    /// track yet, "!" for one that conflicts.
+    public var marker: String { conflict != nil ? "!" : isUntracked ? "U" : status.rawValue }
+
+    /// How a file that conflicts does, in a few words: which side did what.
+    /// "Ours" is the side that is checked out, "theirs" what is brought in.
+    public var conflictWords: String? {
+        switch conflict {
+        case nil: return nil
+        case "UU": return "both sides changed it"
+        case "AA": return "both sides added it"
+        case "DD": return "both sides deleted it"
+        case "DU": return "ours deleted it, theirs changed it"
+        case "UD": return "ours changed it, theirs deleted it"
+        case "AU": return "only ours added it"
+        case "UA": return "only theirs added it"
+        default: return "it conflicts"
+        }
+    }
+}
+
+/// What git is in the middle of when it stopped on conflicts (#42).
+public enum GitOperation: String, Codable, Sendable {
+    case merge
+    case rebase
+    case cherryPick = "cherry-pick"
+    case revert
+
+    /// "Merging", "Rebasing": what is going on, for a banner.
+    public var doing: String {
+        switch self {
+        case .merge: return "Merging"
+        case .rebase: return "Rebasing"
+        case .cherryPick: return "Cherry-picking"
+        case .revert: return "Reverting"
+        }
+    }
+
+    /// What "ours" and "theirs" are while it goes on, which differs.
+    public var sides: String {
+        switch self {
+        case .merge: return "Ours is the branch that is checked out; theirs is what is merged into it."
+        case .rebase: return "Ours is the branch being rebased onto; theirs is the commit of this branch that is being put on top of it."
+        case .cherryPick: return "Ours is the branch that is checked out; theirs is the commit being picked."
+        case .revert: return "Ours is the branch that is checked out; theirs is the state before the commit being reverted."
+        }
+    }
+}
+
+/// What is said and asked while git is stopped on conflicts (#42), the
+/// same on every device.
+public struct ConflictWords: Equatable, Sendable {
+    /// "Merging: 2 files conflict", or that all are resolved.
+    public var headline: String
+    public var advice: String
+    public var abortTitle: String
+    public var abortMessage: String
+
+    public init(operation: GitOperation?, conflicts: Int) {
+        let what = operation?.doing ?? "Conflicts"
+        if conflicts > 0 {
+            headline = "\(what): \(conflicts) \(conflicts == 1 ? "file conflicts" : "files conflict")"
+            advice =
+                "Resolve each by taking one side or by editing it, on the Mac."
+                + (operation.map { " \($0.sides)" } ?? " Ours is what was in the folder; theirs is what was brought in.")
+        } else {
+            headline = "\(what): every conflict is resolved"
+            advice = "Continue finishes it; Abort puts everything back as it was before."
+        }
+        let name = operation.map { "the \($0.rawValue)" } ?? "it"
+        abortTitle = "Abort \(name)?"
+        abortMessage = "The folder and the branch go back to where they were before \(name) began. What was resolved so far is lost."
+    }
 }
 
 /// The commit a branch is at, as far as amending or undoing it needs to
@@ -458,11 +534,18 @@ public struct DiffSnapshot: Codable, Equatable, Sendable {
     /// The remote a first push would go to, for a branch without an
     /// upstream. Nil when there is an upstream, or no remote at all.
     public var pushRemote: String?
+    /// What git stopped in the middle of, waiting for conflicts to be
+    /// resolved and then to be continued or aborted (#42). Nil when nothing.
+    public var operation: GitOperation?
+
+    /// The files that conflict.
+    public var conflicts: [FileDiff] { files.filter { $0.conflict != nil } }
 
     public init(
         isRepository: Bool, branch: String?, files: [FileDiff],
-        upstream: String? = nil, ahead: Int? = nil, behind: Int? = nil, pushRemote: String? = nil
+        upstream: String? = nil, ahead: Int? = nil, behind: Int? = nil, pushRemote: String? = nil, operation: GitOperation? = nil
     ) {
+        self.operation = operation
         self.isRepository = isRepository
         self.branch = branch
         self.files = files
@@ -481,8 +564,9 @@ public struct DiffSnapshot: Codable, Equatable, Sendable {
 
     /// What the next commit would contain.
     public var staged: [FileDiff] { files.filter(\.isStaged) }
-    /// Changes that are not staged, files git does not track yet included.
-    public var unstaged: [FileDiff] { files.filter { !$0.isStaged } }
+    /// Changes that are not staged, files git does not track yet included;
+    /// not the files that conflict, which are a list of their own.
+    public var unstaged: [FileDiff] { files.filter { !$0.isStaged && $0.conflict == nil } }
 
     /// The same list without the diffs themselves, which can be megabytes.
     public var withoutPatches: DiffSnapshot {

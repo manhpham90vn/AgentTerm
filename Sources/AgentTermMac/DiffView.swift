@@ -97,6 +97,12 @@ struct DiffView: View {
         } else if let diff = model.diff {
             if !diff.isRepository {
                 placeholder("This folder is not a git repository.")
+            } else if diff.files.isEmpty && diff.operation != nil {
+                // Stopped, with nothing left to resolve or commit.
+                VStack(spacing: 0) {
+                    ConflictBanner(diff: diff)
+                    placeholder("Nothing else is changed.")
+                }
             } else if diff.files.isEmpty && !model.isAmending {
                 placeholder("No uncommitted changes.")
             } else {
@@ -131,6 +137,16 @@ struct DiffView: View {
             LazyVStack(spacing: 1) {
                 let staged = diff.staged
                 let unstaged = diff.unstaged
+                let conflicts = diff.conflicts
+                if diff.operation != nil || !conflicts.isEmpty {
+                    // What git is stopped in, above everything else (#42).
+                    ConflictBanner(diff: diff)
+                        .padding(.bottom, 4)
+                    ForEach(conflicts) { file in
+                        ConflictRow(file: file, selected: file.id == selectedFile?.id)
+                            .onTapGesture { model.openDiff(file) }
+                    }
+                }
                 if !staged.isEmpty {
                     ChangesHeader(title: "Staged", count: staged.count, symbol: "minus", help: "Unstage all") { model.unstage([]) }
                     rows(staged)
@@ -180,6 +196,116 @@ struct DiffView: View {
                     .onTapGesture { model.openDiff(file) }
             }
         }
+    }
+}
+
+/// What git is stopped in the middle of (#42): how many files conflict,
+/// which side is which, and Continue once all are resolved, or Abort.
+private struct ConflictBanner: View {
+    @EnvironmentObject private var model: AppModel
+    let diff: DiffSnapshot
+
+    private var words: ConflictWords { ConflictWords(operation: diff.operation, conflicts: diff.conflicts.count) }
+    private var busy: Bool { model.panelFolder.flatMap { model.syncing[$0] } != nil }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: diff.conflicts.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(diff.conflicts.isEmpty ? Color.green : Color.yellow)
+                    .font(.system(size: 11))
+                Text(words.headline).font(.system(size: 12, weight: .semibold))
+            }
+            Text(words.advice)
+                .font(.system(size: 10.5))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if diff.operation != nil {
+                HStack(spacing: 6) {
+                    Button("Abort…", role: .destructive) { model.confirmingAbort = true }
+                        .accessibilityIdentifier("conflicts-abort")
+                    Button("Continue") { model.continueOperation() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!diff.conflicts.isEmpty)
+                        .help(diff.conflicts.isEmpty ? "Finish it with what was resolved" : "Resolve every file that conflicts first")
+                        .accessibilityIdentifier("conflicts-continue")
+                    Spacer(minLength: 0)
+                }
+                .controlSize(.small)
+                .disabled(busy)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.yellow.opacity(0.10)))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("conflicts")
+        .confirmationDialog(words.abortTitle, isPresented: $model.confirmingAbort, titleVisibility: .visible) {
+            Button("Abort", role: .destructive) { model.abortOperationConfirmed() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(words.abortMessage)
+        }
+    }
+}
+
+/// A file that conflicts: how, and the ways to resolve it. Pressed, it
+/// shows the file as it is, with what each side has.
+private struct ConflictRow: View {
+    @EnvironmentObject private var model: AppModel
+    let file: FileDiff
+    let selected: Bool
+    @State private var hovering = false
+
+    private var name: String { (file.path as NSString).lastPathComponent }
+    private func ours() { model.resolve(file, as: .ours) }
+    private func theirs() { model.resolve(file, as: .theirs) }
+    private func edit() { model.edit(conflict: file) }
+    private func edited() { model.resolve(file, as: .edited) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Text(file.marker)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.yellow)
+                    .frame(width: 12)
+                Text(name).font(.system(size: 12)).lineLimit(1)
+                Text(file.conflictWords ?? "")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("\(name), conflicts: \(file.conflictWords ?? "")")
+            .accessibilityIdentifier("conflict-" + file.path)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction { model.openDiff(file) }
+            HStack(spacing: 5) {
+                Button("Take Ours", action: ours).accessibilityLabel("Take ours for \(name)")
+                Button("Take Theirs", action: theirs).accessibilityLabel("Take theirs for \(name)")
+                Button("Edit", action: edit)
+                    .help("Open the file in the editor, with its markers, to put it right by hand")
+                    .accessibilityLabel("Edit \(name)")
+                Button("Mark Resolved", action: edited)
+                    .help("The file is as it should be: its markers are gone")
+                    .accessibilityLabel("Mark \(name) resolved")
+            }
+            .controlSize(.mini)
+            .padding(.leading, 18)
+        }
+        .padding(.leading, 8)
+        .padding(.trailing, 6)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(selected ? Color.white.opacity(0.11) : (hovering ? Color.white.opacity(0.05) : .clear))
+        )
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .help(file.path)
     }
 }
 
@@ -708,7 +834,7 @@ struct DiffDocumentView: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 // Of a commit, its hash; else which of the two lists it is in.
-                Text(model.diffTabLabel ?? (file.isStaged ? "STAGED" : "CHANGES"))
+                Text(model.diffTabLabel ?? (file.conflict != nil ? "CONFLICT" : file.isStaged ? "STAGED" : "CHANGES"))
                     .font(.system(size: 9.5, weight: .bold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)
@@ -731,7 +857,7 @@ struct DiffDocumentView: View {
                 .foregroundStyle(.secondary)
                 .help(isSplit ? "Show the diff in one panel" : "Show before and after side by side")
                 .accessibilityLabel(isSplit ? "Show in one panel" : "Show side by side")
-                if model.diffTabCommit == nil {
+                if model.diffTabCommit == nil, file.conflict == nil {
                     if hasParts {
                         // One hunk, or some lines: the same in either layout.
                         Button(file.isStaged ? "Unstage Parts…" : "Stage Parts…") { pickingParts = true }

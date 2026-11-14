@@ -519,7 +519,7 @@ panel.
     **Publish Branch**, which says where the branch would go and, once
     confirmed, pushes it there and follows it from then on. git never waits
     for a password or a passphrase here: a remote that would ask fails with
-    git's message. A pull that stops on a conflict is undone, and says so.
+    git's message. A pull that stops on a conflict is left to be resolved, and says so.
     The count of commits to pull is as of the last time the remote was
     asked; pulling asks.
     **Commits**, beside **Changes** under the buttons, lists the history of
@@ -535,7 +535,7 @@ panel.
     shows what it brought in. From a commit's menu it is **reverted**, by
     a new commit that takes its change back, or **cherry-picked** onto the
     checked out branch; each is asked first, and one that runs into
-    conflicts is undone and says so. A merge commit is not reverted or
+    conflicts is left to be resolved, and says so. A merge commit is not reverted or
     picked here: git has to be told which side to keep.
     **Stashes**, the third list, is the repository's stash. **Stash
     Changes…** puts what is staged and what is not aside, under a name
@@ -568,9 +568,23 @@ panel.
     changed since, is refused in words. It is the same in both layouts of
     the diff, and on the Mac only: the iPhone stages and discards whole
     files.
+    When a merge, a rebase, a cherry-pick or a revert **stops on
+    conflicts**, whether a pull, a pick from Commits or something done in a
+    terminal began it, it is left as it is and the top of Changes says so:
+    what is going on, how many files conflict, and which side "ours" and
+    "theirs" are, which is not the same in a rebase as in a merge. The
+    files that conflict are a list of their own, each saying how it
+    conflicts (both sides changed it, one deleted it). A file is resolved
+    by **Take Ours**, **Take Theirs**, taking a side that deleted it
+    deletes it, or by **Edit**, which opens it in the editor with its
+    markers, and then **Mark Resolved**, refused while a marker is still in
+    it. Pressed, it shows the file as it is against both sides. **Continue**
+    finishes what was stopped once nothing conflicts, and says so when a
+    rebase stops again at its next commit; **Abort…**, asked first, puts
+    the folder and the branch back as they were. Stage all is refused while
+    a file conflicts: it would take those files as they are.
     Not part of it:
-    choosing a remote, and resolving a pull
-    that conflicts.
+    choosing a remote.
 - **History**, the place in the bar at the left: every conversation the
     agents had on the Mac, one section per agent, newest first, each with a
     title, its folder and how long ago it was. A conversation can be
@@ -819,7 +833,10 @@ button at the top right of Sessions goes back to the list of Macs.
   their diffs (reverting and picking a commit are on the Mac); **Stashes**
   stashes the changes, lists the stashes with their files and diffs, and
   applies, pops and drops one, as on the Mac; the last commit is amended
-  and undone from the menu beside the branch, the branch pushed and pulled, and the commit message written by an
+  and undone from the menu beside the branch; what git is stopped in is
+  said at the top with the files that conflict, which show as they are,
+  and can be aborted, or continued once they were resolved on the Mac
+  (resolving a conflict is on the Mac), the branch pushed and pulled, and the commit message written by an
   agent. **History**: the conversations each agent had in the
   folder only, as on the Mac; every conversation is in the History tab. **Files**: see
   Files above.

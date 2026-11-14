@@ -306,7 +306,7 @@ final class GitActionsTests: XCTestCase {
     }
 
     /// GIT-38 (#36): a commit is reverted, and one of another branch is
-    /// picked onto this one; one that conflicts is undone and says so; a
+    /// picked onto this one; one that conflicts is left to be resolved; a
     /// merge is said to be for a terminal.
     func testRevertingAndCherryPickingACommit() throws {
         try write("a.txt", "one\n")
@@ -334,21 +334,31 @@ final class GitActionsTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("c.txt"), encoding: .utf8), "from the side\n")
         XCTAssertEqual(git("log", "-1", "--format=%s"), "a file on the side")
 
-        // One that conflicts is undone: nothing is left half done.
+        // One that conflicts is left to be resolved (#42): said so, and aborted here.
         try write("a.txt", "main's line\n")
         git("commit", "-q", "-am", "main rewrites a")
         let head = git("rev-parse", "HEAD")
-        let refused = try XCTUnwrap(GitActions.cherryPick(rewrites, in: root.path))
-        XCTAssertTrue(refused.hasPrefix("Picking \(rewrites.prefix(7)) ran into conflicts and was undone."), refused)
+        let stopped = try XCTUnwrap(GitActions.cherryPick(rewrites, in: root.path))
+        XCTAssertTrue(stopped.hasPrefix("Picking \(rewrites.prefix(7)) stopped on conflicts."), stopped)
+        XCTAssertEqual(snapshot.operation, .cherryPick)
+        XCTAssertEqual(snapshot.conflicts.map(\.path), ["a.txt"])
+        XCTAssertNil(GitActions.abortOperation(in: root.path))
         XCTAssertEqual(git("rev-parse", "HEAD"), head)
         XCTAssertEqual(git("status", "--porcelain"), "")
-        XCTAssertFalse(GitActions.marks("CHERRY_PICK_HEAD", in: root.path))
+        // Picked again, resolved by taking the commit's side, and continued.
+        _ = GitActions.cherryPick(rewrites, in: root.path)
+        XCTAssertNil(GitActions.resolve("a.txt", as: .theirs, in: root.path))
+        XCTAssertNil(GitActions.continueOperation(in: root.path))
+        XCTAssertEqual(git("log", "-1", "--format=%s"), "side rewrites a")
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8), "side's line\n")
+        git("reset", "-q", "--hard", head)
         // So is a revert: the line "add two" added is no longer what is there.
         let undone = try XCTUnwrap(GitActions.revert(addTwo, in: root.path))
-        XCTAssertTrue(undone.hasPrefix("Reverting \(addTwo.prefix(7)) ran into conflicts and was undone."), undone)
+        XCTAssertTrue(undone.hasPrefix("Reverting \(addTwo.prefix(7)) stopped on conflicts."), undone)
+        XCTAssertEqual(snapshot.operation, .revert)
+        XCTAssertNil(GitActions.abortOperation(in: root.path))
         XCTAssertEqual(git("rev-parse", "HEAD"), head)
         XCTAssertEqual(git("status", "--porcelain"), "")
-        XCTAssertFalse(GitActions.marks("REVERT_HEAD", in: root.path))
 
         // A merge needs to be told which side to keep.
         git("merge", "-q", "--no-ff", "--no-edit", "-X", "ours", "side")

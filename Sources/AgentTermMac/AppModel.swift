@@ -2286,6 +2286,37 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: Conflicts (#42)
+
+    /// Aborting what is stopped on conflicts waits to be confirmed.
+    @Published var confirmingAbort = false
+
+    /// Resolves a file that conflicts by taking one side, or as it is now.
+    func resolve(_ file: FileDiff, as resolution: GitActions.Resolution) {
+        if isRemote, let directory = panelFolder {
+            sendForDiff(.gitResolve(path: directory, file: file.path, take: resolution.rawValue), in: directory)
+            return
+        }
+        git { GitActions.resolve(file.path, as: resolution, in: $0) }
+    }
+
+    /// Opens a file that conflicts in the editor, markers and all.
+    func edit(conflict file: FileDiff) {
+        guard let directory = panelFolder else { return }
+        files.open((directory as NSString).appendingPathComponent(file.path))
+    }
+
+    /// Goes on with the merge, rebase, cherry-pick or revert that stopped.
+    func continueOperation() {
+        guard let directory = panelFolder else { return }
+        sync("continue", in: directory, .gitContinue(path: directory)) { GitActions.continueOperation(in: $0) }
+    }
+
+    func abortOperationConfirmed() {
+        guard let directory = panelFolder else { return }
+        sync("abort", in: directory, .gitAbort(path: directory)) { GitActions.abortOperation(in: $0) }
+    }
+
     // MARK: Parts of a file (#40)
 
     /// Stages, unstages or discards one hunk of a file's change, or the

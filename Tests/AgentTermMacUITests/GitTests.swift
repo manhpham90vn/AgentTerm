@@ -279,6 +279,41 @@ final class GitTests: MacUITestCase {
         app.waitGone(.id("parts-done"))
     }
 
+    /// GIT-58 (#42): a merge that stopped on a conflict shows what it is
+    /// stopped in and the file that conflicts; one side is taken, and it is
+    /// continued.
+    func testAMergeThatConflictsIsResolvedAndContinued() throws {
+        // Someone else changes the line this side changes too.
+        let theirs = root.appendingPathComponent("theirs")
+        git("clone", "-q", remote.path, theirs.path, in: root)
+        git("config", "user.name", "Other", in: theirs)
+        git("config", "user.email", "other@example.com", in: theirs)
+        git("config", "commit.gpgsign", "false", in: theirs)
+        try write("first line\ntheir second line\n", to: "notes.txt", in: theirs)
+        git("commit", "-q", "-am", "theirs: a second line", in: theirs)
+        git("push", "-q", "origin", "HEAD:main", in: theirs)
+        git("commit", "-q", "-am", "mine: a second line", in: project)
+        git("pull", "-q", "--no-rebase", "--no-edit", in: project)
+        XCTAssertTrue(git("status", "--porcelain", in: project).contains("UU notes.txt"), "the fixture did not conflict")
+
+        app.press(.button("Git"))
+        app.wait(for: .containing("Merging: 1 file conflicts"))
+        app.wait(for: .id("conflict-notes.txt"))
+        shot("conflict")
+        // Asked before it is given up; not given up.
+        app.press(.id("conflicts-abort"))
+        app.wait(for: .containing("Abort the merge?"))
+        app.press(.button("Cancel"))
+
+        app.press(.button("Take theirs for notes.txt"))
+        app.wait(for: .containing("Merging: every conflict is resolved"))
+        app.waitGone(.id("conflict-notes.txt"))
+        app.press(.id("conflicts-continue"))
+        wait("the merge to be committed", timeout: 20) { self.git("rev-list", "--merges", "--count", "HEAD", in: self.project) == "1" }
+        app.waitGone(.id("conflicts"))
+        XCTAssertEqual(read("notes.txt"), "first line\ntheir second line\n")
+    }
+
     func testARefusedCommitSaysWhatGitSaid() throws {
         // A hook that refuses every commit, as a project's own checks may.
         let hook = project.appendingPathComponent(".git/hooks/pre-commit")

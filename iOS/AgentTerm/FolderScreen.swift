@@ -91,6 +91,9 @@ private struct ChangesList: View {
                             }
                             .padding(.horizontal, 6)
                             .padding(.bottom, 10)
+                            if diff.operation != nil {
+                                ConflictCard(folder: folder, diff: diff).padding(.bottom, 12)
+                            }
                             if diff.canPush || diff.canPull { SyncBar(folder: folder, diff: diff) }
                             if model.amending[folder] != nil {
                                 // Amending with nothing staged: its message alone.
@@ -125,6 +128,10 @@ private struct ChangesList: View {
                             }
                             .padding(.horizontal, 6)
                             .padding(.bottom, 10)
+                            if diff.operation != nil || !diff.conflicts.isEmpty {
+                                // What git is stopped in, above everything else (#42).
+                                ConflictCard(folder: folder, diff: diff).padding(.bottom, 12)
+                            }
                             if diff.canPush || diff.canPull {
                                 SyncBar(folder: folder, diff: diff)
                                     .padding(.bottom, 12)
@@ -1041,6 +1048,64 @@ struct ConversationSheet: View {
             .onChange(of: model.handoffPlan) { _, plan in
                 if let plan { prompt = plan.prompt }
             }
+        }
+    }
+}
+
+/// What git on the Mac is stopped in the middle of (#42): the files that
+/// conflict, and Abort. Resolving them takes the Mac; once they are
+/// resolved there, Continue finishes it from here too.
+private struct ConflictCard: View {
+    @EnvironmentObject private var model: PhoneModel
+    let folder: String
+    let diff: DiffSnapshot
+    @State private var aborting = false
+
+    private var words: ConflictWords { ConflictWords(operation: diff.operation, conflicts: diff.conflicts.count) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label(words.headline, systemImage: diff.conflicts.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(diff.conflicts.isEmpty ? Color.green : Color.yellow)
+            Text(words.advice).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ForEach(diff.conflicts) { file in
+                NavigationLink(value: Route.file(folder: folder, file: file.path, staged: false)) {
+                    HStack(spacing: 8) {
+                        Text(file.marker).font(.caption.weight(.bold).monospaced()).foregroundStyle(.yellow).frame(width: 14)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text((file.path as NSString).lastPathComponent).font(.subheadline).lineLimit(1)
+                            Text(file.conflictWords ?? "").font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("conflict-" + file.path)
+            }
+            if diff.operation != nil {
+                HStack(spacing: 10) {
+                    Button("Abort…", role: .destructive) { aborting = true }
+                        .accessibilityIdentifier("conflicts-abort")
+                    if diff.conflicts.isEmpty {
+                        Button("Continue") { model.continueOperation(in: folder) }
+                            .buttonStyle(.borderedProminent)
+                            .accessibilityIdentifier("conflicts-continue")
+                    }
+                }
+                .font(.subheadline.weight(.medium))
+                .disabled(model.syncing[folder] != nil || model.status != .connected)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.yellow.opacity(0.12)))
+        .accessibilityIdentifier("conflicts")
+        .confirmationDialog(words.abortTitle, isPresented: $aborting, titleVisibility: .visible) {
+            Button("Abort", role: .destructive) { model.abortOperation(in: folder) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(words.abortMessage)
         }
     }
 }

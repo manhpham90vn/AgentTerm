@@ -1421,6 +1421,24 @@ final class PhoneModel: ObservableObject {
         connection?.send(amending[folder] != nil ? .gitAmend(path: folder, message: message) : .gitCommit(path: folder, message: message))
     }
 
+    // MARK: Conflicts (#42)
+
+    /// Gives up the merge, rebase, cherry-pick or revert that is stopped on
+    /// conflicts on the Mac, once the user was asked. Resolving the files
+    /// is done on the Mac.
+    func abortOperation(in folder: String) {
+        guard status == .connected, syncing[folder] == nil else { return }
+        syncing[folder] = "abort"
+        connection?.send(.gitAbort(path: folder))
+    }
+
+    /// Goes on with it, once every file was resolved on the Mac.
+    func continueOperation(in folder: String) {
+        guard status == .connected, syncing[folder] == nil else { return }
+        syncing[folder] = "continue"
+        connection?.send(.gitContinue(path: folder))
+    }
+
     // MARK: Amend and undo the last commit (#41)
 
     /// The commit being amended, by folder.
