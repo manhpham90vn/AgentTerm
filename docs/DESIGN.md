@@ -620,14 +620,15 @@ takes them, without a change to the user's configuration:
 
 Every hook runs `agenttermd hook <agent> <event>`. It saves what it is told,
 with the agent, the event and the time, in the file `AGENTTERM_EVENTS`
-names: `session-<id>.events.json` in the usage folder, set in the session's
+names: `events/session-<id>.json` in the usage folder, set in the session's
 environment, which the agents pass on to their hooks. The command is the
 same for every session because Codex trusts a hook by its command and asks
 again when it changes. For Antigravity's `PreToolUse` the hook answers
 `{"decision":"allow"}`, which leaves the decision to its own rules.
 
-The host watches the usage folder and reads a session's file when it
-changes, and on every refresh in case a change was missed; only the latest
+The host watches that `events` folder, which holds nothing else (Claude
+Code's status line writes its usage next to it several times a second),
+and reads a session's file when it changes, and on every refresh in case a change was missed; only the latest
 event is kept, since the state follows from it. `AgentHooks.change` makes
 the state from it, from what each agent was seen to tell its hooks on
 2026-11-13 (Claude Code 2.1.323, Copilot CLI 1.0.110, Antigravity 1.5.7;

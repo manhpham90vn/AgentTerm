@@ -442,3 +442,70 @@ final class AgentStateHostTests: XCTestCase {
         XCTAssertEqual(told(mac), true, "every client is told")
     }
 }
+
+/// AGENT-11: a state is known when the agent's hook saves it, through the
+/// host's watch of the folder the hooks write in, not at its next refresh.
+final class AgentStateWatchTests: XCTestCase {
+    private final class Client {
+        let connection: AgentTermConnection
+        var messages: [ServerMessage] = []
+
+        init(port: UInt16, token: String) {
+            connection = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "mac")
+            connection.onMessage = { [weak self] in self?.messages.append($0) }
+            connection.connect()
+        }
+
+        var sessions: [SessionInfo] { messages.compactMap { if case .sessions(let list) = $0 { return list } else { return nil } }.last ?? [] }
+    }
+
+    private var root: URL!
+    private var server: HostServer!
+
+    override func tearDown() {
+        server?.stop()
+        if let root { try? FileManager.default.removeItem(at: root) }
+    }
+
+    private func waitUntil(_ what: String, timeout: TimeInterval = 10, _ condition: () -> Bool) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+        XCTAssertTrue(condition(), "timed out waiting for: \(what)")
+    }
+
+    func testAStateIsKnownWhenItIsSavedNotAtTheNextRefresh() throws {
+        root = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-watch-\(UUID().uuidString)").standardizedFileURL
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let token = "test-token-0123456789abcdef0123456789"
+        var configuration = HostServer.Configuration(
+            port: 0, token: token, listenOnTailscale: false, detectAgents: { [] }, statusLineTool: "/usr/bin/true",
+            usageDirectory: root.appendingPathComponent("usage"))
+        configuration.hooksDirectory = root.appendingPathComponent("hooks")
+        configuration.home = root.path
+        // No refresh within the test: only the watch can tell.
+        configuration.refreshInterval = 600
+        server = HostServer(configuration: configuration)
+        let client = Client(port: try server.start(), token: token)
+        waitUntil("connected") { !client.messages.isEmpty }
+
+        // A stand-in for Claude Code: on each line, what its hook saves.
+        let script = root.appendingPathComponent("claude")
+        try """
+        #!/bin/sh
+        read line; printf '{"agent":"claude","event":"UserPromptSubmit","at":%s,"input":{}}' "$(date +%s)" > "$AGENTTERM_EVENTS.new"; mv "$AGENTTERM_EVENTS.new" "$AGENTTERM_EVENTS"
+        read line; printf '{"agent":"claude","event":"Stop","at":%s,"input":{}}' "$(date +%s)" > "$AGENTTERM_EVENTS.new"; mv "$AGENTTERM_EVENTS.new" "$AGENTTERM_EVENTS"
+        exec sleep 600
+        """.write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        client.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: "agent")))
+        waitUntil("the session") { client.sessions.count == 1 }
+        let agent = try XCTUnwrap(client.sessions.first)
+        // Past the host's first refresh, three seconds after it started.
+        RunLoop.main.run(until: Date().addingTimeInterval(3.5))
+
+        client.connection.sendInput(Data("\n".utf8), to: agent.id)
+        waitUntil("working, well before a refresh", timeout: 2) { client.sessions.first?.state?.isWorking == true }
+        client.connection.sendInput(Data("\n".utf8), to: agent.id)
+        waitUntil("done, well before a refresh", timeout: 2) { client.sessions.first?.state == .done(said: nil) }
+    }
+}

@@ -1673,9 +1673,14 @@ public final class HostServer {
         configuration.usageDirectory?.appendingPathComponent("session-\(id).json")
     }
 
+    /// Where the hooks write, apart from the usage files: Claude Code's
+    /// status line writes those several times a second, and the watch of
+    /// the hooks' folder is not to wake for it.
+    private var eventsDirectory: URL? { configuration.usageDirectory?.appendingPathComponent("events", isDirectory: true) }
+
     /// What a session's agent's hooks last said (`AgentHooks`).
     private func eventsFile(for id: SessionID) -> URL? {
-        configuration.usageDirectory?.appendingPathComponent("session-\(id).events.json")
+        eventsDirectory?.appendingPathComponent("session-\(id).json")
     }
 
     /// Watches the folder the hooks write in, so that a state is known when
@@ -1683,7 +1688,7 @@ public final class HostServer {
     private var eventsWatch: DispatchSourceFileSystemObject?
 
     private func watchEvents() {
-        guard let directory = configuration.usageDirectory else { return }
+        guard let directory = eventsDirectory else { return }
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         let descriptor = open(directory.path, O_EVTONLY)
         guard descriptor >= 0 else { return }
