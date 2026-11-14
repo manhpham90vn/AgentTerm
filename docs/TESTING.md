@@ -463,6 +463,7 @@ A second host stands in for the other Mac, with a project of its own.
 | SCHED-16 | A run of Codex, whose hooks are not trusted, that has written nothing since it started | The next day's time comes; a day later | The next run starts, not skipped; the first is closed, the second kept | H |
 | SCHED-17 | Two such runs, and a third schedule due half an hour after them | Its time comes; an hour after they started | It waits; then it runs | H |
 | SCHED-18 | A schedule that skips permissions, whose folder was removed | Its time comes | Not started, not in the home folder either; recorded as not started, naming the folder | H |
+| SCHED-19 | A schedule for when Claude Code's limit starts over, no session of it open (as after the host started again) | It is saved; the limit starts over | Its next run is known from the service; it runs | H |
 
 ### When an agent is done or needs you
 

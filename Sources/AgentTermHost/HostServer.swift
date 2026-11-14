@@ -1636,12 +1636,18 @@ public final class HostServer {
 
     /// Looks up what each agent session is about and tells the clients when
     /// a session's name changed. Reads the agents' files, so off this queue.
-    /// Asks the services of the agents that have a session, where the last
-    /// answer is older than `age`.
+    /// Asks the services of the agents that have a session, or a schedule
+    /// waiting for their limit to start over (which has to know when, also
+    /// after the host started again), where the last answer is older than
+    /// `age`.
     private func refreshAccountUsage(olderThan age: TimeInterval) {
         guard let fetch = configuration.fetchAccountUsage else { return }
         let now = Date()
-        for agent in Set(sessions.values.compactMap(\.info.agent)) where !accountAsking.contains(agent) {
+        let waiting = schedules.filter { schedule in
+            guard schedule.enabled, case .limitReset = schedule.when else { return false }
+            return true
+        }.map(\.agent)
+        for agent in Set(sessions.values.compactMap(\.info.agent) + waiting) where !accountAsking.contains(agent) {
             if let asked = accountAsked[agent], now.timeIntervalSince(asked) < age { continue }
             accountAsking.insert(agent)
             accountAsked[agent] = now

@@ -254,7 +254,7 @@ reply.
 
 A limit turns amber at 70% used and red at 90%. The session's figures update
 every few seconds, the account's every five minutes while the agent has a
-session, and on request.
+session or a schedule for when its limit starts over, and on request.
 
 Where the figures come from:
 

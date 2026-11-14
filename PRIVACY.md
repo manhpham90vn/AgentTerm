@@ -51,7 +51,8 @@ the source yourself sends nothing at all.
   over your local network or your own Tailscale network. The developer is not part of that
   connection. Tailscale is a separate service with its own privacy policy.
 - **To the services of the coding agents you use.** To show what your account has left (the figures
-  the agents show under `/usage` or `/status`), the Mac app asks the agent's own service: Anthropic,
+  the agents show under `/usage` or `/status`), and to know when a schedule set for when your limit
+  starts over is to run, the Mac app asks the agent's own service: Anthropic,
   OpenAI (ChatGPT), Google or GitHub. For this it reads the sign-in that the agent keeps on your Mac
   and sends it only to the service that issued it. It is not stored, logged, sent to the iPhone or
   sent to the developer. Starting the host with `agenttermd --no-account-usage` turns this off.

@@ -418,6 +418,21 @@ final class SchedulerHostTests: XCTestCase {
         XCTAssertEqual(startedLines, [], "not in the home folder either")
     }
 
+    /// SCHED-19: a schedule for when the limit starts over learns when that
+    /// is with no session of its agent open, as after the host started
+    /// again, and runs then.
+    func testALimitResetScheduleRunsWithNoSessionOfItsAgentOpen() throws {
+        var schedule = morning()
+        schedule.when = .limitReset
+        client.connection.send(.saveSchedule(schedule))
+        waitUntil("its time known") { self.client.schedules.first?.nextRun == self.reset.addingTimeInterval(120) }
+        for seconds in [0.0, 60, 125] {
+            set(reset.addingTimeInterval(seconds))
+            pause(0.3)
+        }
+        waitUntil("the run") { self.client.sessions.contains { $0.schedule == schedule.name } }
+    }
+
     /// SCHED-9: Copilot CLI asked to skip all is told so through its variable.
     func testCopilotIsToldThroughItsVariable() throws {
         client.connection.send(.saveSchedule(morning("copilot")))
