@@ -697,6 +697,12 @@ struct DiffDocumentView: View {
     @AppStorage("diffLayout") private var layout = "unified"
 
     private var isSplit: Bool { layout == "split" }
+    /// The parts of the change are being picked (#40).
+    @State private var pickingParts = false
+
+    /// Whether the change can be taken apart: one that is not committed,
+    /// with a diff to take apart.
+    private var hasParts: Bool { model.diffTabLabel == nil && !PatchParts.hunks(of: file.patch).isEmpty }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -726,6 +732,13 @@ struct DiffDocumentView: View {
                 .help(isSplit ? "Show the diff in one panel" : "Show before and after side by side")
                 .accessibilityLabel(isSplit ? "Show in one panel" : "Show side by side")
                 if model.diffTabCommit == nil {
+                    if hasParts {
+                        // One hunk, or some lines: the same in either layout.
+                        Button(file.isStaged ? "Unstage Parts…" : "Stage Parts…") { pickingParts = true }
+                            .controlSize(.small)
+                            .help(file.isStaged ? "Unstage one hunk, or some of its lines" : "Stage or discard one hunk, or some of its lines")
+                            .accessibilityIdentifier("pick-parts")
+                    }
                     Button(file.isStaged ? "Unstage" : "Stage") {
                         if file.isStaged { model.unstage([file]) } else { model.stage([file]) }
                     }
@@ -756,6 +769,12 @@ struct DiffDocumentView: View {
             }
         }
         .background(Theme.canvas)
+        .sheet(isPresented: $pickingParts) {
+            PartsSheet(file: file) { pickingParts = false }
+                .environmentObject(model)
+        }
+        // Nothing left of the change: nothing left to pick from.
+        .onChange(of: model.diffTabFile == nil) { gone in if gone { pickingParts = false } }
     }
 }
 

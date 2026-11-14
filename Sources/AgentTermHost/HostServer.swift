@@ -1473,6 +1473,11 @@ public final class HostServer {
             git(for: client, in: path) { GitActions.unstage(files, in: path) }
         case .gitDiscard(let path, let files):
             git(for: client, in: path) { GitActions.discard(files, in: path) }
+        case .gitApplyPart(let path, let file, let patch, let use):
+            git(for: client, in: path) {
+                guard let use = PatchParts.Use(rawValue: use) else { return "This host does not know what “\(use)” is to do with a part of a file." }
+                return GitActions.applyPart(patch, use: use, file: file, in: path)
+            }
         case .gitLastCommit(let path):
             work(for: client, { GitActions.lastCommit(in: path) }) { server, client, last in server.send(.gitLastCommit(path: path, last: last), to: client) }
         case .gitAmend(let path, let message):

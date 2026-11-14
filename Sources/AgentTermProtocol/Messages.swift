@@ -222,6 +222,11 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Deletes a branch of the repository's own. One with commits that are
     /// on no other branch is deleted only with `force`.
     case gitDeleteBranch(path: String, name: String, force: Bool)
+    /// Stages, unstages or discards a part of one file's change (#40): one
+    /// hunk of its diff, or lines of one. `patch` is that part as a patch
+    /// (`PatchParts.patch`), and `use` what it is applied for: "stage",
+    /// "unstage" or "discard". Answered with the folder's changes.
+    case gitApplyPart(path: String, file: String, patch: String, use: String)
     /// Asks for the commit the checked out branch is at (#41). Answered
     /// with `gitLastCommit`.
     case gitLastCommit(path: String)

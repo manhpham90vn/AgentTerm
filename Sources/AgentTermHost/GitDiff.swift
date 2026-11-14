@@ -263,6 +263,35 @@ public enum GitActions {
         return run(["rm", "--cached", "-r", "--quiet", "--"] + (files.isEmpty ? ["."] : files), in: directory)
     }
 
+    /// Stages, unstages or discards a part of a file's change (#40): `patch`
+    /// holds one hunk of its diff, or lines of one, as `PatchParts.patch`
+    /// makes it. Staging puts it in the index; unstaging takes it out of
+    /// the index, and discarding out of the file, by applying it the other
+    /// way round. git refuses a patch that no longer fits the file, and
+    /// its words are returned: the file changed since the diff was shown.
+    public static func applyPart(_ patch: String, use: PatchParts.Use, file: String, in directory: String) -> String? {
+        // A file git does not track yet has nothing in the index to add a
+        // part to: it is marked as meant to be added, empty, first.
+        if use == .stage, list(["ls-files", "--others", "--exclude-standard", "-z", "--", file], in: directory)?.isEmpty == false {
+            if let problem = run(["add", "--intent-to-add", "--", file], in: directory) { return problem }
+        }
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-part-\(UUID().uuidString).patch")
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        do {
+            try patch.write(to: scratch, atomically: true, encoding: .utf8)
+        } catch {
+            return "The part could not be written out to be applied: \(error.localizedDescription)"
+        }
+        var arguments = ["apply", "--whitespace=nowarn"]
+        if use != .discard { arguments.append("--cached") }
+        if use.reversed { arguments.append("--reverse") }
+        guard let problem = run(arguments + [scratch.path], in: directory) else { return nil }
+        if problem.contains("does not apply") || problem.contains("patch failed") {
+            return "That part no longer fits the file: it changed since its diff was shown. Look at the diff again.\n\n\(problem)"
+        }
+        return problem
+    }
+
     /// Throws away changes that are not staged (#39). A file git tracks
     /// goes back to what is staged of it, or to the last commit; one git
     /// does not track yet is moved to the Trash, where it can be put back

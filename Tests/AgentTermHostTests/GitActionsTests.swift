@@ -33,6 +33,72 @@ final class GitActionsTests: XCTestCase {
     private func entries(_ files: [FileDiff]) -> [String] { files.map { "\($0.marker) \($0.path)" } }
     private var snapshot: DiffSnapshot { GitDiff.snapshot(directory: root.path) }
 
+    /// GIT-53 (#40): a hunk of a file's change, or lines of one, is staged,
+    /// unstaged and discarded, and the rest of the change is left as it was.
+    func testStagingUnstagingAndDiscardingPartsOfAFile() throws {
+        try write("a.txt", (1...10).map { "line \($0)\n" }.joined())
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        // Line 2 changed, a line put in after 5, line 8 taken out: one hunk.
+        try write("a.txt", "line 1\nLINE TWO\nline 3\nline 4\nline 5\nnew line\nline 6\nline 7\nline 9\nline 10\n")
+        func changes(staged: Bool) -> [String] {
+            (staged ? snapshot.staged : snapshot.unstaged).first { $0.path == "a.txt" }.map { file in
+                file.patch.split(separator: "\n").map(String.init).filter { $0.hasPrefix("+") || $0.hasPrefix("-") }
+            } ?? []
+        }
+        XCTAssertEqual(changes(staged: false), ["-line 2", "+LINE TWO", "+new line", "-line 8"])
+
+        // The change to line 2 alone is staged; the other two stay.
+        var hunk = try XCTUnwrap(PatchParts.hunks(of: try XCTUnwrap(snapshot.unstaged.first).patch).first)
+        let two = Set(hunk.changed.filter { hunk.lines[$0].lowercased().contains("two") || hunk.lines[$0] == "-line 2" })
+        XCTAssertNil(GitActions.applyPart(try XCTUnwrap(PatchParts.patch(path: "a.txt", hunk: hunk, picked: two, use: .stage)), use: .stage, file: "a.txt", in: root.path))
+        XCTAssertEqual(changes(staged: true), ["-line 2", "+LINE TWO"])
+        XCTAssertEqual(changes(staged: false), ["+new line", "-line 8"])
+
+        // Of what is left, the line that was put in is discarded: it goes from the file.
+        hunk = try XCTUnwrap(PatchParts.hunks(of: try XCTUnwrap(snapshot.unstaged.first).patch).first { $0.lines.contains("+new line") })
+        let put = Set(hunk.changed.filter { hunk.lines[$0] == "+new line" })
+        XCTAssertNil(GitActions.applyPart(try XCTUnwrap(PatchParts.patch(path: "a.txt", hunk: hunk, picked: put, use: .discard)), use: .discard, file: "a.txt", in: root.path))
+        XCTAssertFalse(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8).contains("new line"))
+        XCTAssertEqual(changes(staged: false), ["-line 8"])
+        XCTAssertEqual(changes(staged: true), ["-line 2", "+LINE TWO"], "what is staged is as it was")
+
+        // The staged hunk is unstaged whole: it is among the changes again.
+        hunk = try XCTUnwrap(PatchParts.hunks(of: try XCTUnwrap(snapshot.staged.first).patch).first)
+        XCTAssertNil(GitActions.applyPart(try XCTUnwrap(PatchParts.patch(path: "a.txt", hunk: hunk, use: .unstage)), use: .unstage, file: "a.txt", in: root.path))
+        XCTAssertEqual(snapshot.staged, [])
+        XCTAssertEqual(changes(staged: false), ["-line 2", "+LINE TWO", "-line 8"])
+
+        // A part of a diff the file has moved on from is refused in words,
+        // and the file is left as it is.
+        hunk = try XCTUnwrap(PatchParts.hunks(of: try XCTUnwrap(snapshot.unstaged.first).patch).first)
+        let stale = try XCTUnwrap(PatchParts.patch(path: "a.txt", hunk: hunk, use: .discard))
+        try write("a.txt", "something else entirely\n")
+        let refused = try XCTUnwrap(GitActions.applyPart(stale, use: .discard, file: "a.txt", in: root.path))
+        XCTAssertTrue(refused.hasPrefix("That part no longer fits the file"), refused)
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8), "something else entirely\n")
+    }
+
+    /// GIT-53: a part of a file git does not track yet, and of one that
+    /// does not end with a newline.
+    func testPartsOfANewFileAndOfOneWithoutAFinalNewline() throws {
+        try write("e.txt", "a\nb")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        try write("n.txt", "first\nsecond\n")
+        var hunk = try XCTUnwrap(PatchParts.hunks(of: try XCTUnwrap(snapshot.unstaged.first { $0.path == "n.txt" }).patch).first)
+        XCTAssertEqual(hunk.changed.count, 2)
+        let patch = try XCTUnwrap(PatchParts.patch(path: "n.txt", hunk: hunk, picked: [hunk.changed[0]], use: .stage))
+        XCTAssertNil(GitActions.applyPart(patch, use: .stage, file: "n.txt", in: root.path))
+        XCTAssertEqual(git("show", ":n.txt"), "first", "its first line is staged")
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("n.txt"), encoding: .utf8), "first\nsecond\n")
+
+        try write("e.txt", "a\nB")
+        hunk = try XCTUnwrap(PatchParts.hunks(of: try XCTUnwrap(snapshot.unstaged.first { $0.path == "e.txt" }).patch).first)
+        XCTAssertNil(GitActions.applyPart(try XCTUnwrap(PatchParts.patch(path: "e.txt", hunk: hunk, use: .stage)), use: .stage, file: "e.txt", in: root.path))
+        XCTAssertEqual(git("show", ":e.txt"), "a\nB")
+    }
+
     /// GIT-49 (#41): the last commit is amended, its message and what is
     /// staged now; and undone, with what it changed left staged.
     func testAmendingAndUndoingTheLastCommit() throws {

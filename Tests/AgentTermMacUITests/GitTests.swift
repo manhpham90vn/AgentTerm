@@ -240,6 +240,45 @@ final class GitTests: MacUITestCase {
         XCTAssertTrue(app.exists(.button("Unstage new.txt")))
     }
 
+    /// GIT-55 (#40): from a change's diff, one hunk is staged, then one
+    /// line of another, and what is left of it is discarded after being
+    /// asked.
+    func testStagingAHunkALineAndDiscardingTheRest() throws {
+        // Twelve lines committed, then the second and the eleventh changed: two hunks.
+        try write((1...12).map { "line \($0)\n" }.joined(), to: "notes.txt")
+        git("commit", "-q", "-am", "twelve lines", in: project)
+        try write((1...12).map { $0 == 2 ? "LINE 2\n" : $0 == 11 ? "LINE 11\n" : "line \($0)\n" }.joined(), to: "notes.txt")
+
+        app.press(.button("Git"))
+        app.wait(for: .id("change-notes.txt"))
+        app.press(.id("change-notes.txt"))
+        app.press(.id("pick-parts"))
+        app.wait(for: .id("hunk-1"))
+        shot("parts")
+
+        // The second hunk, whole.
+        app.press(.id("part-stage-1"))
+        wait("the second hunk to be staged") { self.git("diff", "--cached", "--", "notes.txt", in: self.project).contains("+LINE 11") }
+        XCTAssertFalse(git("diff", "--cached", "--", "notes.txt", in: project).contains("LINE 2"), "the first hunk is not staged")
+        app.waitGone(.id("hunk-1"))
+
+        // Of the first, only the line that was put in: line 2 is then there twice in what is staged.
+        app.press(.id("part-line-0-2"))
+        app.wait(for: .button("Stage 1 Line"))
+        app.press(.id("part-stage-0"))
+        wait("the line to be staged") { self.git("show", ":notes.txt", in: self.project).contains("line 2\nLINE 2\n") }
+
+        // What is left, the line taken out, is discarded: asked first.
+        app.wait(for: .button("Discard Hunk…"))
+        app.press(.id("part-discard-0"))
+        app.wait(for: .containing("Discard this hunk of notes.txt?"))
+        app.press(.button("Discard"))
+        wait("nothing left that is not staged") { self.git("diff", "--", "notes.txt", in: self.project).isEmpty }
+        XCTAssertTrue(read("notes.txt").contains("line 2\nLINE 2\n"))
+        app.press(.id("parts-done"))
+        app.waitGone(.id("parts-done"))
+    }
+
     func testARefusedCommitSaysWhatGitSaid() throws {
         // A hook that refuses every commit, as a project's own checks may.
         let hook = project.appendingPathComponent(".git/hooks/pre-commit")

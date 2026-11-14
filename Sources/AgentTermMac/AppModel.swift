@@ -2286,6 +2286,19 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: Parts of a file (#40)
+
+    /// Stages, unstages or discards one hunk of a file's change, or the
+    /// lines of it that were picked. The file's diff is read again after.
+    func apply(_ use: PatchParts.Use, hunk: PatchHunk, picked: Set<Int>?, of file: FileDiff) {
+        guard let patch = PatchParts.patch(path: file.path, hunk: hunk, picked: picked, use: use) else { return }
+        if isRemote, let directory = panelFolder {
+            sendForDiff(.gitApplyPart(path: directory, file: file.path, patch: patch, use: use.rawValue), in: directory)
+            return
+        }
+        git { GitActions.applyPart(patch, use: use, file: file.path, in: $0) }
+    }
+
     // MARK: Amend and undo the last commit (#41)
 
     /// The commit being amended, by folder: the commit box then replaces

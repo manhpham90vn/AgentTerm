@@ -558,7 +558,17 @@ panel.
     lost. A commit that a remote has already is asked about once more,
     for undoing and before amending: changed here, the next push has to be
     forced, and whoever pulled it keeps it.
-    Not part of it: staging part of a file,
+    A change can be taken apart. **Stage Parts…** in the diff of a change
+    that is not staged, **Unstage Parts…** in that of a staged one, lists
+    the hunks of the diff, each with its lines. A hunk is staged or
+    unstaged whole, or only the lines of it that are ticked; one that is
+    not staged can also be discarded, whole or by its ticked lines, asked
+    first. What was taken is gone from the list at once, which is read from
+    the file again. A part that no longer fits the file, because the file
+    changed since, is refused in words. It is the same in both layouts of
+    the diff, and on the Mac only: the iPhone stages and discards whole
+    files.
+    Not part of it:
     choosing a remote, and resolving a pull
     that conflicts.
 - **History**, the place in the bar at the left: every conversation the

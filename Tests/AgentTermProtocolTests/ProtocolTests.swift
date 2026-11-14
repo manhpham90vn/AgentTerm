@@ -38,6 +38,7 @@ final class ProtocolTests: XCTestCase {
             .gitShow(path: "/Users/me/app", hash: "abc1234"),
             .gitRevert(path: "/Users/me/app", hash: "abc1234"),
             .gitCherryPick(path: "/Users/me/app", hash: "abc1234"),
+            .gitApplyPart(path: "/Users/me/app", file: "a.txt", patch: "@@ -1 +1 @@\n-a\n+b\n", use: "stage"),
             .gitLastCommit(path: "/Users/me/app"),
             .gitAmend(path: "/Users/me/app", message: "feat: better"),
             .gitUndoCommit(path: "/Users/me/app"),
@@ -516,5 +517,48 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(RewriteCommitQuestion(.amend, last: pushed).confirm, "Amend Anyway")
         let message = ServerMessage.gitLastCommit(path: "/p", last: pushed)
         XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
+    }
+
+    /// GIT-54 (#40): a diff taken apart into hunks, and a patch that holds
+    /// one hunk or some of its lines, for each of the three uses.
+    func testADiffTakenApartAndAPartOfItAsAPatch() throws {
+        let patch = """
+            @@ -1,4 +1,4 @@ func first()
+             one
+            -two
+            +TWO
+             three
+             four
+            @@ -20,3 +20,4 @@
+             twenty
+            +more
+             twenty-one
+             twenty-two
+            """
+        let hunks = PatchParts.hunks(of: patch)
+        XCTAssertEqual(hunks.count, 2)
+        XCTAssertEqual(hunks[0].section, "func first()")
+        XCTAssertEqual(hunks[0].oldStart, 1)
+        XCTAssertEqual(hunks[1].newStart, 20)
+        XCTAssertEqual(hunks[0].changed, [1, 2])
+        XCTAssertEqual(hunks[0].added, 1)
+        XCTAssertEqual(hunks[0].removed, 1)
+        XCTAssertEqual(hunks[1].lines, [" twenty", "+more", " twenty-one", " twenty-two"])
+
+        // A whole hunk, with the names git needs before it.
+        XCTAssertEqual(
+            PatchParts.patch(path: "src/a.swift", hunk: hunks[1], use: .stage),
+            "diff --git a/src/a.swift b/src/a.swift\n--- a/src/a.swift\n+++ b/src/a.swift\n@@ -20,3 +20,4 @@\n twenty\n+more\n twenty-one\n twenty-two\n")
+        // Only the line put in, applied forward: the line taken out is still there, so it stays as a line both sides have.
+        XCTAssertEqual(
+            PatchParts.patch(path: "a", hunk: hunks[0], picked: [2], use: .stage)?.components(separatedBy: "\n").dropFirst(3).joined(separator: "\n"),
+            "@@ -1,4 +1,5 @@\n one\n two\n+TWO\n three\n four\n")
+        // The same line, applied the other way round: the line taken out is not on that side, so it goes.
+        XCTAssertEqual(
+            PatchParts.patch(path: "a", hunk: hunks[0], picked: [2], use: .discard)?.components(separatedBy: "\n").dropFirst(3).joined(separator: "\n"),
+            "@@ -1,3 +1,4 @@\n one\n+TWO\n three\n four\n")
+        XCTAssertNil(PatchParts.patch(path: "a", hunk: hunks[0], picked: [], use: .stage), "nothing picked is no patch")
+        XCTAssertTrue(PatchParts.Use.unstage.reversed && PatchParts.Use.discard.reversed && !PatchParts.Use.stage.reversed)
+        XCTAssertEqual(PatchParts.hunks(of: "@@ -1 +1 @@\n-a\n+b\n… diff truncated …").first?.lines, ["-a", "+b"])
     }
 }
