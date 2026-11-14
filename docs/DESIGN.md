@@ -766,6 +766,11 @@ choice's words as its text.
 **On the Mac.** A banner over the window for a session that is not the one
 selected while the app is in front.
 
+A banner is dropped when its session comes to the front (#60): on the Mac
+when the session is selected with Sessions shown (`selectedSession`,
+`show(_:)`), on the iPhone when its screen is put on the navigation stack
+(`path`). Each app decides for itself; the host is not told.
+
 ## The Live Activity
 
 A widget extension, `AgentTermLiveActivity` (`iOS/AgentTermLiveActivity`),

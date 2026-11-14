@@ -52,6 +52,7 @@ final class AppModel: ObservableObject {
         // The side panel shows the worktree of the session in front, however
         // it came to be selected (#23).
         didSet {
+            hideNoticeOfTheSessionInFront()
             guard selectedSession != oldValue, let session = sessions.first(where: { $0.id == selectedSession }) else { return }
             if let project = WorktreePath.project(of: session.cwd), folders.contains(where: { $0.path == project }) {
                 if selectedFolder != project { selectedFolder = project }
@@ -259,6 +260,7 @@ final class AppModel: ObservableObject {
         if self.place == .schedules { editingSchedule = nil }
         self.place = place
         showSidebar = true
+        hideNoticeOfTheSessionInFront()
     }
     func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
 
@@ -288,6 +290,12 @@ final class AppModel: ObservableObject {
     }
 
     func dismissAgentNotice() { agentNotice = nil }
+
+    /// A notice hides by itself once its session is the one in front,
+    /// however the user got there: its row, its tab, a shortcut (#60).
+    private func hideNoticeOfTheSessionInFront() {
+        if let notice = agentNotice, place == .sessions, notice.session == selectedSession { agentNotice = nil }
+    }
 
     /// The host of this Mac learns from it whether someone is at the Mac:
     /// another Mac's host is not told, since this Mac is not that one.

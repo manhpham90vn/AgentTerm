@@ -184,6 +184,9 @@ itself.
   needs me") turns it off.
 - On the Mac, a banner says so for a session that is not the one in front,
   and opens it.
+- A banner hides by itself once its session is opened, however the user
+  got there (its row, its tab, the banner itself), and does not come back
+  when they leave the session.
 
 ### The Live Activity
 

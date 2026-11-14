@@ -89,6 +89,36 @@ final class SessionTests: MacUITestCase {
         app.wait(for: .id("session-\(agent)"))
     }
 
+    /// NOTE-9 (#60): a banner hides by itself once its session is the one
+    /// in front, however the user got there, and does not come back.
+    func testABannerHidesWhenItsSessionIsOpenedFromTheList() throws {
+        let phone = try device()
+        app.press(.button("Shell"))
+        wait("the shell to start") { phone.sessions.count == 1 }
+        let shell = try XCTUnwrap(phone.sessions.first?.id)
+        let folder = root.appendingPathComponent("stand-in")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let script = folder.appendingPathComponent("claude")
+        let event = #"{"hook_event_name":"PermissionRequest","tool_name":"Bash","tool_input":{"command":"make deploy"}}"#
+        try "#!/bin/sh\nsleep 2\nprintf '%s' '\(event)' | '\(hostExecutable.path)' hook claude PermissionRequest\nexec sleep 600\n"
+            .write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+        phone.send(.create(CreateRequest(command: script.path, cwd: project.path, title: "deploy")))
+        wait("the agent's session") { phone.sessions.count == 2 }
+        let agent = try XCTUnwrap(phone.sessions.first { $0.id != shell }?.id)
+        app.press(.id("session-\(shell)"))
+        app.wait(for: .containing("needs permission"), timeout: 15)
+
+        // Not the banner's Open: the session's own row.
+        app.press(.id("session-\(agent)"))
+        app.waitGone(.containing("needs permission"))
+        shot("gone")
+        // Leaving the session does not bring it back: it was seen.
+        app.press(.id("session-\(shell)"))
+        Thread.sleep(forTimeInterval: 1)
+        app.waitGone(.containing("needs permission"))
+    }
+
     func testStartingSessionsAndFindingThemAgainAfterReopeningTheApp() throws {
         let phone = try device()
         // SES-2: a shell from the launch buttons.

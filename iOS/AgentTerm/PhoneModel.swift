@@ -249,7 +249,11 @@ final class PhoneModel: ObservableObject {
     @Published private(set) var agents: [AgentInfo] = []
     @Published private(set) var agentsLoaded = false
     /// The screens on the navigation stack.
-    @Published var path: [Route] = []
+    @Published var path: [Route] = [] {
+        // A notice hides by itself once its session is opened, however the
+        // user got there, and does not come back when they leave it (#60).
+        didSet { if let notice = agentNotice, notice.session == openSessionID { agentNotice = nil } }
+    }
     /// The tab in front: "sessions", "history" or "settings".
     @Published var tab = "sessions"
     /// A folder's uncommitted changes, by folder. Without the diffs.
