@@ -490,6 +490,20 @@ final class PhoneModel: ObservableObject {
     func save(_ schedule: Schedule) { connection?.send(.saveSchedule(schedule)) }
     func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
 
+    // MARK: What is done with a schedule and its runs (#47)
+
+    /// Every schedule is held back.
+    @Published private(set) var schedulesPaused = false
+    /// What runs printed, as asked for, by the run's id; nil inside when
+    /// nothing was kept of one.
+    @Published private(set) var runOutputs: [String: String?] = [:]
+
+    func runNow(_ schedule: Schedule) { connection?.send(.runSchedule(id: schedule.id)) }
+    func stop(_ run: ScheduleOverview.Run) { connection?.send(.stopScheduleRun(id: run.schedule.id, at: run.run.at)) }
+    func duplicate(_ schedule: Schedule) { connection?.send(.duplicateSchedule(id: schedule.id)) }
+    func pauseSchedules(_ paused: Bool) { connection?.send(.pauseSchedules(paused)) }
+    func loadOutput(of run: ScheduleOverview.Run) { connection?.send(.scheduleRunOutput(id: run.schedule.id, at: run.run.at)) }
+
     /// Shown as a banner while the app is in front, until it is opened or
     /// dismissed.
     @Published private(set) var agentNotice: AgentNotice?
@@ -1065,6 +1079,10 @@ final class PhoneModel: ObservableObject {
             updateLiveActivity()
         case .schedules(let list):
             schedules = list
+        case .schedulesPaused(let paused):
+            schedulesPaused = paused
+        case .scheduleRunOutput(let id, let at, let text):
+            runOutputs[ScheduleOverview.Run.id(schedule: id, at: at)] = .some(text)
         case .worktrees(let folder, let list, let setup):
             worktrees[folder] = list
             worktreeSetups[folder] = setup

@@ -286,6 +286,20 @@ final class AppModel: ObservableObject {
     }
     func removeSchedule(_ id: String) { connection?.send(.removeSchedule(id: id)) }
 
+    // MARK: What is done with a schedule and its runs (#47)
+
+    /// Every schedule is held back.
+    @Published private(set) var schedulesPaused = false
+    /// What runs printed, as asked for, by the run's id; nil inside when
+    /// nothing was kept of one.
+    @Published private(set) var runOutputs: [String: String?] = [:]
+
+    func runNow(_ schedule: Schedule) { connection?.send(.runSchedule(id: schedule.id)) }
+    func stop(_ run: ScheduleOverview.Run) { connection?.send(.stopScheduleRun(id: run.schedule.id, at: run.run.at)) }
+    func duplicate(_ schedule: Schedule) { connection?.send(.duplicateSchedule(id: schedule.id)) }
+    func pauseSchedules(_ paused: Bool) { connection?.send(.pauseSchedules(paused)) }
+    func loadOutput(of run: ScheduleOverview.Run) { connection?.send(.scheduleRunOutput(id: run.schedule.id, at: run.run.at)) }
+
     /// A schedule to start from: the folder in front, the first agent.
     func newSchedule() -> Schedule {
         let agent = agents.first { $0.path != nil }?.id ?? "claude"
@@ -648,6 +662,11 @@ final class AppModel: ObservableObject {
     let search = SearchModel()
     /// History's filters, search, transcripts and pins (#46).
     let historyStore = HistoryStore()
+    /// The files at hand while a schedule's prompt is written (#47): a
+    /// search of the schedule's own folder, whatever folder is on show.
+    let promptSearch = SearchModel(firstNumber: 1_000_000)
+    /// The run whose output is on show.
+    @Published var shownRun: ScheduleOverview.Run?
 
     /// Shows the search of the side panel's folder, by name (⌘P) or by
     /// text (⌘⇧F): in Sessions, the side panel shown, on its Files tab.
@@ -722,6 +741,7 @@ final class AppModel: ObservableObject {
             remote = mac
             files.reset(remote: { [weak self] message in self?.connection?.send(message) })
             search.reset(remote: { [weak self] message in self?.connection?.send(message) })
+            promptSearch.reset(remote: { [weak self] message in self?.connection?.send(message) })
             // The tabs saved here are this Mac's.
             tabLayout = TabLayout()
             startOwnHost()
@@ -1044,6 +1064,7 @@ final class AppModel: ObservableObject {
         browseListing = nil
         files.reset(remote: mac == nil ? nil : { [weak self] message in self?.connection?.send(message) })
         search.reset(remote: mac == nil ? nil : { [weak self] message in self?.connection?.send(message) })
+        promptSearch.reset(remote: mac == nil ? nil : { [weak self] message in self?.connection?.send(message) })
         connectAttempts = 0
         launchedDaemon = false
         status = .connecting
@@ -1301,11 +1322,17 @@ final class AppModel: ObservableObject {
             if agentNotice?.session == session, agentNotice?.state == state { agentNotice = nil }
         case .schedules(let list):
             schedules = list
+        case .schedulesPaused(let paused):
+            schedulesPaused = paused
+        case .scheduleRunOutput(let id, let at, let text):
+            runOutputs[ScheduleOverview.Run.id(schedule: id, at: at)] = .some(text)
         case .worktrees(let folder, let list, let setup):
             worktrees[folder] = list
             worktreeSetups[folder] = setup
         case .filesFound, .textFound, .searchEnded:
+            // Each takes the answers that carry its own searches' numbers.
             search.handle(message)
+            promptSearch.handle(message)
         case .historyOlder, .conversationRead, .historyFound, .historySearchEnded, .historyMarks, .conversationDeleted, .conversationExported:
             historyStore.handle(message, folderPath: panelFolder)
         case .worktreeSetups(let setups):

@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 11
+public let agenttermProtocolVersion = 12
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -407,6 +407,18 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// skips permissions is refused unless its warning was accepted.
     case saveSchedule(Schedule)
     case removeSchedule(id: String)
+    /// Starts a run of a schedule now (#47), whatever its time; it waits
+    /// or is skipped as any run while the one before it is going.
+    case runSchedule(id: String)
+    /// Stops the run of a schedule that came due at `at`, if it is going on.
+    case stopScheduleRun(id: String, at: Date)
+    /// What a run printed, kept when it ended. Answered with `scheduleRunOutput`.
+    case scheduleRunOutput(id: String, at: Date)
+    /// Makes a copy of a schedule, turned off, to be changed.
+    case duplicateSchedule(id: String)
+    /// Holds every schedule back, or lets them run again: none comes due
+    /// while they are paused, and none is caught up afterwards.
+    case pauseSchedules(Bool)
     /// The files of a folder whose name or path holds the letters of
     /// `query`, the best first (#45). Answered with `filesFound` carrying
     /// the same `search`, a number the client picks, so that an answer to
@@ -568,6 +580,11 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case noticeSeen(session: SessionID, state: AgentState)
     /// Every schedule, with its last runs and when it runs next.
     case schedules([Schedule])
+    /// Whether every schedule is held back (#47).
+    case schedulesPaused(Bool)
+    /// What a run printed: its screen and what scrolled by, as text; nil
+    /// when nothing was kept of it.
+    case scheduleRunOutput(id: String, at: Date, text: String?)
     /// A folder's worktrees, the folder's own first, and its setup command.
     case worktrees(folder: String, list: [WorktreeInfo], setup: String?)
     /// What became of `finishWorktree`: a pull request's address, or that

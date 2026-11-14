@@ -65,12 +65,62 @@ final class SharedSettingsTests: MacUITestCase {
         phone.send(.kill(session: run.id))
         wait("the run to end") { !phone.sessions.contains { $0.id == run.id } }
         app.press(.id("place-schedules"))
-        app.wait(for: .containing("· Started"), timeout: 10)
+        // A run that is over says how it ended, and how long it took (#47).
+        app.wait(for: .containing("· Its session was ended, after"), timeout: 10)
         XCTAssertFalse(app.exists(.containing("· running")))
         app.press(.id("schedule-later"))
         app.wait(for: .text("Edit Schedule"))
         XCTAssertFalse(app.exists(.text("Runs")), "this schedule has not run")
         shot("sched-14-past")
+    }
+
+    /// SCHED-29 (#47): a schedule is run now from the list; its run is
+    /// stopped there and then says how it ended; what it printed is shown;
+    /// the schedule is duplicated, turned off; every schedule is paused and
+    /// let go again.
+    func testAScheduleIsRunNowStoppedShownDuplicatedAndPaused() throws {
+        let phone = try device()
+        phone.send(
+            .saveSchedule(
+                Schedule(
+                    id: "now", name: "On demand", agent: "claude", folder: project.path, prompt: "say hello", when: .daily(hour: 9, minute: 0),
+                    warningAccepted: true)))
+        app.press(.id("place-schedules"))
+        app.wait(for: .id("schedule-now"), timeout: 15)
+        app.perform("Run Now", on: .id("schedule-now"))
+        wait("the run's session", timeout: 20) { phone.sessions.contains { $0.schedule == "On demand" } }
+        let run = try XCTUnwrap(phone.sessions.first { $0.schedule == "On demand" })
+        app.wait(for: .containing("· running"), timeout: 10)
+        // Its agent has started, and said so.
+        phone.send(.attach(session: run.id, size: .default))
+        wait("the agent at work") { phone.text(run.id).contains("stand-in claude started") }
+
+        app.perform("Stop", on: .containing("· running"))
+        wait("the run to end", timeout: 15) { !phone.sessions.contains { $0.id == run.id } }
+        app.wait(for: .containing("· Stopped by you, after"), timeout: 15)
+
+        // What it printed was kept.
+        app.press(.id("schedule-now"))
+        app.wait(for: .text("Edit Schedule"))
+        app.wait(for: .text("Runs"))
+        app.press(.button("Show the run's output"))
+        app.wait(for: .containing("stand-in claude started"), timeout: 10)
+        shot("sched-29-output")
+        app.press(.button("Close"))
+
+        // A copy, turned off.
+        app.perform("Duplicate", on: .id("schedule-now"))
+        app.wait(for: .containing("On demand copy"), timeout: 10)
+        app.wait(for: .containing("Off ·"))
+
+        // Paused, every one; and let go again.
+        app.press(.id("schedules-pause"))
+        app.wait(for: .id("schedules-paused"), timeout: 10)
+        app.wait(for: .containing("Paused ·"))
+        shot("sched-29-paused")
+        app.press(.id("schedules-pause"))
+        app.waitGone(.id("schedules-paused"), timeout: 10)
+        app.wait(for: .containing("Next "))
     }
 
     func testKeepAwakeIsTheSameOnBothDevices() throws {

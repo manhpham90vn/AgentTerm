@@ -59,6 +59,65 @@ extension GitActions {
         return GitDiff.operation(inGitDirectory: String(decoding: result.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// The commit that is checked out in a folder; nil when it is no
+    /// repository, or has no commit yet.
+    public static func head(in directory: String) -> String? {
+        guard let result = Subprocess.run("/usr/bin/git", ["-C", directory, "rev-parse", "--verify", "--quiet", "HEAD"], timeout: 15), result.status == 0 else { return nil }
+        let hash = String(decoding: result.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return hash.isEmpty ? nil : hash
+    }
+
+    /// How a folder was when a run started in it (#47): what was changed
+    /// in it already is not what the run changed.
+    public struct Baseline: Sendable {
+        /// The commit that was checked out; nil with none yet.
+        public var head: String?
+        /// The files as they were, changes that were not committed
+        /// included, as a commit nothing points to; the head when nothing
+        /// was changed.
+        public var tree: String?
+        /// The files nobody tracked.
+        public var untracked: Set<String>
+    }
+
+    /// Nil when the folder is no repository.
+    public static func baseline(in directory: String) -> Baseline? {
+        guard let untracked = list(["ls-files", "--others", "--exclude-standard", "-z"], in: directory) else { return nil }
+        let head = head(in: directory)
+        var tree = head
+        // Writes the state of the files as a commit, and changes nothing:
+        // no branch, no stash, not the index. It says nothing when the
+        // files are as the head has them.
+        if head != nil, let made = Subprocess.run("/usr/bin/git", ["-C", directory, "stash", "create"], timeout: 60), made.status == 0 {
+            let hash = String(decoding: made.output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !hash.isEmpty { tree = hash }
+        }
+        return Baseline(head: head, tree: tree, untracked: Set(untracked))
+    }
+
+    /// What was changed in a folder since a run started in it, in words:
+    /// the commits made since, the files changed since, committed or not,
+    /// and the new files nobody tracks. "Nothing changed" when nothing did.
+    public static func changes(since start: Baseline, in directory: String) -> String? {
+        guard let untracked = list(["ls-files", "--others", "--exclude-standard", "-z"], in: directory) else { return nil }
+        var parts: [String] = []
+        let now = head(in: directory)
+        if let from = start.head, let now, from != now,
+            let count = list(["rev-list", "--count", "\(from)..\(now)"], in: directory)?.first.flatMap({ Int($0.trimmingCharacters(in: .whitespacesAndNewlines)) }), count > 0
+        {
+            parts.append("\(count) \(count == 1 ? "commit" : "commits")")
+        } else if start.head == nil, now != nil {
+            parts.append("the first commit")
+        }
+        // The files as they are against the files as they were.
+        if let tree = start.tree, let stat = list(["diff", "--shortstat", tree], in: directory)?.first?.trimmingCharacters(in: .whitespacesAndNewlines), !stat.isEmpty {
+            parts.append(stat.replacingOccurrences(of: "(+)", with: "").replacingOccurrences(of: "(-)", with: ""))
+        }
+        let new = untracked.filter { !start.untracked.contains($0) }.count
+        if new > 0 { parts.append("\(new) new \(new == 1 ? "file" : "files") not tracked") }
+        return parts.isEmpty ? "Nothing changed" : parts.joined(separator: ", ")
+    }
+
     /// Goes on with what was stopped, once every file is resolved. A rebase
     /// may stop again, on the next of its commits that conflicts: said so.
     public static func continueOperation(in directory: String) -> String? {

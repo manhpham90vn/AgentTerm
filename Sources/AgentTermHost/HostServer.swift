@@ -641,8 +641,28 @@ public final class HostServer {
     /// From when each schedule is looked at: when it was saved, so that a
     /// time of today that passed before it was made is not taken for due.
     private var schedulesFrom: [String: Date] = [:]
-    /// Runs that came due while two others ran, oldest first.
+    /// Runs that came due and wait: for two others to end, for the run
+    /// before them, or for what has to be looked at first. Oldest first.
     private var waitingRuns: [(schedule: String, at: Date, note: String)] = []
+    /// Every schedule is held back (#47).
+    private var schedulesPaused = false
+    /// Runs being got ready off the queue: their condition looked at,
+    /// their worktree made. By `runKey`.
+    private var preparingRuns: Set<String> = []
+    /// What each run's session started from: its schedule, when it came
+    /// due, its folder and how the folder was then.
+    private var runStarts: [SessionID: (schedule: String, at: Date, directory: String, before: GitActions.Baseline?)] = [:]
+    /// Why a run's session was ended by the host or the user, to be said
+    /// of it when it has ended.
+    private var runStops: [SessionID: String] = [:]
+
+    private func runKey(_ schedule: String, _ at: Date) -> String { "\(schedule)@\(Int(at.timeIntervalSince1970))" }
+
+    /// Where what a run printed is kept.
+    private func runOutputFile(_ schedule: String, _ at: Date) -> URL? {
+        configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("runs", isDirectory: true)
+            .appendingPathComponent("\(schedule)-\(Int(at.timeIntervalSince1970)).txt")
+    }
     /// When each run's session was first seen done, to close it a day later.
     private var runDoneAt: [SessionID: Date] = [:]
     private var scheduleTimer: DispatchSourceTimer?
@@ -660,6 +680,7 @@ public final class HostServer {
         var checked: Date?
         var resetsRun: [String: Date]?
         var from: [String: Date]?
+        var paused: Bool?
     }
 
     private var schedulesFile: URL? { configuration.foldersFile?.deletingLastPathComponent().appendingPathComponent("schedules.json") }
@@ -672,12 +693,13 @@ public final class HostServer {
         schedulesChecked = saved.checked
         resetsRun = saved.resetsRun ?? [:]
         schedulesFrom = saved.from ?? [:]
+        schedulesPaused = saved.paused ?? false
     }
 
     private func saveSchedules() {
         guard let file = schedulesFile else { return }
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try? MessageCoding.encode(SchedulesFile(schedules: schedules, checked: schedulesChecked, resetsRun: resetsRun, from: schedulesFrom)).write(to: file, options: .atomic)
+        try? MessageCoding.encode(SchedulesFile(schedules: schedules, checked: schedulesChecked, resetsRun: resetsRun, from: schedulesFrom, paused: schedulesPaused)).write(to: file, options: .atomic)
     }
 
     private func broadcastSchedules() {
@@ -698,10 +720,19 @@ public final class HostServer {
         do { try ScheduleRunner.trustFolder(of: schedule, home: configuration.home) } catch {
             return "The folder could not be trusted for \(schedule.agent): \(error.localizedDescription)"
         }
+        if case .every(let minutes, _, _) = schedule.when, minutes < 5 { return "A schedule runs every 5 minutes at the most often." }
+        if case .dates(let moments) = schedule.when, moments.isEmpty { return "Pick at least one date for it to run on." }
+        if let most = schedule.maxMinutes, most < 1 { return "The longest a run may take is at least a minute." }
         // What the host keeps is not the client's to set.
         let kept = schedules.first { $0.id == schedule.id }
         schedule.runs = kept?.runs ?? []
         let now = configuration.now()
+        // What was changed about it, kept with it (#47).
+        schedule.edits = kept?.edits ?? []
+        if let kept {
+            let what = schedule.changes(from: kept)
+            if !what.isEmpty { schedule.edits = Array((schedule.edits + [ScheduleEdit(at: now, what: what)]).suffix(Schedule.editsKept)) }
+        }
         // Changed, or new: looked at from now on.
         if kept?.when != schedule.when || kept?.enabled != schedule.enabled { schedulesFrom[schedule.id] = now }
         if schedulesChecked == nil { schedulesChecked = now }
@@ -715,7 +746,7 @@ public final class HostServer {
 
     /// When it comes due next, after `date`.
     private func nextRun(of schedule: Schedule, after date: Date) -> Date? {
-        guard schedule.enabled else { return nil }
+        guard schedule.enabled, !schedulesPaused else { return nil }
         if case .limitReset = schedule.when {
             let done = resetsRun[schedule.agent] ?? .distantPast
             return resets(of: schedule.agent).filter { $0 > done }.map { $0.addingTimeInterval(Self.afterLimitReset) }.filter { $0 > date }.min()
@@ -740,7 +771,8 @@ public final class HostServer {
         // Noted once every schedule was looked at: each of an agent's
         // schedules runs for the same reset, not only the first.
         var ranFor: [String: Date] = [:]
-        for index in schedules.indices where schedules[index].enabled {
+        // Held back: nothing comes due, and nothing is caught up afterwards.
+        for index in schedules.indices where schedules[index].enabled && !schedulesPaused {
             let schedule = schedules[index]
             let since = max(checked, schedulesFrom[schedule.id] ?? checked)
             let due: Date?
@@ -764,6 +796,8 @@ public final class HostServer {
         resetsRun.merge(ranFor) { _, new in new }
         schedulesChecked = now
         startWaitingRuns()
+        endOverdueRuns(now: now)
+        noteFinishedRuns(now: now)
         closeFinishedRuns(now: now)
         for index in schedules.indices {
             let next = nextRun(of: schedules[index], after: now)
@@ -797,14 +831,26 @@ public final class HostServer {
     private func startWaitingRuns() {
         let now = configuration.now()
         var still: [(schedule: String, at: Date, note: String)] = []
+        // Counted here too: two that start in one look are two.
+        var starting = 0
         for run in waitingRuns {
             guard let index = schedules.firstIndex(where: { $0.id == run.schedule }) else { continue }
             let schedule = schedules[index]
-            if !going(schedule.name, now: now).isEmpty {
-                record(ScheduleRun(at: run.at, started: false, note: "Skipped: the run before it is still going"), in: index)
+            let key = runKey(schedule.id, run.at)
+            // Being got ready: it starts, or says why not, when that is done.
+            if preparingRuns.contains(key) {
+                still.append(run)
                 continue
             }
-            let running = sessions.values.filter { $0.info.schedule != nil && isGoing($0, now: now) }.count
+            if !going(schedule.name, now: now).isEmpty || preparingRuns.contains(where: { $0.hasPrefix(schedule.id + "@") }) {
+                if schedule.waitsForPrevious {
+                    still.append(run)
+                } else {
+                    record(ScheduleRun(at: run.at, started: false, note: "Skipped: the run before it is still going"), in: index)
+                }
+                continue
+            }
+            let running = sessions.values.filter { $0.info.schedule != nil && isGoing($0, now: now) }.count + preparingRuns.count + starting
             guard running < Self.maxRunsAtOnce else {
                 still.append(run)
                 continue
@@ -814,18 +860,250 @@ public final class HostServer {
             // have all of it.
             var isDirectory: ObjCBool = false
             guard FileManager.default.fileExists(atPath: schedule.folder, isDirectory: &isDirectory), isDirectory.boolValue else {
-                record(ScheduleRun(at: run.at, started: false, note: "Not started: its folder \(schedule.folder) is not there"), in: index)
+                notStarted(run.at, in: index, "Not started: its folder \(schedule.folder) is not there")
                 continue
             }
-            let (command, environment) = ScheduleRunner.launch(schedule)
-            let request = CreateRequest(command: command, cwd: schedule.folder, title: schedule.name)
-            if let id = create(request, for: nil, run: schedule, environment: environment) {
-                record(ScheduleRun(at: run.at, started: true, session: id, note: run.note), in: index)
+            if schedule.condition == .always && !schedule.inWorktree {
+                starting += 1
+                start(schedule, at: run.at, note: run.note, in: schedule.folder, worktree: nil, before: nil)
             } else {
-                record(ScheduleRun(at: run.at, started: false, note: "The agent could not be started"), in: index)
+                // What it waits on runs git, and may fetch: off the queue.
+                preparingRuns.insert(key)
+                still.append(run)
+                prepare(schedule, at: run.at, note: run.note)
             }
         }
         waitingRuns = still
+    }
+
+    /// Looks at what has to be so for a run (#47) and makes its worktree,
+    /// off the queue, and then starts it or says why it is not started.
+    private func prepare(_ schedule: Schedule, at: Date, note: String) {
+        let home = configuration.home
+        let setup = worktreeSetups[WorktreePath.project(of: schedule.folder) ?? schedule.folder]
+        workQueue.async { [weak self] in
+            var skipped: String?
+            var failed: String?
+            switch schedule.condition {
+            case .always:
+                break
+            case .whenChanged:
+                let changes = GitDiff.snapshot(directory: schedule.folder)
+                if !changes.isRepository {
+                    failed = "Not started: its folder is not a git repository, so it cannot be told whether anything changed"
+                } else if changes.files.isEmpty && changes.submodules.isEmpty {
+                    skipped = "Skipped: nothing is changed in the folder"
+                }
+            case .afterPull:
+                let before = GitActions.head(in: schedule.folder)
+                if before == nil {
+                    failed = "Not started: its folder is not a git repository with a commit, so there is nothing to pull"
+                } else if let problem = GitActions.pull(in: schedule.folder) {
+                    failed = "Not started: the pull failed. \(problem.split(separator: "\n").first.map(String.init) ?? problem)"
+                } else if GitActions.head(in: schedule.folder) == before {
+                    skipped = "Skipped: the pull brought nothing new"
+                }
+            }
+            var directory = schedule.folder
+            var worktree: String?
+            if skipped == nil, failed == nil, schedule.inWorktree {
+                do {
+                    // A branch of its own, named after the schedule and the time.
+                    let stamp = DateFormatter()
+                    stamp.dateFormat = "yyyyMMdd-HHmm"
+                    let name = schedule.name.lowercased().map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined()
+                        .split(separator: "-").joined(separator: "-")
+                    let made = try GitWorktrees.create(in: schedule.folder, agent: schedule.agent, branch: "schedule/\(name.isEmpty ? "run" : name)-\(stamp.string(from: at))")
+                    directory = made.directory
+                    worktree = made.directory
+                    _ = GitWorktrees.checkOutSubmodules(in: made.directory)
+                    if let setup {
+                        _ = Subprocess.run(
+                            HostEnvironment.shell, ["-l", "-i", "-c", setup], cwd: made.directory, timeout: 600, mergeErrors: true,
+                            environment: HostEnvironment.loginShellCommandEnvironment)
+                    }
+                    // The agent would ask whether the new folder is trusted, with nobody there.
+                    var there = schedule
+                    there.folder = made.directory
+                    try? ScheduleRunner.trustFolder(of: there, home: home)
+                } catch {
+                    failed = "Not started: its worktree could not be made. \(error.localizedDescription)"
+                }
+            }
+            let before = failed == nil && skipped == nil ? GitActions.baseline(in: directory) : nil
+            self?.queue.async {
+                guard let self else { return }
+                self.preparingRuns.remove(self.runKey(schedule.id, at))
+                self.waitingRuns.removeAll { $0.schedule == schedule.id && $0.at == at }
+                guard let index = self.schedules.firstIndex(where: { $0.id == schedule.id }) else { return }
+                if let failed {
+                    self.notStarted(at, in: index, failed)
+                } else if let skipped {
+                    self.record(ScheduleRun(at: at, started: false, note: skipped), in: index)
+                } else {
+                    self.start(self.schedules[index], at: at, note: note, in: directory, worktree: worktree, before: before)
+                }
+                self.saveSchedules()
+                self.startWaitingRuns()
+            }
+        }
+    }
+
+    /// A run that should have started and did not: recorded, and said in
+    /// the banner of both apps, since nobody is watching a schedule.
+    private func notStarted(_ at: Date, in index: Int, _ why: String) {
+        record(ScheduleRun(at: at, started: false, note: why), in: index)
+        report(PartFailure(part: .schedule, name: schedules[index].name, at: configuration.now(), restarted: false, reason: why + "."))
+    }
+
+    /// Starts a run's agent in its folder, or in the worktree made for it.
+    private func start(_ schedule: Schedule, at: Date, note: String, in directory: String, worktree: String?, before: GitActions.Baseline?) {
+        guard let index = schedules.firstIndex(where: { $0.id == schedule.id }) else { return }
+        var there = schedule
+        there.folder = directory
+        let (command, environment) = ScheduleRunner.launch(there)
+        let request = CreateRequest(command: command, cwd: directory, title: schedule.name)
+        guard let id = create(request, for: nil, run: there, environment: environment) else {
+            notStarted(at, in: index, "Not started: the agent could not be started")
+            return
+        }
+        var run = ScheduleRun(at: at, started: true, session: id, note: note)
+        run.worktree = worktree
+        record(run, in: index)
+        runStarts[id] = (schedule.id, at, directory, before)
+        if before == nil {
+            // Read beside the start: what the run changes is counted from here.
+            workQueue.async { [weak self] in
+                let found = GitActions.baseline(in: directory)
+                self?.queue.async { if self?.runStarts[id]?.before == nil { self?.runStarts[id]?.before = found } }
+            }
+        }
+    }
+
+    /// Stops the runs that took longer than their schedule lets them (#47).
+    private func endOverdueRuns(now: Date) {
+        for schedule in schedules {
+            guard let most = schedule.maxMinutes else { continue }
+            for run in schedule.runs where run.started && run.ended == nil {
+                guard let id = run.session, let session = sessions[id], now.timeIntervalSince(run.at) > Double(most) * 60 else { continue }
+                let why = "Stopped: it ran longer than \(most) min"
+                runStops[id] = why
+                report(PartFailure(part: .schedule, name: schedule.name, at: now, restarted: false, reason: why + "."))
+                session.endAsked = true
+                session.process.hangUp()
+            }
+        }
+    }
+
+    /// Notes the runs whose agent is done, while their session stays open
+    /// for a day: how they ended, what they printed and what they changed.
+    private func noteFinishedRuns(now: Date) {
+        for session in sessions.values where session.info.schedule != nil && runStarts[session.info.id] != nil {
+            if !isGoing(session, now: now) { runEnded(session, outcome: "Done") }
+        }
+    }
+
+    /// A run is over: when, how, what it printed and what it changed in git.
+    private func runEnded(_ session: Session, outcome: String) {
+        let id = session.info.id
+        guard let start = runStarts.removeValue(forKey: id), let index = schedules.firstIndex(where: { $0.id == start.schedule }),
+            let place = schedules[index].runs.firstIndex(where: { $0.session == id && $0.at == start.at })
+        else { return }
+        schedules[index].runs[place].ended = configuration.now()
+        schedules[index].runs[place].outcome = runStops.removeValue(forKey: id) ?? outcome
+        broadcastSchedules()
+        saveSchedules()
+        let file = runOutputFile(start.schedule, start.at)
+        let mirror = session.mirror
+        session.mirrorQueue.async { [weak self] in
+            // The screen and what scrolled by, as text.
+            let text = mirror.text(linesAbove: 5000)
+            var kept = false
+            if let file, !text.isEmpty {
+                try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                kept = (try? text.write(to: file, atomically: true, encoding: .utf8)) != nil
+            }
+            let changes = start.before.flatMap { GitActions.changes(since: $0, in: start.directory) }
+            self?.queue.async {
+                guard let self, let index = self.schedules.firstIndex(where: { $0.id == start.schedule }),
+                    let place = self.schedules[index].runs.firstIndex(where: { $0.session == id && $0.at == start.at })
+                else { return }
+                self.schedules[index].runs[place].hasOutput = kept
+                self.schedules[index].runs[place].changes = changes
+                self.saveSchedules()
+                self.broadcastSchedules()
+                self.forgetOldRunOutput()
+            }
+        }
+    }
+
+    /// What runs printed is kept as long as the runs themselves are.
+    private func forgetOldRunOutput() {
+        guard let folder = runOutputFile("x", Date())?.deletingLastPathComponent() else { return }
+        let kept = Set(schedules.flatMap { schedule in schedule.runs.compactMap { self.runOutputFile(schedule.id, $0.at)?.lastPathComponent } })
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? [] where !kept.contains(name) {
+            try? FileManager.default.removeItem(at: folder.appendingPathComponent(name))
+        }
+    }
+
+    // MARK: What the apps ask of a schedule (#47)
+
+    private func runNow(_ id: String, for client: Client) {
+        guard let schedule = schedules.first(where: { $0.id == id }) else { return }
+        let now = configuration.now()
+        if !schedule.waitsForPrevious, !going(schedule.name, now: now).isEmpty {
+            send(.error("“\(schedule.name)” is running: stop that run first, or have its runs wait for the one before."), to: client)
+            return
+        }
+        waitingRuns.append((id, now, "Run now"))
+        startWaitingRuns()
+        saveSchedules()
+        updateSleepGuard()
+    }
+
+    private func stopRun(of id: String, at: Date, for client: Client) {
+        // One that still waits to start is taken off the list.
+        if let waiting = waitingRuns.firstIndex(where: { $0.schedule == id && $0.at == at }), !preparingRuns.contains(runKey(id, at)) {
+            waitingRuns.remove(at: waiting)
+            if let index = schedules.firstIndex(where: { $0.id == id }) { record(ScheduleRun(at: at, started: false, note: "Stopped by you before it started"), in: index) }
+            return
+        }
+        guard let run = schedules.first(where: { $0.id == id })?.runs.first(where: { $0.at == at && $0.started }), let session = run.session.flatMap({ sessions[$0] })
+        else {
+            send(.error("That run is not going on any more."), to: client)
+            return
+        }
+        runStops[session.info.id] = "Stopped by you"
+        session.endAsked = true
+        session.process.hangUp()
+    }
+
+    private func sendRunOutput(of id: String, at: Date, to client: Client) {
+        let file = runOutputFile(id, at)
+        work(for: client, { file.flatMap { try? String(contentsOf: $0, encoding: .utf8) } }) { server, client, text in
+            server.send(.scheduleRunOutput(id: id, at: at, text: text), to: client)
+        }
+    }
+
+    private func duplicateSchedule(_ id: String) {
+        guard let schedule = schedules.first(where: { $0.id == id }) else { return }
+        schedules.append(schedule.duplicate(named: Set(schedules.map(\.name))))
+        saveSchedules()
+        broadcastSchedules()
+    }
+
+    private func pauseSchedules(_ paused: Bool) {
+        guard paused != schedulesPaused else { return }
+        schedulesPaused = paused
+        let now = configuration.now()
+        // From now on: what came due while they were held back is not run.
+        schedulesChecked = now
+        if paused { waitingRuns.removeAll { !preparingRuns.contains(runKey($0.schedule, $0.at)) } }
+        for index in schedules.indices { schedules[index].nextRun = nextRun(of: schedules[index], after: now) }
+        saveSchedules()
+        for client in clients.values where client.authenticated { send(.schedulesPaused(paused), to: client) }
+        broadcastSchedules()
+        updateSleepGuard()
     }
 
     private func record(_ run: ScheduleRun, in index: Int) {
@@ -1438,6 +1716,16 @@ public final class HostServer {
             used(by: client)
         case .saveSchedule(let schedule):
             if let problem = save(schedule) { send(.error(problem), to: client) }
+        case .runSchedule(let id):
+            runNow(id, for: client)
+        case .stopScheduleRun(let id, let at):
+            stopRun(of: id, at: at, for: client)
+        case .scheduleRunOutput(let id, let at):
+            sendRunOutput(of: id, at: at, to: client)
+        case .duplicateSchedule(let id):
+            duplicateSchedule(id)
+        case .pauseSchedules(let paused):
+            pauseSchedules(paused)
         case .createInWorktree(let request, let branch, let from):
             createInWorktree(request, branch: branch, from: from, for: client)
         case .listWorktrees(let folder):
@@ -2177,6 +2465,7 @@ public final class HostServer {
         noticesSeen = noticesSeen.filter { sessions[$0.key]?.info.state == $0.value }
         for (id, state) in noticesSeen { send(.noticeSeen(session: id, state: state), to: client) }
         send(.schedules(schedules), to: client)
+        send(.schedulesPaused(schedulesPaused), to: client)
         send(.worktreeSetups(worktreeSetups), to: client)
         send(historyMarksMessage, to: client)
         send(.commitWriter(commitWriter), to: client)
@@ -2615,6 +2904,9 @@ public final class HostServer {
 
     private func sessionExited(_ id: SessionID, status: Int32) {
         guard let session = sessions.removeValue(forKey: id) else { return }
+        // A run that ends with its session, before its agent was seen done.
+        if session.info.schedule != nil { runEnded(session, outcome: session.endAsked ? "Its session was ended" : "Its session ended") }
+        runStops[id] = nil
         if let file = usageFile(for: id) {
             try? FileManager.default.removeItem(at: file)
             try? FileManager.default.removeItem(atPath: StatusLineRelay.failureFile(for: file.path))

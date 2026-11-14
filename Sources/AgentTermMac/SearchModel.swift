@@ -31,7 +31,14 @@ final class SearchModel: ObservableObject {
     private(set) var root: String?
     private var remote: ((ClientMessage) -> Void)?
     /// Numbers the searches: an answer to an earlier one is not shown.
-    private var number = 0
+    private var number: Int
+
+    /// - Parameter firstNumber: Where its searches' numbers start. Two
+    ///   searches of one connection number theirs apart, so that neither
+    ///   takes the other's answers for its own.
+    init(firstNumber: Int = 0) {
+        number = firstNumber
+    }
     private var pending: DispatchWorkItem?
     private var flag: Flag?
     /// This Mac's folder's files, kept while its search is open.

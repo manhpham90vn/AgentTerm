@@ -388,6 +388,84 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(snapshot.withoutPatches.submodules.first?.changes.files.map(\.path), ["l.txt"])
     }
 
+    /// SCHED-28 (#47): a schedule that runs every so often, all day or
+    /// between two times, and one that runs on certain dates, come due
+    /// when they should and say so in words; what an earlier build saved
+    /// still reads; a copy and a schedule's changes are as they should be.
+    func testTheNewWaysToScheduleAndWhatIsSaidOfARun() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        func at(_ day: Int, _ hour: Int, _ minute: Int) -> Date { calendar.date(from: DateComponents(year: 2026, month: 11, day: day, hour: hour, minute: minute))! }
+
+        let often = ScheduleTime.every(minutes: 30, from: nil, until: nil)
+        XCTAssertEqual(often.next(after: at(14, 10, 5), calendar: calendar), at(14, 10, 30))
+        XCTAssertEqual(often.next(after: at(14, 10, 30), calendar: calendar), at(14, 11, 0), "after, not at")
+        XCTAssertEqual(often.next(after: at(14, 23, 45), calendar: calendar), at(15, 0, 0), "over midnight")
+        XCTAssertEqual(often.label(), "Every 30 minutes")
+        let working = ScheduleTime.every(minutes: 120, from: 9 * 60, until: 18 * 60)
+        XCTAssertEqual(working.next(after: at(14, 8, 0), calendar: calendar), at(14, 9, 0))
+        XCTAssertEqual(working.next(after: at(14, 9, 0), calendar: calendar), at(14, 11, 0))
+        XCTAssertEqual(working.next(after: at(14, 17, 30), calendar: calendar), at(15, 9, 0), "nothing after the last of the day")
+        XCTAssertEqual(working.label(), "Every 2 hours, 09:00 to 18:00")
+        XCTAssertEqual(ScheduleTime.every(minutes: 60, from: nil, until: nil).label(), "Every hour")
+        XCTAssertEqual(ScheduleTime.every(minutes: 90, from: nil, until: nil).label(), "Every 90 minutes")
+
+        let some = ScheduleTime.dates([at(20, 9, 0), at(16, 9, 0)])
+        XCTAssertEqual(some.next(after: at(14, 0, 0), calendar: calendar), at(16, 9, 0))
+        XCTAssertEqual(some.next(after: at(16, 9, 0), calendar: calendar), at(20, 9, 0))
+        XCTAssertNil(some.next(after: at(21, 0, 0), calendar: calendar))
+        XCTAssertTrue(some.label().hasPrefix("On 2 dates, from "))
+        XCTAssertEqual(ScheduleTime.dates([]).label(), "On no date")
+        for when in [often, working, some] { XCTAssertEqual(try JSONDecoder().decode(ScheduleTime.self, from: JSONEncoder().encode(when)), when) }
+
+        // As a build before these were added saved it.
+        let old =
+            #"{"id":"s","name":"Morning","agent":"claude","folder":"/p","prompt":"go","when":{"limitReset":{}},"permissions":"ask","enabled":true,"catchUp":true,"warningAccepted":false,"runs":[{"at":0,"started":true,"note":"Started"}]}"#
+        var schedule = try XCTUnwrap(MessageCoding.decode(Schedule.self, from: Data(old.utf8)))
+        XCTAssertEqual(schedule.condition, .always)
+        XCTAssertFalse(schedule.waitsForPrevious || schedule.inWorktree)
+        XCTAssertNil(schedule.maxMinutes)
+        XCTAssertEqual(schedule.runs.first?.summary, "Started")
+        XCTAssertEqual(schedule.runs.first?.hasOutput, false)
+
+        // What is said of a run once it is over.
+        var run = ScheduleRun(at: at(14, 9, 0), started: true, session: 3, note: "Started")
+        run.ended = at(14, 9, 12)
+        run.outcome = "Done"
+        XCTAssertEqual(run.duration, 12 * 60)
+        XCTAssertEqual(run.summary, "Done, after 12 min")
+        XCTAssertEqual(ScheduleRun(at: at(14, 9, 0), started: false, note: "Skipped: nothing is changed in the folder").summary, "Skipped: nothing is changed in the folder")
+
+        // A copy: its own id and name, off, without the runs.
+        schedule.edits = [ScheduleEdit(at: at(14, 9, 0), what: ["x"])]
+        let copy = schedule.duplicate(named: ["Morning", "Morning copy"])
+        XCTAssertEqual(copy.name, "Morning copy 2")
+        XCTAssertNotEqual(copy.id, schedule.id)
+        XCTAssertFalse(copy.enabled)
+        XCTAssertEqual(copy.runs, [])
+        XCTAssertEqual(copy.edits, [])
+        XCTAssertEqual(copy.prompt, "go")
+
+        // What changed, in words.
+        var changed = schedule
+        changed.name = "Evening"
+        changed.prompt = "go on"
+        changed.condition = .afterPull
+        changed.inWorktree = true
+        changed.waitsForPrevious = true
+        changed.enabled = false
+        XCTAssertEqual(
+            changed.changes(from: schedule),
+            [
+                "Renamed from “Morning” to “Evening”", "The prompt was changed", "Turned off", "A run now waits for the one before it",
+                "Runs: every time → only after a pull brought new commits", "Each run is now in a new worktree",
+            ])
+        XCTAssertEqual(schedule.changes(from: schedule), [])
+        XCTAssertEqual(
+            ScheduleOverview.Run.id(schedule: "s", at: Date(timeIntervalSince1970: 5)),
+            ScheduleOverview.Run(schedule: schedule, run: ScheduleRun(at: Date(timeIntervalSince1970: 5), started: false, note: "")).id)
+    }
+
     /// WT-18 (#43): what a worktree's chip says, and what is asked before
     /// one is thrown away, the same on both apps.
     func testWhatAWorktreesChipSays() {

@@ -133,6 +133,8 @@ final class SchedulerHostTests: XCTestCase {
         var sessions: [SessionInfo] { messages.compactMap { if case .sessions(let list) = $0 { return list } else { return nil } }.last ?? [] }
         var schedules: [Schedule] { messages.compactMap { if case .schedules(let list) = $0 { return list } else { return nil } }.last ?? [] }
         var errors: [String] { messages.compactMap { if case .error(let text) = $0 { return text } else { return nil } } }
+        var failures: [PartFailure] { messages.compactMap { if case .failures(let list) = $0 { return list } else { return nil } }.last ?? [] }
+        var paused: Bool? { messages.compactMap { if case .schedulesPaused(let paused) = $0 { return paused } else { return nil } }.last }
     }
 
     private var root: URL!
@@ -181,6 +183,8 @@ final class SchedulerHostTests: XCTestCase {
         if [ -n "$event" ] && [ -n "$AGENTTERM_EVENTS" ]; then
             printf '{"agent":"%s","event":"%s","at":%s,"input":{}}' "$agent" "$event" "$(date +%s)" > "$AGENTTERM_EVENTS"
         fi
+        # Codex prints nothing either: a run of it is known only by its silence.
+        [ "$agent" = claude ] && echo "the stand-in $agent is at work"
         exec sleep 600
         """.write(to: agents.appendingPathComponent("claude"), atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: agents.appendingPathComponent("claude").path)
@@ -489,5 +493,255 @@ final class SchedulerHostTests: XCTestCase {
         set(ScheduleTime.daily(hour: 9, minute: 0).next(after: clock)!.addingTimeInterval(5))
         waitUntil("the agent to start") { !self.startedLines.isEmpty }
         XCTAssertTrue(startedLines.first?.hasSuffix("|true") == true, startedLines.first ?? "")
+    }
+
+    // MARK: Run now, what a run did, and more ways to schedule (#47)
+
+    @discardableResult
+    private func git(_ arguments: String..., in directory: URL? = nil) -> String {
+        let result = Subprocess.run("/usr/bin/git", ["-C", (directory ?? project).path, "-c", "commit.gpgsign=false"] + arguments, timeout: 30, mergeErrors: true)
+        return String(decoding: result?.output ?? Data(), as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func repository() throws {
+        git("init", "-q", "-b", "main")
+        git("config", "user.name", "Test")
+        git("config", "user.email", "test@example.com")
+        try "one\n".write(to: project.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+    }
+
+    private var runs: [ScheduleRun] { client.schedules.first?.runs ?? [] }
+
+    /// SCHED-21: a schedule is run now, whatever its time; its run is
+    /// stopped, and then says how it ended, how long it took, what it
+    /// changed in git, and what it printed, which is kept.
+    func testAScheduleIsRunNowStoppedAndSaysWhatItDid() throws {
+        try repository()
+        // Changed and not committed before the run: not something the run did.
+        try "there before\n".write(to: project.appendingPathComponent("before.txt"), atomically: true, encoding: .utf8)
+        try "one\nmine, not committed\n".write(to: project.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        client.connection.send(.saveSchedule(morning()))
+        waitUntil("saved") { self.client.schedules.count == 1 }
+        client.connection.send(.runSchedule(id: "s-claude"))
+        waitUntil("the run's session") { self.client.sessions.count == 1 }
+        waitUntil("recorded") { self.runs.map(\.note) == ["Run now"] }
+        let run = try XCTUnwrap(runs.first)
+        XCTAssertNil(run.ended)
+        XCTAssertEqual(run.summary, "Run now")
+        waitUntil("the agent at work") { !self.startedLines.isEmpty }
+        // Running: it is not run beside itself.
+        client.connection.send(.runSchedule(id: "s-claude"))
+        waitUntil("refused") { self.client.errors.contains { $0.contains("is running: stop that run first") } }
+
+        // What the run did meanwhile, and three minutes on the clock.
+        try "made by the run\n".write(to: project.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        pause(0.6)
+        try "one\nmine, not committed\ntwo\n".write(to: project.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        git("commit", "-q", "-am", "by the run")
+        set(clock.addingTimeInterval(180))
+        client.connection.send(.stopScheduleRun(id: "s-claude", at: run.at))
+        waitUntil("the session ended") { self.client.sessions.isEmpty }
+        waitUntil("how it ended") { self.runs.first?.outcome == "Stopped by you" }
+        waitUntil("what it changed") { self.runs.first?.changes != nil }
+        let ended = try XCTUnwrap(runs.first)
+        XCTAssertEqual(ended.duration, 180)
+        XCTAssertEqual(ended.summary, "Stopped by you, after 3 min")
+        XCTAssertEqual(ended.changes, "1 commit, 1 file changed, 1 insertion, 1 new file not tracked")
+        XCTAssertTrue(ended.hasOutput)
+        client.connection.send(.scheduleRunOutput(id: "s-claude", at: run.at))
+        waitUntil("what it printed") {
+            self.client.messages.contains { if case .scheduleRunOutput("s-claude", run.at, let text?) = $0 { return text.contains("the stand-in claude is at work") } else { return false } }
+        }
+        // A run nothing was kept of, and one that is no longer going.
+        client.connection.send(.scheduleRunOutput(id: "s-claude", at: .distantPast))
+        waitUntil("nothing kept") { self.client.messages.contains(.scheduleRunOutput(id: "s-claude", at: .distantPast, text: nil)) }
+        client.connection.send(.stopScheduleRun(id: "s-claude", at: run.at))
+        waitUntil("not going any more") { self.client.errors.contains("That run is not going on any more.") }
+    }
+
+    /// SCHED-22: a run that waits for the one before it starts when that
+    /// one has ended, instead of being skipped.
+    func testARunWaitsForTheOneBeforeIt() throws {
+        var schedule = morning()
+        schedule.waitsForPrevious = true
+        let nine = ScheduleTime.daily(hour: 9, minute: 0).next(after: clock)!
+        client.connection.send(.saveSchedule(schedule))
+        waitUntil("saved") { self.client.schedules.count == 1 }
+        set(nine.addingTimeInterval(5))
+        waitUntil("the first run") { self.client.sessions.count == 1 }
+        waitUntil("its agent at work") { self.client.sessions.first?.state?.isWorking == true }
+        let first = try XCTUnwrap(client.sessions.first?.id)
+        set(nine.addingTimeInterval(24 * 3600 + 5))
+        pause(0.6)
+        XCTAssertEqual(runs.count, 1, "not skipped, and not started beside the first")
+        XCTAssertEqual(client.sessions.count, 1)
+        client.connection.send(.kill(session: first))
+        waitUntil("the second, once the first ended") { self.client.sessions.first.map { $0.id != first } == true }
+        waitUntil("both recorded") { self.runs.count == 2 }
+        XCTAssertEqual(runs.first?.outcome, "Its session was ended")
+        XCTAssertNil(runs.last?.ended)
+    }
+
+    /// SCHED-23: a run that takes longer than its schedule lets it is
+    /// stopped, says so, and both apps' banner is told.
+    func testARunIsStoppedAfterItsLongestTime() throws {
+        var schedule = morning()
+        schedule.maxMinutes = 30
+        let nine = ScheduleTime.daily(hour: 9, minute: 0).next(after: clock)!
+        client.connection.send(.saveSchedule(schedule))
+        waitUntil("saved") { self.client.schedules.count == 1 }
+        set(nine.addingTimeInterval(5))
+        waitUntil("the run") { self.client.sessions.count == 1 }
+        set(nine.addingTimeInterval(29 * 60))
+        pause(0.6)
+        XCTAssertEqual(client.sessions.count, 1, "not before its time is up")
+        set(nine.addingTimeInterval(31 * 60))
+        waitUntil("stopped") { self.client.sessions.isEmpty }
+        waitUntil("said to be") { self.runs.first?.outcome == "Stopped: it ran longer than 30 min" }
+        let failure = try XCTUnwrap(client.failures.last)
+        XCTAssertEqual(failure.part, .schedule)
+        XCTAssertEqual(failure.name, "Morning review")
+        XCTAssertEqual(failure.reason, "Stopped: it ran longer than 30 min.")
+        XCTAssertTrue(failure.headline().hasPrefix("A run of the schedule “Morning review” did not go as planned"))
+        // Saved wrongly: refused in words.
+        schedule.maxMinutes = 0
+        client.connection.send(.saveSchedule(schedule))
+        waitUntil("refused") { self.client.errors.contains("The longest a run may take is at least a minute.") }
+    }
+
+    /// SCHED-24: a schedule that runs only when the folder has changes is
+    /// skipped when it has none, and says so; one that runs after a pull is
+    /// not started when there is nothing to pull from, which the banner says.
+    func testARunStartsOnlyWhenThereIsSomethingToDo() throws {
+        try repository()
+        var schedule = morning()
+        schedule.condition = .whenChanged
+        let nine = ScheduleTime.daily(hour: 9, minute: 0).next(after: clock)!
+        client.connection.send(.saveSchedule(schedule))
+        waitUntil("saved") { self.client.schedules.count == 1 }
+        set(nine.addingTimeInterval(5))
+        waitUntil("skipped") { self.runs.map(\.note) == ["Skipped: nothing is changed in the folder"] }
+        XCTAssertEqual(client.sessions.count, 0)
+        XCTAssertEqual(client.failures.count, 0, "a run that is skipped as it was told to is no failure")
+        // The next day, with a change.
+        try "changed\n".write(to: project.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        set(nine.addingTimeInterval(24 * 3600 + 5))
+        waitUntil("run") { self.client.sessions.count == 1 }
+        waitUntil("recorded") { self.runs.count == 2 && self.runs.last?.started == true }
+
+        // After a pull, in a repository that follows nothing: said, in the list and in the banner.
+        client.connection.send(.kill(session: try XCTUnwrap(client.sessions.first?.id)))
+        waitUntil("ended") { self.client.sessions.isEmpty }
+        schedule.condition = .afterPull
+        client.connection.send(.saveSchedule(schedule))
+        waitUntil("saved again") { self.client.schedules.first?.condition == .afterPull }
+        set(nine.addingTimeInterval(48 * 3600 + 5))
+        waitUntil("not started") { self.runs.last?.note.hasPrefix("Not started: the pull failed.") == true }
+        XCTAssertEqual(client.sessions.count, 0)
+        waitUntil("the banner told") { self.client.failures.last?.part == .schedule }
+        XCTAssertEqual(client.failures.last?.name, "Morning review")
+    }
+
+    /// SCHED-25: after a pull that brought new commits the run starts;
+    /// after one that brought none it is skipped.
+    func testARunStartsAfterAPullThatBroughtNewCommits() throws {
+        try repository()
+        let remote = root.appendingPathComponent("remote.git")
+        git("init", "-q", "--bare", "-b", "main", remote.path)
+        git("remote", "add", "origin", remote.path)
+        git("push", "-q", "-u", "origin", "main")
+        var schedule = morning()
+        schedule.condition = .afterPull
+        let nine = ScheduleTime.daily(hour: 9, minute: 0).next(after: clock)!
+        client.connection.send(.saveSchedule(schedule))
+        waitUntil("saved") { self.client.schedules.count == 1 }
+        set(nine.addingTimeInterval(5))
+        waitUntil("skipped") { self.runs.map(\.note) == ["Skipped: the pull brought nothing new"] }
+
+        // Someone else pushes.
+        let other = root.appendingPathComponent("other")
+        git("clone", "-q", remote.path, other.path)
+        git("config", "user.name", "Other", in: other)
+        git("config", "user.email", "other@example.com", in: other)
+        try "theirs\n".write(to: other.appendingPathComponent("b.txt"), atomically: true, encoding: .utf8)
+        git("add", ".", in: other)
+        git("commit", "-q", "-m", "theirs", in: other)
+        git("push", "-q", in: other)
+        set(nine.addingTimeInterval(24 * 3600 + 5))
+        waitUntil("run") { self.client.sessions.count == 1 }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: project.appendingPathComponent("b.txt").path), "pulled first")
+    }
+
+    /// SCHED-26: a schedule whose runs have a worktree of their own starts
+    /// its agent there, on a branch named after it, and says where; the
+    /// folder itself is left as it is.
+    func testARunInAWorktreeOfItsOwn() throws {
+        try repository()
+        var schedule = morning()
+        schedule.inWorktree = true
+        client.connection.send(.saveSchedule(schedule))
+        waitUntil("saved") { self.client.schedules.count == 1 }
+        client.connection.send(.runSchedule(id: "s-claude"))
+        waitUntil("the run's session") { self.client.sessions.count == 1 }
+        let session = try XCTUnwrap(client.sessions.first)
+        XCTAssertTrue(session.cwd.contains("/.agentterm/worktrees/schedule/morning-review-"), session.cwd)
+        XCTAssertTrue(WorktreePath.belongs(session.cwd, to: project.path))
+        waitUntil("recorded with its worktree") { self.runs.first?.worktree == session.cwd }
+        waitUntil("started there") { self.startedLines.first?.contains("/.agentterm/worktrees/schedule/morning-review-") == true }
+        XCTAssertTrue(git("branch", "--list", "schedule/*").contains("schedule/morning-review-"))
+        XCTAssertEqual(git("status", "--porcelain"), "", "the folder itself is untouched")
+        // Kept for review once the run is over.
+        client.connection.send(.kill(session: session.id))
+        waitUntil("ended") { self.client.sessions.isEmpty }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: session.cwd))
+    }
+
+    /// SCHED-27: a schedule is duplicated, turned off; all are paused, and
+    /// none comes due meanwhile nor is caught up afterwards; what is
+    /// changed about a schedule is kept with it.
+    func testSchedulesAreDuplicatedPausedAndKeepTheirChanges() throws {
+        let nine = ScheduleTime.daily(hour: 9, minute: 0).next(after: clock)!
+        client.connection.send(.saveSchedule(morning()))
+        waitUntil("saved") { self.client.schedules.count == 1 }
+        XCTAssertEqual(client.paused, false)
+        XCTAssertEqual(client.schedules.first?.edits, [], "making it is not a change to it")
+
+        client.connection.send(.duplicateSchedule(id: "s-claude"))
+        waitUntil("the copy") { self.client.schedules.count == 2 }
+        let copy = try XCTUnwrap(client.schedules.last)
+        XCTAssertEqual(copy.name, "Morning review copy")
+        XCTAssertFalse(copy.enabled)
+        XCTAssertNotEqual(copy.id, "s-claude")
+        XCTAssertNil(copy.nextRun)
+
+        // Changed: when, and how long it may take.
+        var changed = morning()
+        changed.when = .every(minutes: 120, from: 9 * 60, until: 18 * 60)
+        changed.maxMinutes = 45
+        client.connection.send(.saveSchedule(changed))
+        waitUntil("its changes kept") { self.client.schedules.first?.edits.count == 1 }
+        XCTAssertEqual(client.schedules.first?.edits.first?.what, ["When: Every day at 09:00 → Every 2 hours, 09:00 to 18:00", "A run is now stopped after 45 min"])
+        XCTAssertEqual(client.schedules.first?.nextRun, nine)
+        changed.when = .every(minutes: 2, from: nil, until: nil)
+        client.connection.send(.saveSchedule(changed))
+        waitUntil("too often") { self.client.errors.contains("A schedule runs every 5 minutes at the most often.") }
+
+        // Paused: nothing comes due.
+        client.connection.send(.pauseSchedules(true))
+        waitUntil("paused") { self.client.paused == true && self.client.schedules.first?.nextRun == nil }
+        set(nine.addingTimeInterval(5))
+        pause(0.6)
+        XCTAssertEqual(client.sessions.count, 0)
+        XCTAssertEqual(runs, [])
+        // Let go again after eleven: the run of nine is not caught up; the next is at eleven.
+        set(nine.addingTimeInterval(30 * 60))
+        client.connection.send(.pauseSchedules(false))
+        waitUntil("running again") { self.client.paused == false && self.client.schedules.first?.nextRun == nine.addingTimeInterval(2 * 3600) }
+        pause(0.6)
+        XCTAssertEqual(client.sessions.count, 0)
+        set(nine.addingTimeInterval(2 * 3600 + 5))
+        waitUntil("the run of eleven") { self.client.sessions.count == 1 }
     }
 }

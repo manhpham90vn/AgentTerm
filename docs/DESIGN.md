@@ -719,6 +719,31 @@ when it is made or its time changes), and the last limit reset each agent
 ran for. Clients send `saveSchedule`, `removeSchedule` and are told
 `schedules`.
 
+What 0.7.0 adds to schedules (#47). `ScheduleTime.every(minutes, from,
+until)` comes due at midnight or at `from` and then every `minutes` until
+`until`, each day; `.dates` at each of its moments. A run that comes due
+goes into `waitingRuns` as before; one whose schedule has a condition or a
+worktree is got ready off the queue (`prepare`): the folder's changes are
+read, or its branch is pulled and its head compared, and its worktree is
+made (`GitWorktrees.create`, submodules, the setup command, the folder
+trusted for the agent), and it then starts, is recorded as skipped, or is
+recorded as not started and reported (`PartFailure.Part.schedule`). When a
+run starts, how its folder was is kept (`GitActions.baseline`: the head,
+the files as they were as a commit made by `git stash create`, which
+changes nothing, and the untracked files); when it ends
+(`runEnded`: its agent seen done at a look, or its session gone) its
+`ScheduleRun` gets `ended`, `outcome`, `changes` (commits since, `git diff
+--shortstat` against the files as they were, new untracked files) and
+`hasOutput`: the session's mirror as text, with 5,000 lines above the
+screen, written to `runs/<schedule>-<time>.txt` in the host's folder and
+removed with the run. `maxMinutes` is looked at each time the schedules
+are. Messages: `runSchedule(id)`, `stopScheduleRun(id, at)`,
+`scheduleRunOutput(id, at)` answered with `scheduleRunOutput(id, at,
+text)`, `duplicateSchedule(id)`, `pauseSchedules(Bool)` answered to every
+device with `schedulesPaused(Bool)`. The host writes what was changed
+about a schedule into its `edits` when it is saved
+(`Schedule.changes(from:)`).
+
 **Shown.** `ScheduleOverview` (protocol), which both apps use, groups the
 schedules with the sessions that still run: the runs whose session is one
 of them (running), every schedule by its next run (then those with none,

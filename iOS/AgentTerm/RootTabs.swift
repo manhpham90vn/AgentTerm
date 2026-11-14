@@ -332,6 +332,15 @@ private struct SchedulesScreen: View {
     var body: some View {
         let overview = ScheduleOverview(schedules: model.schedules, liveSessions: Set(model.sessions.map(\.id)))
         List {
+            if !model.schedules.isEmpty {
+                // Holds every schedule back, or lets them run again (#47).
+                Section {
+                    Toggle("Pause All Schedules", isOn: Binding(get: { model.schedulesPaused }, set: { model.pauseSchedules($0) }))
+                        .accessibilityIdentifier("schedules-pause")
+                } footer: {
+                    if model.schedulesPaused { Text("Every schedule is paused: none runs until they are let go again.") }
+                }
+            }
             Section("Running") {
                 if overview.running.isEmpty { Text("No run is going on.").foregroundStyle(.secondary) }
                 ForEach(overview.running) { run in
@@ -344,6 +353,9 @@ private struct SchedulesScreen: View {
                         RunLabel(run: run, live: true)
                     }
                     .accessibilityIdentifier("run-\(run.id)")
+                    .swipeActions {
+                        Button("Stop", role: .destructive) { model.stop(run) }
+                    }
                 }
             }
             Section("Scheduled") {
@@ -372,6 +384,21 @@ private struct SchedulesScreen: View {
                             }
                         }
                         .accessibilityIdentifier("schedule-\(schedule.id)")
+                    }
+                    .swipeActions(edge: .leading) {
+                        Button("Run Now") { model.runNow(schedule) }.tint(.green)
+                    }
+                    .contextMenu {
+                        Button {
+                            model.runNow(schedule)
+                        } label: {
+                            Label("Run Now", systemImage: "play")
+                        }
+                        Button {
+                            model.duplicate(schedule)
+                        } label: {
+                            Label("Duplicate", systemImage: "plus.square.on.square")
+                        }
                     }
                 }
                 if let first = model.agents.first(where: { $0.path != nil }), let folder = model.folders.first {
@@ -403,7 +430,7 @@ private struct SchedulesScreen: View {
         var parts: [String] = []
         if !schedule.enabled { parts.append("Off") } else if let next = schedule.nextRun { parts.append("Next \(next.formatted(date: .abbreviated, time: .shortened))") }
         parts.append(schedule.permissions.label)
-        if let last = schedule.runs.last { parts.append("Last: \(last.note.lowercased())") }
+        if let last = schedule.runs.last { parts.append("Last: \(last.summary.lowercased())") }
         return parts.joined(separator: " · ")
     }
 }
@@ -419,16 +446,60 @@ private struct FormRunRow: View {
     }
 
     var body: some View {
-        if let id = liveSession {
+        if let id = liveSession, run.run.ended == nil {
             Button {
                 model.tab = "sessions"
                 model.path = [.session(id)]
             } label: {
                 RunLabel(run: run, live: true)
             }
+            .swipeActions {
+                Button("Stop", role: .destructive) { model.stop(run) }
+            }
+        } else if run.run.hasOutput {
+            // What it printed, kept when it ended (#47).
+            NavigationLink {
+                RunOutputScreen(run: run)
+            } label: {
+                RunLabel(run: run, live: false)
+            }
         } else {
             RunLabel(run: run, live: false)
         }
+    }
+}
+
+/// What a run printed, with how it ended and what it changed.
+private struct RunOutputScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+    let run: ScheduleOverview.Run
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(run.run.at.formatted(date: .abbreviated, time: .shortened) + " · " + run.run.summary).font(.footnote).foregroundStyle(.secondary)
+                if let changes = run.run.changes { Label(changes, systemImage: "arrow.triangle.branch").font(.footnote).foregroundStyle(.secondary) }
+                if let worktree = run.run.worktree {
+                    Label("In the worktree " + (worktree as NSString).lastPathComponent, systemImage: "folder").font(.footnote).foregroundStyle(.secondary)
+                }
+                switch model.runOutputs[run.id] {
+                case .none:
+                    ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
+                case .some(.none):
+                    Text("Nothing was kept of what this run printed.").font(.callout).foregroundStyle(.secondary)
+                case .some(.some(let text)):
+                    ScrollView(.horizontal) {
+                        Text(text).font(.system(size: 11, design: .monospaced)).textSelection(.enabled)
+                    }
+                    .accessibilityIdentifier("run-output")
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .navigationTitle(run.schedule.name)
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { model.loadOutput(of: run) }
     }
 }
 
@@ -445,8 +516,9 @@ private struct RunLabel: View {
                 .frame(width: 20)
             VStack(alignment: .leading, spacing: 3) {
                 Text(run.schedule.name).foregroundStyle(.primary)
-                Text(run.run.at.formatted(date: .abbreviated, time: .shortened) + " · " + (live ? "running" : run.run.note))
+                Text(run.run.at.formatted(date: .abbreviated, time: .shortened) + " · " + (live ? "running" : run.run.summary))
                     .font(.footnote).foregroundStyle(.secondary)
+                if !live, let changes = run.run.changes { Text(changes).font(.caption).foregroundStyle(.secondary) }
             }
         }
     }
@@ -463,6 +535,18 @@ private struct ScheduleForm: View {
     @State private var warning = false
     /// Any folder of the Mac, not only those in the list, as on the Mac.
     @State private var choosingFolder = false
+    /// Every so many minutes or hours, all day or between two times (#47).
+    @State private var interval = 30
+    @State private var inHours = false
+    @State private var between = false
+    @State private var from = Calendar.current.date(bySettingHour: 9, minute: 0, second: 0, of: Date()) ?? Date()
+    @State private var until = Calendar.current.date(bySettingHour: 18, minute: 0, second: 0, of: Date()) ?? Date()
+    @State private var dates: [Date] = []
+    @State private var limited = false
+    @State private var longest = 30
+    @State private var editingPrompt = false
+
+    private var edits: [ScheduleEdit] { (model.schedules.first { $0.id == schedule.id }?.edits ?? []).reversed() }
 
     /// Every run the host kept, newest first, as they are now.
     private var runs: [ScheduleRun] { (model.schedules.first { $0.id == schedule.id }?.runs ?? schedule.runs).reversed() }
@@ -484,13 +568,37 @@ private struct ScheduleForm: View {
                 Button("Choose Another Folder…") { choosingFolder = true }
                     .accessibilityIdentifier("schedule-choose-folder")
                 TextField("Prompt", text: $schedule.prompt, axis: .vertical).lineLimit(3...8)
+                Button("Open the Prompt in a Larger Editor…") { editingPrompt = true }
+                    .accessibilityIdentifier("schedule-prompt-editor")
             }
             Section {
                 Picker("When", selection: $kind) {
                     Text("Once").tag(0)
                     Text("Every day").tag(1)
                     Text("On some days").tag(2)
+                    Text("Every…").tag(4)
+                    Text("On certain dates").tag(5)
                     Text("When the limit starts over").tag(3)
+                }
+                if kind == 4 {
+                    Stepper("Every \(interval) \(inHours ? (interval == 1 ? "hour" : "hours") : (interval == 1 ? "minute" : "minutes"))", value: $interval, in: 1...720)
+                    Picker("In", selection: $inHours) {
+                        Text("Minutes").tag(false)
+                        Text("Hours").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                    Toggle("Only between two times", isOn: $between)
+                    if between {
+                        DatePicker("From", selection: $from, displayedComponents: .hourAndMinute)
+                        DatePicker("Until", selection: $until, displayedComponents: .hourAndMinute)
+                    }
+                }
+                if kind == 5 {
+                    ForEach(dates.indices, id: \.self) { index in
+                        DatePicker("On", selection: $dates[index])
+                    }
+                    .onDelete { dates.remove(atOffsets: $0) }
+                    Button("Add a Date") { dates.append((dates.max() ?? Date()).addingTimeInterval(24 * 3600)) }
                 }
                 if kind == 0 { DatePicker("At", selection: $time) }
                 if kind == 1 || kind == 2 { DatePicker("At", selection: $time, displayedComponents: .hourAndMinute) }
@@ -507,6 +615,22 @@ private struct ScheduleForm: View {
                 Toggle("Run once after a missed time", isOn: $schedule.catchUp)
                 Toggle("On", isOn: $schedule.enabled)
             }
+            Section {
+                Picker("Starts", selection: $schedule.condition) {
+                    ForEach(ScheduleCondition.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                .accessibilityIdentifier("schedule-condition")
+                Picker("While the run before is going", selection: $schedule.waitsForPrevious) {
+                    Text("Skip the run").tag(false)
+                    Text("Wait for it").tag(true)
+                }
+                Toggle("Stop a run that takes too long", isOn: $limited)
+                if limited { Stepper("After \(longest) minutes", value: $longest, in: 1...1440, step: 5) }
+                Toggle("Each run in a new worktree", isOn: $schedule.inWorktree)
+                    .accessibilityIdentifier("schedule-worktree")
+            } footer: {
+                Text(schedule.condition.advice + (schedule.inWorktree ? " A run's worktree is kept afterwards, to be looked at, merged or thrown away from the folder's worktrees." : ""))
+            }
             if !runs.isEmpty {
                 Section("Runs") {
                     ForEach(Array(runs.enumerated()), id: \.offset) { _, run in
@@ -514,19 +638,44 @@ private struct ScheduleForm: View {
                     }
                 }
             }
+            if !edits.isEmpty {
+                Section("Changes to This Schedule") {
+                    ForEach(Array(edits.enumerated()), id: \.offset) { _, edit in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(edit.at.formatted(date: .abbreviated, time: .shortened)).font(.caption).foregroundStyle(.secondary)
+                            ForEach(edit.what, id: \.self) { Text($0).font(.footnote) }
+                        }
+                    }
+                }
+            }
             if !isNew {
                 Section {
+                    Button("Run Now") { model.runNow(schedule) }
+                        .accessibilityIdentifier("schedule-run-now")
+                    Button("Duplicate") {
+                        model.duplicate(schedule)
+                        dismiss()
+                    }
                     Button("Delete Schedule", role: .destructive) {
                         model.removeSchedule(schedule.id)
                         dismiss()
                     }
+                } footer: {
+                    Text("Run Now and Duplicate use the schedule as it was last saved.")
                 }
             }
         }
         .navigationTitle(isNew ? "New Schedule" : schedule.name)
+        .sheet(isPresented: $editingPrompt) {
+            PromptEditorSheet(prompt: $schedule.prompt, folder: schedule.folder)
+                .environmentObject(model)
+                .preferredColorScheme(.dark)
+        }
         .toolbar {
             Button("Save") { save() }
-                .disabled(schedule.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || schedule.name.isEmpty || (kind == 2 && weekdays.isEmpty))
+                .disabled(
+                    schedule.prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || schedule.name.isEmpty || (kind == 2 && weekdays.isEmpty)
+                        || (kind == 5 && dates.isEmpty))
         }
         .sheet(isPresented: $choosingFolder) {
             BrowseSheet(start: schedule.folder.isEmpty ? nil : schedule.folder, pickTitle: "Run Here") { schedule.folder = $0 }
@@ -554,7 +703,24 @@ private struct ScheduleForm: View {
         case .weekly(let days, let hour, let minute):
             kind = 2; weekdays = Set(days); time = Calendar.current.date(bySettingHour: hour, minute: minute, second: 0, of: Date()) ?? Date()
         case .limitReset: kind = 3
+        case .every(let minutes, let first, let last):
+            kind = 4
+            inHours = minutes % 60 == 0
+            interval = inHours ? minutes / 60 : minutes
+            between = first != nil || last != nil
+            if let first { from = Calendar.current.date(bySettingHour: first / 60, minute: first % 60, second: 0, of: Date()) ?? from }
+            if let last { until = Calendar.current.date(bySettingHour: last / 60, minute: last % 60, second: 0, of: Date()) ?? until }
+        case .dates(let moments):
+            kind = 5
+            dates = moments.sorted()
         }
+        limited = schedule.maxMinutes != nil
+        longest = schedule.maxMinutes ?? 30
+    }
+
+    private func minutes(of time: Date) -> Int {
+        let parts = Calendar.current.dateComponents([.hour, .minute], from: time)
+        return (parts.hour ?? 0) * 60 + (parts.minute ?? 0)
     }
 
     private func save() {
@@ -563,13 +729,68 @@ private struct ScheduleForm: View {
         case 0: schedule.when = .once(time)
         case 1: schedule.when = .daily(hour: parts.hour ?? 9, minute: parts.minute ?? 0)
         case 2: schedule.when = .weekly(weekdays: weekdays.sorted(), hour: parts.hour ?? 9, minute: parts.minute ?? 0)
+        case 4: schedule.when = .every(minutes: interval * (inHours ? 60 : 1), from: between ? minutes(of: from) : nil, until: between ? minutes(of: until) : nil)
+        case 5: schedule.when = .dates(dates.sorted())
         default: schedule.when = .limitReset
         }
+        schedule.maxMinutes = limited ? longest : nil
         if schedule.permissions == .skipAll && !schedule.warningAccepted {
             warning = true
             return
         }
         model.save(schedule)
         dismiss()
+    }
+}
+
+/// The prompt in a larger editor (#47), with the files of the schedule's
+/// folder at hand: one that is picked is named in the prompt.
+private struct PromptEditorSheet: View {
+    @EnvironmentObject private var model: PhoneModel
+    @Environment(\.dismiss) private var dismiss
+    @Binding var prompt: String
+    let folder: String
+    @State private var query = ""
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                TextEditor(text: $prompt)
+                    .font(.body)
+                    .padding(8)
+                    .accessibilityIdentifier("prompt-editor")
+                Divider()
+                VStack(alignment: .leading, spacing: 6) {
+                    TextField("Find a file of \((folder as NSString).lastPathComponent) to name", text: $query)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .textFieldStyle(.roundedBorder)
+                        .accessibilityIdentifier("prompt-files")
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(model.foundFiles.prefix(30), id: \.self) { file in
+                                Button {
+                                    // Named as the agent will find it from its folder.
+                                    prompt += (prompt.isEmpty || prompt.hasSuffix(" ") || prompt.hasSuffix("\n") ? "" : " ") + file
+                                } label: {
+                                    Label(file, systemImage: "plus.circle").font(.footnote).lineLimit(1).truncationMode(.head)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .padding(.vertical, 6)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("prompt-file-" + file)
+                            }
+                        }
+                    }
+                    .frame(height: 150)
+                }
+                .padding(12)
+            }
+            .navigationTitle("Prompt")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+        }
+        .task(id: query) { model.findFiles(query, in: folder) }
+        .onDisappear { model.clearSearch() }
     }
 }

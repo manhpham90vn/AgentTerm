@@ -134,8 +134,10 @@ itself.
 ### Schedules
 
 - A schedule starts an agent with a prompt in a folder: once at a time,
-  every day at a time, on some weekdays at a time, or a little after the
-  agent's account limit starts over. On or off without being deleted. Made
+  every day at a time, on some weekdays at a time, every so many minutes
+  or hours (5 minutes at the most often; all day, or only between two
+  times of the day), on certain dates, or a little after the agent's
+  account limit starts over. On or off without being deleted. Made
   and changed in the Mac's Schedules, a place of the window, and the
   iPhone's Settings > Schedules; the host keeps them and runs them, with
   the app closed too.
@@ -170,6 +172,43 @@ itself.
 - A schedule about to run keeps the Mac awake from ten minutes before,
   whatever the keep-awake switch says. Waking a sleeping Mac is not done.
 - Each schedule lists its last runs: when, and what came of it.
+- **Run Now** (#47), from a schedule's menu in the list or from the
+  schedule itself, starts a run whatever its time. **Stop** ends a run
+  that is going on, from the list or from the schedule; one that still
+  waits to start is taken off the list. **Duplicate** makes a copy with
+  a name of its own, turned off, to be changed. **Pause All** holds every
+  schedule back: none comes due meanwhile, and what would have run is not
+  caught up when they are let go again.
+- **What a run did.** While it goes on, its session. Once it is over, how
+  it ended (its agent done, stopped by the user, stopped for taking too
+  long, its session ended) and how long it took; what it changed in git
+  since it started, in words (commits, files changed, new files), not
+  counting what was changed in the folder before; and **Output**: what it
+  printed, its screen and up to 5,000 lines that scrolled by, kept as
+  long as the run is listed.
+- **Being told.** A run is a session, so the iPhone says when its agent is
+  done or needs an answer as for any agent. A run that was not started
+  when it should have been (its folder gone, its agent not found, its
+  pull or its worktree failed) or was stopped for taking too long is said
+  in the top banner of both apps. A run skipped as its schedule says
+  (nothing changed, nothing pulled, the run before still going) is in the
+  list of runs only.
+- **When a run starts.** Every time it comes due; only when the folder
+  has changes that are not committed; or only after a pull, done first,
+  brought new commits. A run that comes due while the one before it is
+  still going is skipped, or waits for it, as the schedule says. A
+  schedule may name the longest a run may take, after which it is
+  stopped.
+- **A worktree of its own.** A schedule may have each run in a new
+  worktree of the folder, on a branch named after the schedule and the
+  time, with its submodules checked out and the folder's setup command
+  run; the worktree is kept afterwards, in the folder's worktree bar, to
+  be looked at, merged or thrown away.
+- **The prompt** opens in a larger editor, with the files of the
+  schedule's folder beside it, found by name: one that is picked is named
+  in the prompt.
+- **Changes to a schedule** are kept with it, the last twenty: when, and
+  what was changed, in words.
 
 ### When an agent is done or needs you
 
