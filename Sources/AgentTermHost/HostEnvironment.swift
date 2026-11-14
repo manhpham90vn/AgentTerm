@@ -78,8 +78,10 @@ public enum HostEnvironment {
         // files, as `LoginShellPath` does not start their shell: a test
         // touches nothing of theirs, and their .zshrc took long enough on a
         // busy machine for tests waiting on a session's program to give up.
-        // A test that gives its host a home of its own does so with ZDOTDIR.
-        if LoginShellPath.underTests, env["ZDOTDIR"] == nil { env["ZDOTDIR"] = testShellHome.path }
+        // Also over a ZDOTDIR the person running the tests has set: under
+        // XCTest it can only be theirs. A host a test script starts, with a
+        // home of its own as ZDOTDIR, is not under XCTest.
+        if LoginShellPath.underTests { env["ZDOTDIR"] = testShellHome.path }
         return env
     }
 
@@ -90,7 +92,7 @@ public enum HostEnvironment {
     static var loginShellCommandEnvironment: [String: String]? {
         guard LoginShellPath.underTests else { return nil }
         var env = ProcessInfo.processInfo.environment
-        if env["ZDOTDIR"] == nil { env["ZDOTDIR"] = testShellHome.path }
+        env["ZDOTDIR"] = testShellHome.path
         return env
     }
 

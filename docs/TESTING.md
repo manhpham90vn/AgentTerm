@@ -516,6 +516,7 @@ A second host stands in for the other Mac, with a project of its own.
 | ID | Input | Action or event | Expected response | Checked by |
 |---|---|---|---|---|
 | TEST-1 | A host and an app started by a test or a test script | A session starts through the login shell | Its `HOME` is the test's home folder: none of the startup files of the person running the tests is read. The hosts and apps get the test's home as `HOME`, `ZDOTDIR` and `CFFIXED_USER_HOME` | M |
+| TEST-2 | The host's tests, run by a person who has `ZDOTDIR` set | A session's shell, or a command run through the login shell, is given its environment | Its `ZDOTDIR` is the tests' own empty folder, not theirs | H |
 | SET-1 | The Mac app's Settings left on Privacy | Left for Sessions, opened again with ⌘, | It opens on General | M |
 | SET-2 | A setting the host tidies (a blank model, an unknown agent; keep awake options; the display) | A client asks for what, once tidied, the host keeps already | The asker is told what the host keeps | H |
 | SET-3 | Start at Login on | The launch agent is removed outside AgentTerm | Every client is told it is off, without asking | H |
