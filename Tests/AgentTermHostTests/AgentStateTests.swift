@@ -337,8 +337,9 @@ final class AgentStateHostTests: XCTestCase {
         waitUntil("not known after Escape") { mac.sessions.first { $0.id == agent.id }.map { $0.state == nil } ?? false }
     }
 
-    /// AGENT-8: a Codex session says how to have its state shown, until it
-    /// says something; an Antigravity session always says what it cannot.
+    /// AGENT-8: a Codex session says nothing of its hooks, which Codex runs
+    /// without being asked to trust them (#59); an Antigravity session
+    /// always says what it cannot tell.
     func testWhatIsSaidOfAnAgentWhoseStateCannotAllBeKnown() throws {
         let client = Client(port: port, token: token, name: "mac")
         waitUntil("connected") { !client.messages.isEmpty }
@@ -349,7 +350,7 @@ final class AgentStateHostTests: XCTestCase {
             client.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: agent)))
         }
         waitUntil("both sessions") { client.sessions.count == 2 }
-        XCTAssertEqual(client.sessions.first { $0.title == "codex" }?.stateNote?.contains("Trust all and continue"), true)
+        XCTAssertNil(client.sessions.first { $0.title == "codex" }?.stateNote)
         XCTAssertEqual(client.sessions.first { $0.title == "agy" }?.stateNote?.contains("does not say when it waits for permission"), true)
     }
 

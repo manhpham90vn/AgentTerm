@@ -422,7 +422,7 @@ A second host stands in for the other Mac, with a project of its own.
 | AGENT-5 | Each agent | Its session starts | It is given hooks for that session only, whose command is the same for every session; Antigravity's trusted folders are the user's and the host's, and the user's settings are not changed | H |
 | AGENT-6 | A stand-in agent telling its hooks through `agenttermd hook`, two devices, and a shell | It works, asks permission, works, ends | Each state is told when it begins, once, to both devices; a device that connects later is told the state as it is; the shell has none | H |
 | AGENT-7 | A working agent | Escape alone, or Control C, is typed | Its state is not known until it says more. An arrow key changes nothing | H |
-| AGENT-8 | A session of Codex and one of Antigravity | They start | Codex's says how to trust the hooks; Antigravity's says it cannot tell when it waits for permission | H |
+| AGENT-8 | A session of Codex and one of Antigravity | They start | Codex's says nothing: its hooks run without being trusted first; Antigravity's says it cannot tell when it waits for permission | H |
 | AGENT-9 | A stand-in agent that waits for permission | The Mac app shows it | A mark next to its name in the folder list and on its tab, read as "waiting for permission"; its folder's row says a session waits | M |
 | AGENT-10 | The same | The iPhone shows it | A mark in the sessions list, and the state in the terminal's title | hand, until the iPhone tests cover it |
 | AGENT-11 | A host that does not refresh during the test, a stand-in Claude Code | It saves that it works, then that it is done | Each state is told within two seconds, through the watch of the hooks' folder | H |

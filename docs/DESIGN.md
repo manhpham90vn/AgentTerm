@@ -640,9 +640,11 @@ to trust). Working stays working since it began.
 
 What cannot be known:
 
-- **Codex** runs no hook until the user trusts it, so its session's state
-  is not known until it says something, and `stateNote` says how to trust
-  the hooks.
+- **Codex** before 0.169 ran no hook until the user trusted it, and its
+  session's state was not known until then. Codex 0.169 runs the hooks it
+  is given for a session without asking, as trying it on 2026-11-14
+  showed (#59), so its session carries no note about it any more: the
+  note told the user to wait for a question that no longer comes.
 - **Antigravity** says nothing when it waits for permission: its question
   comes after `PreToolUse`, with nothing in between. So while a tool runs,
   its state is not known, and `stateNote` says so.

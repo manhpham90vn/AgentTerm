@@ -294,11 +294,11 @@ public enum AgentHooks {
     // MARK: Notes
 
     /// What is said of a session whose agent's state cannot all be known,
-    /// before it said anything (`beforeAnyEvent`) and after.
+    /// before it said anything (`beforeAnyEvent`) and after. Codex has
+    /// none: since 0.169 it runs the hooks it is given without asking to
+    /// trust them first (#59).
     public static func note(agent: String?, beforeAnyEvent: Bool) -> String? {
         switch agent {
-        case "codex" where beforeAnyEvent:
-            return "Codex says what it is doing once AgentTerm's hooks are trusted: when Codex asks, choose “Trust all and continue”, or review them with /hooks."
         case "agy":
             return "Antigravity does not say when it waits for permission: while it runs a tool, its state is not shown."
         default:
