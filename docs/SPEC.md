@@ -186,6 +186,11 @@ itself.
   needs me") turns it off.
 - On the Mac, a banner says so for a session that is not the one in front,
   and opens it.
+- The Mac's banner shows what the agent said on up to six lines: the end
+  of it, where an agent comes to the point. When that leaves something
+  out, Show All opens the banner out to the whole, which is scrolled when
+  it is long, and Show Less closes it again. A long session name gives way
+  in the middle, so why the banner is shown is never cut off.
 - A banner hides by itself once its session is opened, however the user
   got there (its row, its tab, the banner itself), and does not come back
   when they leave the session. On the Mac the session counts as opened

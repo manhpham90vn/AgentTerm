@@ -424,24 +424,56 @@ private struct AgentShellsFaultBanner: View {
 
 /// An agent of a session that is not in front finished its task or waits
 /// for the user (#22): which session, and why. Touching it opens it.
+///
+/// What the agent said shows on up to six lines, the end of it, where an
+/// agent comes to the point; when that leaves something out, Show All
+/// opens the banner out to the whole of it, to be scrolled when it is long
+/// (#62). The session's name gives way in the middle, so that why it is
+/// told is never the part cut off.
 private struct AgentNoticeBanner: View {
     @EnvironmentObject private var model: AppModel
     let notice: AgentNotice
+    @State private var openedOut = false
+
+    /// The lines shown before the banner is opened out.
+    static let lines = 6
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: AgentStateMark.symbol(for: notice.state)).foregroundStyle(AgentStateMark.color(for: notice.state))
+                .padding(.top, 2)
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(notice.name) \(notice.why)")
                     .font(.system(size: 12, weight: .medium))
-                if let detail = notice.detail {
-                    Text(detail)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .help("\(notice.name) \(notice.why)")
+                if openedOut, let full = notice.full {
+                    ScrollView {
+                        Text(full)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxHeight: 220)
+                    .accessibilityIdentifier("agent-notice-all")
+                } else if let detail = notice.detail {
+                    Text((notice.detailIsCut ? "…" : "") + detail)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
-                        .lineLimit(2)
+                        .lineLimit(Self.lines)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
             Spacer(minLength: 8)
+            if notice.detailIsCut {
+                Button(openedOut ? "Show Less" : "Show All") { openedOut.toggle() }
+                    .controlSize(.small)
+                    .help(openedOut ? "Show the end of what the agent said" : "Show all of what the agent said")
+                    .accessibilityIdentifier("agent-notice-more")
+            }
             Button("Open") { model.open(notice) }
                 .controlSize(.small)
             Button("Dismiss") { model.dismissAgentNotice() }
@@ -454,6 +486,8 @@ private struct AgentNoticeBanner: View {
         .onTapGesture { model.open(notice) }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("agent-notice")
+        // Another notice starts as short as the first did.
+        .onChange(of: notice) { _ in openedOut = false }
     }
 }
 

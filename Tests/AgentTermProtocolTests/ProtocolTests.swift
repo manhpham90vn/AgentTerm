@@ -331,4 +331,21 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(WorktreeInfo(path: "/gone", branch: "old", isMain: false, missing: true).menuDetail, "missing: its folder is gone")
     }
 
+    /// NOTE-13 (#62): what an agent said at the end is told by its end,
+    /// and all of it is there for where it can be read.
+    func testAllOfWhatAnAgentSaidCanBeHad() {
+        let long = "First I looked at the tests. " + String(repeating: "Then more was done. ", count: 40) + "All 290 tests pass."
+        let done = AgentNotice(session: 1, name: "fix", folder: "/p", state: .done(said: long))
+        XCTAssertEqual(done.detail?.count, AgentNotice.detailLength)
+        XCTAssertTrue(done.detail?.hasSuffix("All 290 tests pass.") == true)
+        XCTAssertEqual(done.full, long)
+        XCTAssertTrue(done.detailIsCut)
+        let short = AgentNotice(session: 1, name: "fix", folder: "/p", state: .done(said: "Done."))
+        XCTAssertEqual(short.full, "Done.")
+        XCTAssertFalse(short.detailIsCut)
+        XCTAssertFalse(AgentNotice(session: 1, name: "fix", folder: "/p", state: .done(said: nil)).detailIsCut)
+        let asked = AgentNotice(session: 1, name: "fix", folder: "/p", state: .waitingForAnswer(AgentQuestion(text: "Which one?", choices: ["A", "B"])))
+        XCTAssertEqual(asked.full, "Which one?\nA · B")
+        XCTAssertFalse(asked.detailIsCut)
+    }
 }

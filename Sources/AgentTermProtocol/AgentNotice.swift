@@ -35,13 +35,29 @@ public struct AgentNotice: Equatable, Sendable {
     /// What it said or asks, enough to decide without opening it.
     public var detail: String? {
         switch state {
-        case .done(let said): return said.flatMap { $0.isEmpty ? nil : String($0.suffix(300)) }
+        case .done(let said): return said.flatMap { $0.isEmpty ? nil : String($0.suffix(Self.detailLength)) }
         case .waitingForPermission(let question): return question.text.isEmpty ? nil : question.text
         case .waitingForAnswer(let question):
             return question.text + (question.choices.isEmpty ? "" : "\n" + question.choices.joined(separator: " · "))
         case .working: return nil
         }
     }
+
+    /// How much of what an agent said at the end `detail` gives.
+    public static let detailLength = 300
+
+    /// All of what it said or asks, for where there is room to read it:
+    /// the Mac's banner once it is opened out (#62). `detail` is the end of
+    /// it, which is where an agent comes to the point.
+    public var full: String? {
+        switch state {
+        case .done(let said): return said.flatMap { $0.isEmpty ? nil : $0 }
+        case .waitingForPermission, .waitingForAnswer, .working: return detail
+        }
+    }
+
+    /// Whether `detail` leaves out the beginning of what was said.
+    public var detailIsCut: Bool { (full?.count ?? 0) > (detail?.count ?? 0) }
 
     /// What it said or asks, without the choices: a notification's body,
     /// of which iOS shows a few lines only. The choices are its buttons
