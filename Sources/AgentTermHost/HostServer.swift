@@ -842,7 +842,7 @@ public final class HostServer {
     /// Makes the worktree off the queue the sessions use, runs the folder's
     /// setup command in it, then starts the session there.
     private func createInWorktree(_ request: CreateRequest, branch: String?, for client: Client) {
-        let folder = request.cwd ?? HostEnvironment.homeDirectory
+        let folder = request.cwd ?? configuration.home
         let agent = SessionSummaries.agent(forCommand: request.command) ?? "shell"
         let setup = worktreeSetups[WorktreePath.project(of: folder) ?? folder]
         let id = client.id
@@ -1932,10 +1932,12 @@ public final class HostServer {
         _ request: CreateRequest, for client: Client?, conversationID: String? = nil, openedBy: SessionID? = nil, run: Schedule? = nil,
         environment more: [String: String] = [:]
     ) -> SessionID? {
-        var cwd = request.cwd ?? HostEnvironment.homeDirectory
+        // The host's home: the user's, or a test's own, never the home of
+        // the person running the tests.
+        var cwd = request.cwd ?? configuration.home
         var isDirectory: ObjCBool = false
         if !FileManager.default.fileExists(atPath: cwd, isDirectory: &isDirectory) || !isDirectory.boolValue {
-            cwd = HostEnvironment.homeDirectory
+            cwd = configuration.home
         }
         let size = request.size.clamped
         let id = nextSessionID
