@@ -74,6 +74,100 @@ final class AgentShellsMCPTests: XCTestCase {
         XCTAssertTrue(late.text.hasPrefix("Still waiting after"), late.text)
     }
 
+    /// MCP-23 (#64): a `wait` that has not ended does not hold the server:
+    /// the same agent reads a screen, types and lists its shells
+    /// meanwhile, and waits on another shell too; each request is answered
+    /// once, under its own id; a `wait` that is cancelled ends without an
+    /// answer.
+    func testAWaitDoesNotHoldUpTheOtherCalls() throws {
+        let lock = NSLock()
+        var asked: [String] = []
+        var screens: [SessionID: String] = [1: "$ make", 2: "$ test"]
+        let server = AgentShellsMCP(
+            ask: { request in
+                lock.lock()
+                defer { lock.unlock() }
+                switch request {
+                case .read(let session, _):
+                    return .screen(screens[session] ?? "")
+                case .send(let session, let text, _):
+                    asked.append("send \(session) \(text ?? "")")
+                    return .done
+                case .list:
+                    asked.append("list")
+                    return .shells([], own: [])
+                default:
+                    return .done
+                }
+            }, version: "test")
+        server.pollInterval = 0.01
+        var replies: [[String: Any]] = []
+        func send(_ id: Any, _ tool: String, _ arguments: [String: Any]) throws {
+            let line = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": id, "method": "tools/call", "params": ["name": tool, "arguments": arguments]])
+            server.handle(String(decoding: line, as: UTF8.self)) { reply in
+                let object = (try? JSONSerialization.jsonObject(with: Data(reply.utf8))) as? [String: Any] ?? [:]
+                lock.lock()
+                replies.append(object)
+                lock.unlock()
+            }
+        }
+        func answered(_ id: Int) -> [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return replies.filter { ($0["id"] as? Int) == id }.compactMap { (($0["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String }
+        }
+        func waitUntil(_ what: String, _ condition: () -> Bool) {
+            let deadline = Date().addingTimeInterval(5)
+            while !condition() && Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            XCTAssertTrue(condition(), "timed out waiting for: \(what)")
+        }
+
+        // Two waits, each for a text that is not there yet, on two shells.
+        try send(1, "wait", ["session": 1, "until_text": "done", "timeout_seconds": 30])
+        try send(2, "wait", ["session": 2, "until_text": "passed", "timeout_seconds": 30])
+        // Meanwhile the same agent looks, types and lists: answered at once.
+        try send(3, "read_screen", ["session": 1])
+        try send(4, "send_input", ["session": 1, "text": "q"])
+        try send(5, "list_shells", [:])
+        waitUntil("the three answered while both waits go on") { answered(3).count == 1 && answered(4).count == 1 && answered(5).count == 1 }
+        XCTAssertEqual(answered(3), ["$ make"])
+        XCTAssertEqual(answered(1), [], "the first wait has not ended")
+        XCTAssertEqual(answered(2), [])
+        lock.lock()
+        XCTAssertEqual(asked.sorted(), ["list", "send 1 q"])
+        // The second shell says what its wait is for; the first does not yet.
+        screens[2] = "$ test\npassed"
+        lock.unlock()
+        waitUntil("the second wait") { answered(2).count == 1 }
+        XCTAssertTrue(answered(2)[0].hasPrefix("“passed” is on the screen"), answered(2)[0])
+        XCTAssertEqual(answered(1), [])
+
+        // The first is cancelled: it ends, and is not answered, whatever the screen says after.
+        server.handle(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":1,"reason":"the user stopped it"}}"#) { _ in XCTFail("a notification is not answered") }
+        Thread.sleep(forTimeInterval: 0.1)
+        lock.lock()
+        screens[1] = "$ make\ndone"
+        lock.unlock()
+        Thread.sleep(forTimeInterval: 0.2)
+        XCTAssertEqual(answered(1), [], "a cancelled wait is not answered")
+        // A wait made after it, for the same text, is: the cancelling was of that request only.
+        try send(6, "wait", ["session": 1, "until_text": "done", "timeout_seconds": 30])
+        waitUntil("a later wait") { answered(6).count == 1 }
+        // Cancelling what is over, or was never asked, does nothing.
+        server.handle(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":6}}"#) { _ in XCTFail("a notification is not answered") }
+        server.handle(#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":"none"}}"#) { _ in XCTFail("a notification is not answered") }
+        try send(7, "list_shells", [:])
+        waitUntil("still answering") { answered(7).count == 1 }
+        lock.lock()
+        XCTAssertEqual(replies.count, 6, "each request answered once, the cancelled one not at all")
+        lock.unlock()
+
+        // What is not a tool call is answered as before, at once.
+        var pinged: String?
+        server.handle(#"{"jsonrpc":"2.0","id":"p","method":"ping"}"#) { pinged = $0 }
+        XCTAssertEqual(pinged, #"{"id":"p","jsonrpc":"2.0","result":{}}"#)
+    }
+
     /// MCP-14: a session's variable names the build whose host it is, and
     /// only that build's server takes it as its own.
     func testAServerTakesOnlyASessionOfItsOwnBuild() {
@@ -434,6 +528,28 @@ final class AgentShellsHostTests: XCTestCase {
             let result = answer?["result"] as? [String: Any] ?? [:]
             return ((result["content"] as? [[String: Any]])?.first?["text"] as? String ?? "", result["isError"] as? Bool ?? true)
         }
+
+        /// Calls a tool and does not wait for its answer: its request's id.
+        func begin(_ name: String, _ arguments: [String: Any] = [:]) throws -> Int {
+            next += 1
+            let request: [String: Any] = ["jsonrpc": "2.0", "id": next, "method": "tools/call", "params": ["name": name, "arguments": arguments]]
+            try input.write(contentsOf: try JSONSerialization.data(withJSONObject: request) + Data("\n".utf8))
+            return next
+        }
+
+        /// Says something that is not answered.
+        func notify(_ method: String, _ params: [String: Any]) throws {
+            try input.write(contentsOf: try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "method": method, "params": params]) + Data("\n".utf8))
+        }
+
+        /// What the server answered a request with, each time it did; the
+        /// text of each answer.
+        func answers(to id: Int) -> [String] {
+            let text = (try? String(contentsOf: output, encoding: .utf8)) ?? ""
+            return text.split(separator: "\n").compactMap { (try? JSONSerialization.jsonObject(with: Data($0.utf8))) as? [String: Any] }
+                .filter { ($0["id"] as? Int) == id }
+                .map { ((($0["result"] as? [String: Any])?["content"] as? [[String: Any]])?.first?["text"] as? String) ?? "" }
+        }
     }
 
     private var root: URL!
@@ -587,6 +703,43 @@ final class AgentShellsHostTests: XCTestCase {
         XCTAssertEqual(
             try toolsOffered(variable: AgentShellsMCP.Session(port: port, key: "a-key", useShells: false).variable(channel: other)), 0,
             "a session of the other build")
+    }
+
+    /// MCP-24 (#64): the real server, in an agent's session, with a `wait`
+    /// going on in a shell: the agent types into that shell and reads it
+    /// meanwhile, answered at once, and what it typed ends the wait; a
+    /// second wait is cancelled and never answered.
+    func testTheRealServerAnswersWhileAWaitGoesOn() throws {
+        let mac = Client(port: port, token: token)
+        waitUntil("connected") { !mac.messages.isEmpty }
+        let (agent, _) = try startAgent("claude", title: "waiting", client: mac)
+        let opened = agent.tool("open_shell", ["command": "cat", "title": "echo"], in: self)
+        XCTAssertFalse(opened.failed, opened.text)
+        waitUntil("the shell") { mac.sessions.contains { $0.title == "echo" } }
+        let shell = try XCTUnwrap(mac.sessions.first { $0.title == "echo" }?.id)
+
+        // Waits for a line nobody has typed yet.
+        let waiting = try agent.begin("wait", ["session": shell, "until_text": "finished", "timeout_seconds": 60])
+        Thread.sleep(forTimeInterval: 0.5)
+        XCTAssertEqual(agent.answers(to: waiting), [])
+        // Meanwhile: read, list, and type, each answered while the wait goes on.
+        let started = Date()
+        XCTAssertFalse(agent.tool("read_screen", ["session": shell], in: self).failed)
+        XCTAssertTrue(agent.tool("list_shells", in: self).text.contains("echo"))
+        XCTAssertFalse(agent.tool("send_input", ["session": shell, "text": "finished", "keys": ["Return"]], in: self).failed)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 10, "not held up until the wait's minute is over")
+        // What it typed is what the wait was for.
+        waitUntil("the wait to end") { agent.answers(to: waiting).count == 1 }
+        XCTAssertTrue(agent.answers(to: waiting)[0].hasPrefix("“finished” is on the screen"))
+
+        // A wait that is cancelled ends without an answer; the server goes on answering.
+        let dropped = try agent.begin("wait", ["session": shell, "until_text": "never typed", "timeout_seconds": 60])
+        Thread.sleep(forTimeInterval: 0.3)
+        try agent.notify("notifications/cancelled", ["requestId": dropped, "reason": "stopped"])
+        XCTAssertFalse(agent.tool("send_input", ["session": shell, "text": "never typed", "keys": ["Return"]], in: self).failed)
+        Thread.sleep(forTimeInterval: 0.8)
+        XCTAssertEqual(agent.answers(to: dropped), [], "a cancelled wait is not answered, though its text came")
+        XCTAssertEqual(agent.answers(to: waiting).count, 1, "answered once")
     }
 
     func testAnAgentOpensAShellOfItsOwnThatOtherAgentsOnlyRead() throws {

@@ -55,12 +55,20 @@ if arguments.first == "mcp" {
         ask = link.ask
     }
     let server = AgentShellsMCP(ask: ask, version: AppChannel.current.appName, useShells: session?.useShells ?? false)
-    // Lines are read and answered in turn, off the main queue, where the
-    // connection's answers arrive.
+    // Lines are read in turn, off the main queue, where the connection's
+    // answers arrive. Each is answered when its answer is there (#64): a
+    // tool that takes long, a `wait`, does not hold up the lines after it.
+    // An answer is one line, written whole.
+    let output = NSLock()
     Thread.detachNewThread {
         while let line = readLine(strippingNewline: true) {
-            guard !line.trimmingCharacters(in: .whitespaces).isEmpty, let reply = server.handle(line) else { continue }
-            print(reply)
+            guard !line.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+            server.handle(line) { reply in
+                output.lock()
+                print(reply)
+                fflush(stdout)
+                output.unlock()
+            }
         }
         exit(0)
     }

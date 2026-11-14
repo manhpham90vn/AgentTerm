@@ -872,6 +872,16 @@ message to a line, on standard input and output. Its tools are
 `close_shell`. `wait` reads the screen every 0.2 seconds until a text
 appears, or the screen has been the same for a while, or the time is up.
 
+The server answers tool calls side by side (#64). Its lines are read in
+turn; a `tools/call` is handed to a concurrent queue and answered when its
+tool is done, under its request's id, so that a `wait`, which may take as
+long as the agent lets it, does not hold up the `read_screen`,
+`send_input`, `list_shells`, `open_shell` and `close_shell` that follow
+it, nor another `wait` on another shell. `notifications/cancelled` with a
+request's id ends a `wait` that is going on, and that request is then not
+answered. An answer is one line, written whole. The line to the host
+(`AgentShellsLink.ask`) already took requests side by side.
+
 **Which session's agent it is.** The host gives every agent's session a key
 of its own, with its port and its build, in `AGENTTERM_MCP` (`<port> <key>
 <release or dev>`, then `use`); the agent passes its environment on to the

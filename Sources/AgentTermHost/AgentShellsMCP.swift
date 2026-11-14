@@ -57,6 +57,24 @@ public final class AgentShellsMCP {
     /// How long `wait` looks between two reads of the screen.
     var pollInterval: TimeInterval = 0.2
 
+    /// Tool calls are answered side by side (#64): one that takes long, a
+    /// `wait`, does not hold up the others of the same agent.
+    private let calls = DispatchQueue(label: "agentterm.mcp.calls", attributes: .concurrent)
+    private let lock = NSLock()
+    /// The calls going on, by their request's id, and those of them that
+    /// were cancelled: a cancelled one ends, and is not answered.
+    private var running: Set<String> = []
+    private var cancelled: Set<String> = []
+
+    /// A request's id as the key it is kept under: a number or a string.
+    private static func key(_ id: Any) -> String { id is String ? "s:\(id)" : "n:\(id)" }
+
+    private func isCancelled(_ key: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return cancelled.contains(key)
+    }
+
     /// - Parameters:
     ///   - ask: Nil outside a session of this build of AgentTerm: no tools then.
     ///   - name: The server's name in the agents' configuration.
@@ -67,12 +85,52 @@ public final class AgentShellsMCP {
         self.useShells = useShells
     }
 
-    /// Answers one line, a JSON-RPC message. Nil for a notification, which
-    /// is not answered.
+    /// Takes one line, a JSON-RPC message, and hands its answer to `reply`
+    /// (#64): at once for most, and for a tool call when the tool is done,
+    /// which for a `wait` may be long after later lines were answered. Each
+    /// request is answered once, by its id. A notification is not
+    /// answered, and neither is a call that was cancelled meanwhile
+    /// (`notifications/cancelled`), which ends there.
+    public func handle(_ line: String, reply: @escaping (String) -> Void) {
+        guard let message = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else {
+            if let answer = handle(line) { reply(answer) }
+            return
+        }
+        let params = message["params"] as? [String: Any] ?? [:]
+        if message["method"] as? String == "notifications/cancelled", let id = params["requestId"] {
+            lock.lock()
+            if running.contains(Self.key(id)) { cancelled.insert(Self.key(id)) }
+            lock.unlock()
+            return
+        }
+        guard message["method"] as? String == "tools/call", let id = message["id"] else {
+            if let answer = handle(line) { reply(answer) }
+            return
+        }
+        let key = Self.key(id)
+        lock.lock()
+        running.insert(key)
+        lock.unlock()
+        calls.async { [self] in
+            let answer = answer(message, isCancelled: { self.isCancelled(key) })
+            lock.lock()
+            running.remove(key)
+            let dropped = cancelled.remove(key) != nil
+            lock.unlock()
+            if !dropped, let answer { reply(answer) }
+        }
+    }
+
+    /// Answers one line, a JSON-RPC message, and returns when it is
+    /// answered. Nil for a notification, which is not answered.
     public func handle(_ line: String) -> String? {
         guard let message = (try? JSONSerialization.jsonObject(with: Data(line.utf8))) as? [String: Any] else {
             return Self.encode(["jsonrpc": "2.0", "id": NSNull(), "error": ["code": -32700, "message": "Parse error"]])
         }
+        return answer(message, isCancelled: { false })
+    }
+
+    private func answer(_ message: [String: Any], isCancelled: @escaping () -> Bool) -> String? {
         guard let id = message["id"], let method = message["method"] as? String else { return nil }
         let params = message["params"] as? [String: Any] ?? [:]
         func result(_ value: Any) -> String? { Self.encode(["jsonrpc": "2.0", "id": id, "result": value]) }
@@ -96,7 +154,7 @@ public final class AgentShellsMCP {
         case "tools/call":
             let name = params["name"] as? String ?? ""
             let arguments = params["arguments"] as? [String: Any] ?? [:]
-            let (text, failed) = call(name, arguments)
+            let (text, failed) = call(name, arguments, isCancelled: isCancelled)
             return result(["content": [["type": "text", "text": text]], "isError": failed])
         default:
             return Self.encode(["jsonrpc": "2.0", "id": id, "error": ["code": -32601, "message": "Method not found: \(method)"]])
@@ -142,7 +200,7 @@ public final class AgentShellsMCP {
     private static func number(_ description: String) -> [String: Any] { ["type": "number", "description": description] }
 
     /// What a tool returns, and whether it failed.
-    private func call(_ name: String, _ arguments: [String: Any]) -> (String, Bool) {
+    private func call(_ name: String, _ arguments: [String: Any], isCancelled: () -> Bool) -> (String, Bool) {
         guard let ask else { return ("Not in a session of AgentTerm: there are no shells to open.", true) }
         let session = (arguments["session"] as? NSNumber).map { SessionID(truncatingIfNeeded: $0.intValue) }
         func needsSession() -> (String, Bool) { ("Which shell: give its number as `session`.", true) }
@@ -162,7 +220,8 @@ public final class AgentShellsMCP {
             guard let session else { return needsSession() }
             return wait(
                 session: session, until: arguments["until_text"] as? String,
-                quiet: (arguments["quiet_seconds"] as? NSNumber)?.doubleValue ?? 1, timeout: (arguments["timeout_seconds"] as? NSNumber)?.doubleValue ?? 30)
+                quiet: (arguments["quiet_seconds"] as? NSNumber)?.doubleValue ?? 1, timeout: (arguments["timeout_seconds"] as? NSNumber)?.doubleValue ?? 30,
+                isCancelled: isCancelled)
         case "close_shell":
             guard let session else { return needsSession() }
             result = ask(.close(session: session))
@@ -174,12 +233,14 @@ public final class AgentShellsMCP {
 
     /// Reads the screen until it says `until`, or has stayed the same for
     /// `quiet` seconds, or `timeout` seconds have passed.
-    private func wait(session: SessionID, until: String?, quiet: TimeInterval, timeout: TimeInterval) -> (String, Bool) {
+    private func wait(session: SessionID, until: String?, quiet: TimeInterval, timeout: TimeInterval, isCancelled: () -> Bool) -> (String, Bool) {
         guard let ask else { return ("", true) }
         let started = Date()
         var last: String?
         var stillSince = Date()
         while true {
+            // Nobody listens any more: it ends here, and is not answered.
+            if isCancelled() { return ("Cancelled.", true) }
             guard case .screen(let screen) = ask(.read(session: session, linesAbove: 0)) else {
                 return Self.words(ask(.read(session: session, linesAbove: 0)))
             }
