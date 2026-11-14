@@ -1275,6 +1275,21 @@ toolbar, before the agents, switches between this Mac and the paired ones.
 - `AGENTTERM_STATE_DIR` moves the host's token, folder list and log to another
   folder, which keeps test hosts away from the real pairing.
 
+## Reporting
+
+`AgentTermTelemetry` holds the choices and the gate; `AgentTermFirebase`
+plugs the service in (`FirebaseSink`), in a released build with a config
+file only. `TelemetrySettings.crashReports` is nil until the first-launch
+screen was answered (#48), and while it is nil `Telemetry` sends nothing,
+of either kind, and tells the service to collect nothing. The screen's two
+switches (`TelemetryPreferences.offersCrashReports`,
+`offersUsageStatistics`, both true) are saved by `answer()`. Its words
+are `TelemetryPreferences.Wording`, shown by both apps. So that the
+screen can be looked at and tested in a build without a service,
+`AGENTTERM_REPORTING_PREVIEW=<name>` starts `Telemetry` with a sink that
+sends nothing and preferences of that name; a released build with a
+service never reads it.
+
 ## Known limitations
 
 - The iPhone app has not been run on a real device.

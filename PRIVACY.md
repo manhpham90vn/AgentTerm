@@ -25,8 +25,11 @@ advertising.
 The released apps can send two things to the developer through Google's Firebase, and you control
 both:
 
-- **Crash reports**, only if you say yes when the app asks at its first launch.
-- **Usage statistics**, counts of which features are used. On by default; one switch turns it off.
+- **Crash reports**, when the app crashes.
+- **Usage statistics**, counts of which features are used.
+
+At its first launch the app shows what each is, with a switch for each. Both switches are on; turn
+off what you do not agree to, then continue. Nothing is sent before you have done that.
 
 Neither ever contains what a terminal showed, a prompt, a file name or a folder. Section 6 lists
 exactly what is sent. Both apps are open source, so this can be checked, and an app you build from
@@ -77,7 +80,8 @@ The apps released by the developer (the disk image, the Homebrew cask, TestFligh
 include Google's Firebase. Google processes the data below on the developer's behalf; see
 [Firebase's privacy information](https://firebase.google.com/support/privacy).
 
-**Usage statistics (Firebase Analytics).** On unless you switch it off.
+**Usage statistics (Firebase Analytics).** Sent once you have continued past the first-launch screen
+with its switch on, which is how it comes.
 
 - The events, and all of them: the app was opened; a session was started, and with which agent
   (Claude Code, Codex, Antigravity, Copilot CLI or a shell); a phone was paired; a conversation was
@@ -92,15 +96,17 @@ include Google's Firebase. Google processes the data below on the developer's be
   of your Macs, or anything from the sign-ins of the coding agents. An event has no field that could
   hold such text.
 
-**Crash reports (Firebase Crashlytics).** Off until you say yes.
+**Crash reports (Firebase Crashlytics).** Sent once you have continued past the first-launch screen
+with its switch on, which is how it comes.
 
 - When the app crashes: where in the app's code it happened, the app's version, your device's model
   and system version, and the installation identifier.
 - When the host on the Mac stops unexpectedly: only the fact that it did.
 
-**Your choices.** The app asks about crash reports once, the first time it is opened. Both switches
-are in **Settings > Privacy** on the Mac and under **Privacy** in the menu of the iPhone app, and a
-change takes effect at once.
+**Your choices.** The first time it is opened, the app shows a screen of its own with the two
+switches, both on, and one button, Continue. Until you continue, neither kind is sent. Afterwards
+both switches are in **Settings > Privacy** on the Mac and under **Privacy** in the Settings tab of
+the iPhone app, and a change takes effect at once.
 
 **Builds that send nothing.** An app built from the source code, and the development build
 "AgentTerm Dev", contain no Firebase configuration and send nothing, whatever the switches say.

@@ -194,8 +194,8 @@ private struct SettingsTab: View {
                 }
 
                 Section {
-                    Toggle("Send crash reports", isOn: $privacy.crashReports)
-                    Toggle("Share usage statistics", isOn: $privacy.usageStatistics)
+                    Toggle(TelemetryPreferences.Wording.crashTitle, isOn: $privacy.crashReports)
+                    Toggle(TelemetryPreferences.Wording.usageTitle, isOn: $privacy.usageStatistics)
                 } header: {
                     Text("Privacy")
                 } footer: {

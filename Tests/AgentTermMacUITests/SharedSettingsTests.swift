@@ -24,6 +24,34 @@ final class SharedSettingsTests: MacUITestCase {
         XCTAssertFalse(app.exists(.button("Save")), "the editor came back")
     }
 
+    /// TEL-3 (#48): at its first launch a build that reports shows what it
+    /// may send, a switch for each kind, both on; answered with one turned
+    /// off, Settings says the same, and the screen does not come again.
+    func testTheFirstLaunchScreenAsksOnceWithBothSwitchesOn() throws {
+        // As a build with a reporting service starts, with nothing behind
+        // it, and its answer kept in preferences of this test's own.
+        appEnvironment["AGENTTERM_REPORTING_PREVIEW"] = "agentterm-ui-test-\(UUID().uuidString)"
+        try relaunchApp()
+        app.wait(for: .id("reporting-choices"), timeout: 15)
+        app.wait(for: .text("What AgentTerm May Send to Its Developer"))
+        wait("both switches on") { self.app.first(.id("reporting-crash"))?.value == "1" && self.app.first(.id("reporting-usage"))?.value == "1" }
+        shot("tel-3-screen")
+        app.press(.id("reporting-usage"))
+        wait("usage statistics off") { self.app.first(.id("reporting-usage"))?.value == "0" }
+        app.press(.id("reporting-continue"))
+        app.waitGone(.id("reporting-choices"))
+
+        openSettings("Privacy")
+        app.wait(for: .id("privacy-crash"))
+        XCTAssertEqual(app.first(.id("privacy-crash"))?.value, "1")
+        XCTAssertEqual(app.first(.id("privacy-usage"))?.value, "0")
+
+        // Answered: not asked again.
+        try relaunchApp()
+        RunLoop.current.run(until: Date().addingTimeInterval(1.5))
+        XCTAssertFalse(app.exists(.id("reporting-choices")))
+    }
+
     /// SET-1: Settings opens on General each time, not on the pane it was left on.
     func testSettingsOpensOnGeneral() throws {
         openSettings("Privacy")

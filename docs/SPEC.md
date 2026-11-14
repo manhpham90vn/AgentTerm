@@ -698,6 +698,21 @@ panel.
     - **Show Older Conversations**, at the end of a full list, brings the
       next 200.
 
+### What the app reports
+
+A released build of either app can send two things to its developer
+through Google's Firebase: crash reports, and usage statistics, counts of
+which features are used. Never what a terminal shows, prompts, file names
+or folders. At its first launch such a build shows a screen of its own
+(#48), not an alert that could be taken for one of the system's: what
+each kind is, a switch for each, both on, and Continue. It cannot be
+closed any other way, and until it is answered nothing is sent, of
+either kind. Afterwards both switches are in Settings > Privacy on the
+Mac and under Privacy in the iPhone's Settings tab, in the same words. A
+build from source and AgentTerm Dev have no service to send to: they show
+no screen and send nothing, whatever the switches say. `PRIVACY.md` says
+all of what is sent.
+
 ### Keeping the Mac awake
 
 A switch in the Mac's Settings, in its menu bar menu, and in the iPhone

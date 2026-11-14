@@ -28,7 +28,11 @@ public final class FirebaseSink: TelemetrySink {
 
     /// Starts reporting, if this build can. Call it once, as the app starts.
     public static func start() {
-        Telemetry.shared.start(sink: make())
+        let sink = make()
+        // A build that reports nothing may still show what one that does
+        // asks at its first launch, when it is told to (#48).
+        if sink == nil, Telemetry.shared.startPreview() { return }
+        Telemetry.shared.start(sink: sink)
     }
 
     private init() {}

@@ -630,6 +630,10 @@ A second host stands in for the other Mac, with a project of its own.
 | SET-3 | Start at Login on | The launch agent is removed outside AgentTerm | Every client is told it is off, without asking | H |
 | SET-4 | The iPhone, its Mac out of reach | Look at Settings | The Mac's settings are shown as it last said and cannot be changed, and it says so; reached again, they can | P |
 | SET-5 | The Mac with another Mac on screen, which has a schedule | That Mac goes out of reach | None of its schedules shows | M |
+| TEL-1 | A build with a reporting service, opened for the first time | An event and a problem before the screen is answered; the screen answered as it comes; again | Nothing is sent, of either kind; both kinds on, and sent from then | U |
+| TEL-2 | The same | A switch of the screen turned off; Continue; the next launch; both turned off | Nothing sent or saved by the switch itself; that kind stays off; not asked again; answered all the same | U |
+| TEL-3 | The Mac app, told to show the screen though it has no service (`AGENTTERM_REPORTING_PREVIEW`) | Opened; usage statistics turned off; Continue; Settings > Privacy; opened again | The screen with both switches on; gone; crash reports on and usage statistics off; not shown again | M |
+| TEL-4 | A released build of each app, never opened before | Opened | The screen, in the same words on both; on the iPhone it cannot be swiped away | hand |
 
 ## What the tests found
 

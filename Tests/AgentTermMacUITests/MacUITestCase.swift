@@ -272,10 +272,14 @@ class MacUITestCase: XCTestCase {
         return environment
     }
 
+    /// What a test has the app started with besides, when it starts it again.
+    var appEnvironment: [String: String] = [:]
+
     /// Starts the app on the test's host. Its preferences are its own too:
     /// with a home of its own it reads and writes none of the real app's.
     func launchApp() throws -> MacDriver {
         var environment = Self.ownHome(home)
+        environment.merge(appEnvironment) { _, own in own }
         environment["AGENTTERM_STATE_DIR"] = state.path
         environment["AGENTTERM_PORT"] = String(appPort)
         // The home the host was given: on its own Mac the app reads
