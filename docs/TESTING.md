@@ -319,6 +319,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | LOGIN-6 | A host launchd started from its launch agent, the app closed | The host is killed (SIGKILL); then it is stopped as asked (SIGTERM) | launchd starts it again after the kill, and says it was killed; after the stop it does not | H |
 | LOGIN-7 | Start at Login on | The app starts its host; again while it runs; the host is killed within ten seconds of its start and the app starts it; Start at Login is turned off, the host stopped, and the app starts it | launchd starts it, once; started again at once, not after launchd's ten seconds, and the app is told it was killed; with the switch off the app starts its own and launchd has no job left | H |
 | LOGIN-8 | A launch agent written by 0.5.0, without `KeepAlive` | The host it names starts; the same host started by hand with other arguments | It is written again as this version writes it; by the other, it is left as it was | H |
+| LOGIN-10 | A host that can be started at login, where its launch agent cannot be written | It starts; then the next host starts, with the launch agent's folder writable | Start at Login stays off; then it is turned on: the failure was not taken for the user's choice | H |
 
 ### Menu bar, permissions, the host
 

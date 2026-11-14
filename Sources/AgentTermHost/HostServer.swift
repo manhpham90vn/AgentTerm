@@ -349,7 +349,11 @@ public final class HostServer {
         // Without a settings file the user's choice could not be kept: then
         // it is not turned on by itself either.
         guard let item = configuration.loginItem, settingsFile != nil, !startAtLoginChosen else { return }
-        if !item.isOn { try? item.turnOn() }
+        // One that could not be turned on is not the user's choice: the
+        // next host tries again.
+        if !item.isOn {
+            do { try item.turnOn() } catch { return }
+        }
         startAtLoginChosen = true
         saveSettings()
     }
