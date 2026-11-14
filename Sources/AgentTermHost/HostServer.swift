@@ -259,6 +259,9 @@ public final class HostServer {
     /// signed in since.
     private var agentShellsRefused = false
     private var agentShellsFaultsTold: [AgentShellsFault] = []
+    /// What a session's agent said or asks that the user has seen on one
+    /// device (#60), for the devices that connect later.
+    private var noticesSeen: [SessionID: AgentState] = [:]
     /// What this host notes about itself in the state folder while it runs.
     private var marker: HostMarker?
     private var markerFile: URL?
@@ -1219,6 +1222,12 @@ public final class HostServer {
             create(request, for: client)
         case .agentShell(let id, let key, let request):
             handleAgentShell(id: id, key: key, request: request, from: client)
+        case .noticeSeen(let id, let state):
+            // Only what the agent still says: what it said before is gone
+            // from every device already.
+            guard sessions[id]?.info.state == state else { return }
+            noticesSeen[id] = state
+            for other in clients.values where other.authenticated && other !== client { send(.noticeSeen(session: id, state: state), to: other) }
         case .setAgentShells(let on):
             setAgentShells(on)
         case .setAgentsUseShells(let on):
@@ -1852,6 +1861,10 @@ public final class HostServer {
         }
         if configuration.agentShells != nil || !agentShellsFaults.isEmpty { send(.agentShellsFaults(agentShellsFaults), to: client) }
         send(.macInUse(macInUse), to: client)
+        // What was seen on another device while this one was away, as far
+        // as its agent still says it.
+        noticesSeen = noticesSeen.filter { sessions[$0.key]?.info.state == $0.value }
+        for (id, state) in noticesSeen { send(.noticeSeen(session: id, state: state), to: client) }
         send(.schedules(schedules), to: client)
         send(.commitWriter(commitWriter), to: client)
         if let item = configuration.loginItem { send(.startAtLogin(item.isOn), to: client) }

@@ -266,8 +266,27 @@ final class PhoneModel: ObservableObject {
     @Published var path: [Route] = [] {
         // A notice hides by itself once its session is opened, however the
         // user got there, and does not come back when they leave it (#60).
-        didSet { if let notice = agentNotice, notice.session == openSessionID { agentNotice = nil } }
+        didSet {
+            guard let open = openSessionID else { return }
+            if agentNotice?.session == open { agentNotice = nil }
+            sawNotice(of: open)
+        }
     }
+
+    /// What the agent of the session on screen said or asks is seen: its
+    /// notification goes from Notification Center, and the Mac is told, so
+    /// that the other devices hide their notice of it (#60).
+    private func sawNotice(of session: SessionID) {
+        guard let mac = pairing?.id else { return }
+        notifications.remove(mac: mac, session: session)
+        guard let state = sessions.first(where: { $0.id == session })?.state, !state.isWorking, noticeSeenTold?.session != session || noticeSeenTold?.state != state
+        else { return }
+        noticeSeenTold = (session, state)
+        connection?.send(.noticeSeen(session: session, state: state))
+    }
+
+    /// The last notice the Mac was told is seen, so it is told once.
+    private var noticeSeenTold: (session: SessionID, state: AgentState)?
     /// The tab in front: "sessions", "history" or "settings".
     @Published var tab = "sessions"
     /// A folder's uncommitted changes, by folder. Without the diffs.
@@ -901,6 +920,10 @@ final class PhoneModel: ObservableObject {
             agentsUseShells = on
         case .agentShellsFaults(let faults):
             took(faults)
+        case .noticeSeen(let session, let state):
+            // Seen on the Mac, or on another device.
+            if agentNotice?.session == session, agentNotice?.state == state { agentNotice = nil }
+            if let mac = pairing?.id, sessions.first(where: { $0.id == session })?.state == state { notifications.remove(mac: mac, session: session) }
         case .agentShellResult:
             // For `agenttermd mcp`, not for an app.
             break
@@ -1372,6 +1395,14 @@ final class AgentNotifications: NSObject, UNUserNotificationCenterDelegate {
         guard !asked else { return }
         asked = true
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
+    }
+
+    /// Takes back what was posted for a session: its agent's words were
+    /// seen, in the app or on another device (#60).
+    func remove(mac: String, session: SessionID) {
+        let center = UNUserNotificationCenter.current()
+        center.removeDeliveredNotifications(withIdentifiers: ["\(mac)-\(session)"])
+        center.removePendingNotificationRequests(withIdentifiers: ["\(mac)-\(session)"])
     }
 
     func post(_ notice: AgentNotice, mac: String, macName: String) {

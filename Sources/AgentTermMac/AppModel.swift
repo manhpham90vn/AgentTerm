@@ -306,10 +306,21 @@ final class AppModel: ObservableObject {
     func dismissAgentNotice() { agentNotice = nil }
 
     /// A notice hides by itself once its session is the one in front,
-    /// however the user got there: its row, its tab, a shortcut (#60).
+    /// however the user got there: its row, its tab, a shortcut (#60). In
+    /// front means before the user's eyes: a session chosen in a window
+    /// that is behind another app's counts once the app is used again. The
+    /// host is told, so that the other devices hide theirs.
     private func hideNoticeOfTheSessionInFront() {
-        if let notice = agentNotice, place == .sessions, notice.session == selectedSession { agentNotice = nil }
+        guard place == .sessions, NSApp.isActive, let front = selectedSession else { return }
+        if agentNotice?.session == front { agentNotice = nil }
+        guard let state = sessions.first(where: { $0.id == front })?.state, !state.isWorking, noticeSeenTold?.session != front || noticeSeenTold?.state != state
+        else { return }
+        noticeSeenTold = (front, state)
+        connection?.send(.noticeSeen(session: front, state: state))
     }
+
+    /// The last notice the host was told is seen, so it is told once.
+    private var noticeSeenTold: (session: SessionID, state: AgentState)?
 
     /// The host of this Mac learns from it whether someone is at the Mac:
     /// another Mac's host is not told, since this Mac is not that one.
@@ -630,6 +641,7 @@ final class AppModel: ObservableObject {
             .sink { [weak self] _ in
                 self?.refreshSSHHosts()
                 self?.tellWhetherInFront()
+                self?.hideNoticeOfTheSessionInFront()
             }
             .store(in: &observers)
         NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)
@@ -1154,6 +1166,9 @@ final class AppModel: ObservableObject {
             agentsUseShells = on
         case .agentShellsFaults(let faults):
             took(faults)
+        case .noticeSeen(let session, let state):
+            // Seen on another device.
+            if agentNotice?.session == session, agentNotice?.state == state { agentNotice = nil }
         case .schedules(let list):
             schedules = list
         case .worktrees(let folder, let list, let setup):

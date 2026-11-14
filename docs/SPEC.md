@@ -188,7 +188,13 @@ itself.
   and opens it.
 - A banner hides by itself once its session is opened, however the user
   got there (its row, its tab, the banner itself), and does not come back
-  when they leave the session.
+  when they leave the session. On the Mac the session counts as opened
+  once the app is in front of the others, not while its window is behind
+  another app's.
+- What was seen on one device is seen on all: opening the session on the
+  Mac hides the iPhone's banner and takes its notification out of
+  Notification Center, and opening it on the iPhone hides the Mac's
+  banner. Opening it on the iPhone takes its notification away too.
 
 ### The Live Activity
 

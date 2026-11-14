@@ -781,9 +781,19 @@ the first of several questions asked together is told and answered.
 selected while the app is in front.
 
 A banner is dropped when its session comes to the front (#60): on the Mac
-when the session is selected with Sessions shown (`selectedSession`,
-`show(_:)`), on the iPhone when its screen is put on the navigation stack
-(`path`). Each app decides for itself; the host is not told.
+when the session is selected with Sessions shown and the app in front of
+the others (`selectedSession`, `show(_:)`, and when the app becomes
+active: a session chosen in a window behind another app's is not before
+the user's eyes yet), on the iPhone when its screen is put on the
+navigation stack (`path`). The app then tells the host
+`noticeSeen(session:state:)`, once for each state, when the agent is done
+or waits. The host passes it on to every other client while the session's
+state is still that one, and keeps it (`noticesSeen`) for a client that
+connects later, which is told after its list of sessions. A client that is
+told drops its banner of that session and state; the iPhone also takes
+its notification of the session out of Notification Center
+(`AgentNotifications.remove`), as it does when the session is opened on
+the phone itself.
 
 ## The Live Activity
 

@@ -291,6 +291,11 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     case answer(session: SessionID, to: AgentState, text: String)
     /// The Mac app is in front, or is no longer: then the Mac is in use.
     case appInFront(Bool)
+    /// The user opened this session on this device while its agent was
+    /// done or waited, in `state`: what it was told about is seen (#60).
+    /// The host passes it on to the other devices, which hide their notice
+    /// of it.
+    case noticeSeen(session: SessionID, state: AgentState)
     /// Someone used the Mac app: a key or a click in its window. The Mac
     /// is then in use again after a device was used.
     case used
@@ -404,6 +409,10 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// or the pointer used in the last five minutes; and not since a device
     /// (an iPhone, another Mac) was used, until the Mac app is used again.
     case macInUse(Bool)
+    /// What this session's agent said or asks, in `state`, was seen on
+    /// another device (#60): a notice of it is hidden here too. Also sent
+    /// on connecting, for what was seen while this device was away.
+    case noticeSeen(session: SessionID, state: AgentState)
     /// Every schedule, with its last runs and when it runs next.
     case schedules([Schedule])
     /// A folder's worktrees, the folder's own first, and its setup command.

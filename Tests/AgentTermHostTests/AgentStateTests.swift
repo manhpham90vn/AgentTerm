@@ -473,6 +473,46 @@ final class AgentStateHostTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: typed), Data("\u{1b}[B\r".utf8), "Down, then Return: the second choice")
     }
 
+    /// NOTE-10 (#60): what an agent says, seen on one device, is told to
+    /// the others, and to one that connects later, while the agent still
+    /// says it.
+    func testANoticeSeenOnOneDeviceIsToldToTheOthers() throws {
+        let script = try standIn()
+        let phone = Client(port: port, token: token, name: "phone")
+        let mac = Client(port: port, token: token, name: "mac")
+        waitUntil("connected") { !phone.messages.isEmpty && !mac.messages.isEmpty }
+        func seen(_ client: Client) -> [AgentState] {
+            client.messages.compactMap { if case .noticeSeen(_, let state) = $0 { return state } else { return nil } }
+        }
+        phone.connection.send(.create(CreateRequest(command: script.path, cwd: root.path, title: "agent")))
+        waitUntil("the session") { phone.sessions.count == 1 }
+        let agent = try XCTUnwrap(phone.sessions.first)
+        phone.connection.send(.attach(session: agent.id, size: TermSize(cols: 80, rows: 24)))
+        phone.connection.sendInput(Data("\n".utf8), to: agent.id)
+        waitUntil("working") { phone.sessions.first?.state?.isWorking == true }
+        phone.connection.sendInput(Data("\n".utf8), to: agent.id)
+        let waiting = AgentState.waitingForPermission(AgentQuestion(text: "make test"))
+        waitUntil("waiting") { phone.sessions.first?.state == waiting && mac.sessions.first?.state == waiting }
+
+        // What it said before is seen by no one any more: not passed on.
+        mac.connection.send(.noticeSeen(session: agent.id, state: .done(said: "earlier")))
+        // The Mac's user opens the session: the phone hides its notice.
+        mac.connection.send(.noticeSeen(session: agent.id, state: waiting))
+        waitUntil("the phone to be told") { seen(phone) == [waiting] }
+        XCTAssertEqual(seen(mac), [], "the device it was seen on is not told")
+        // A device that was away is told when it connects.
+        let tablet = Client(port: port, token: token, name: "tablet")
+        waitUntil("the tablet to be told") { seen(tablet) == [waiting] }
+
+        // Once the agent says something else, that is no longer what was seen.
+        phone.connection.send(.answer(session: agent.id, to: waiting, text: "yes"))
+        waitUntil("the agent to go on") { phone.sessions.first?.state?.isWorking == true }
+        let later = Client(port: port, token: token, name: "later")
+        waitUntil("the later device connected") { later.sessions.count == 1 }
+        RunLoop.main.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertEqual(seen(later), [])
+    }
+
     /// NOTE-3: the Mac is in use while its app is in front, or a key or the
     /// pointer was used in the last five minutes; every client is told.
     func testWhetherSomeoneIsAtTheMac() throws {
