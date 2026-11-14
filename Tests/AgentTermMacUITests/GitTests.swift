@@ -167,6 +167,44 @@ final class GitTests: MacUITestCase {
         XCTAssertEqual(read("notes.txt"), "first line\n")
     }
 
+    /// GIT-47 (#38): the changes are stashed under a name, new files too;
+    /// the stash opens out to its files; popped, the changes are back and
+    /// the stash is empty; a stash is dropped after being asked.
+    func testStashingPoppingAndDroppingChanges() throws {
+        app.press(.button("Git"))
+        app.press(.button("Stashes"))
+        app.wait(for: .containing("Nothing is stashed."))
+        app.press(.id("stash-changes"))
+        app.write("half of the notes", into: .id("stash-name"))
+        app.press(.id("stash-confirm"))
+        wait("the folder as it was committed") { self.git("status", "--porcelain", in: self.project).isEmpty }
+        app.wait(for: .id("stash-stash@{0}"))
+        XCTAssertTrue(app.exists(.containing("half of the notes")))
+
+        // Opened out: what it holds, the new files too.
+        app.press(.id("stash-stash@{0}"))
+        app.wait(for: .id("stash-file-notes.txt"))
+        XCTAssertTrue(app.exists(.id("stash-file-new.txt")))
+        app.press(.id("stash-file-notes.txt"))
+        app.wait(for: .text("STASH"))
+        shot("stash")
+
+        app.press(.id("stash-pop"))
+        wait("the changes to be back") { self.git("status", "--porcelain", in: self.project).contains("notes.txt") }
+        app.wait(for: .containing("Nothing is stashed."))
+        XCTAssertEqual(read("new.txt"), "a file that is new\n")
+
+        // Stashed again, and dropped: asked first.
+        app.press(.id("stash-changes"))
+        app.press(.id("stash-confirm"))
+        app.wait(for: .id("stash-stash@{0}"))
+        app.perform("Drop", on: .id("stash-stash@{0}"))
+        app.wait(for: .containing("Drop the stash"))
+        app.press(.button("Drop Stash"))
+        app.wait(for: .containing("Nothing is stashed."))
+        XCTAssertEqual(git("stash", "list", in: project), "")
+    }
+
     func testARefusedCommitSaysWhatGitSaid() throws {
         // A hook that refuses every commit, as a project's own checks may.
         let hook = project.appendingPathComponent(".git/hooks/pre-commit")

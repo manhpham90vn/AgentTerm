@@ -31,6 +31,7 @@ struct DiffView: View {
                 Picker("Show", selection: $pane) {
                     Text("Changes").tag("changes")
                     Text("Commits").tag("commits")
+                    Text("Stashes").tag("stashes")
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -42,6 +43,8 @@ struct DiffView: View {
             }
             if pane == "commits", model.diff?.isRepository == true {
                 CommitsList()
+            } else if pane == "stashes", model.diff?.isRepository == true {
+                StashesList()
             } else {
                 content
             }
@@ -188,6 +191,10 @@ private struct GitQuestions: ViewModifier {
         Binding(get: { model.pendingCommitAction != nil }, set: { if !$0 { model.pendingCommitAction = nil } })
     }
 
+    private var askingDrop: Binding<Bool> {
+        Binding(get: { model.droppingStash != nil }, set: { if !$0 { model.droppingStash = nil } })
+    }
+
     private var askingForce: Binding<Bool> {
         Binding(get: { model.pendingForcePush != nil }, set: { if !$0 { model.pendingForcePush = nil } })
     }
@@ -202,6 +209,15 @@ private struct GitQuestions: ViewModifier {
                 Button("Cancel", role: .cancel) {}
             } message: { pending in
                 Text(question(pending).message)
+            }
+            .confirmationDialog(
+                model.droppingStash.map { DropStashQuestion(stash: $0).title } ?? "", isPresented: askingDrop, titleVisibility: .visible,
+                presenting: model.droppingStash
+            ) { stash in
+                Button(DropStashQuestion(stash: stash).confirm, role: .destructive) { model.dropStashConfirmed() }
+                Button("Cancel", role: .cancel) {}
+            } message: { stash in
+                Text(DropStashQuestion(stash: stash).message)
             }
             .confirmationDialog(
                 model.pendingForcePush?.question.title ?? "", isPresented: askingForce, titleVisibility: .visible, presenting: model.pendingForcePush
@@ -621,7 +637,7 @@ struct DiffDocumentView: View {
         VStack(spacing: 0) {
             HStack(spacing: 8) {
                 // Of a commit, its hash; else which of the two lists it is in.
-                Text(model.diffTabCommit.map { $0.short } ?? (file.isStaged ? "STAGED" : "CHANGES"))
+                Text(model.diffTabLabel ?? (file.isStaged ? "STAGED" : "CHANGES"))
                     .font(.system(size: 9.5, weight: .bold))
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 6)

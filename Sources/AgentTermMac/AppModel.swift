@@ -76,6 +76,8 @@ final class AppModel: ObservableObject {
         /// The commit whose change to the file this is (#36); nil for a
         /// change that is not committed yet, which the Git tab's list follows.
         var commit: CommitInfo?
+        /// What the diff is of when it is not a commit's: "STASH" (#38).
+        var label: String?
     }
     /// Whether the diff's tab is the one in front.
     @Published private(set) var diffInFront = false
@@ -1386,6 +1388,10 @@ final class AppModel: ObservableObject {
             accountUsage = Dictionary(list.map { ($0.agent, $0) }, uniquingKeysWith: { $1 })
         case .gitBranches(let path, let list):
             if path == panelFolder { branches = list }
+        case .gitStashes(let path, let list):
+            if path == panelFolder { stashes = list }
+        case .gitStashShow(_, let hash, let files):
+            stashFiles[hash] = files ?? []
         case .gitLog(let path, let branch, let skip, let list, let more):
             if path == panelFolder, branch == commitsBranch { took(list, skip: skip, more: more) }
         case .gitShow(_, let hash, let details):
@@ -1913,8 +1919,12 @@ final class AppModel: ObservableObject {
     /// list is of its folder.
     var diffTabFileInList: FileDiff? { diffTab?.folder == panelFolder && diffTab?.commit == nil ? diffTab?.file : nil }
 
-    /// The commit the diff tab's change belongs to, when it is a commit's.
+    /// The commit the diff tab's change belongs to, when it is a commit's
+    /// or a stash's.
     var diffTabCommit: CommitInfo? { diffTab?.commit }
+    /// What the diff tab says its change is of: a commit's hash, "STASH",
+    /// or nil for a change that is not committed.
+    var diffTabLabel: String? { diffTab?.label ?? diffTab?.commit?.short }
 
     /// Shows a change's diff in the middle pane. There is one diff tab; it
     /// follows the change picked in the Git tab.
@@ -2068,6 +2078,88 @@ final class AppModel: ObservableObject {
         sync(revert ? "revert" : "cherry-pick", in: directory, revert ? .gitRevert(path: directory, hash: hash) : .gitCherryPick(path: directory, hash: hash)) {
             revert ? GitActions.revert(hash, in: $0) : GitActions.cherryPick(hash, in: $0)
         }
+    }
+
+    // MARK: Stash (#38)
+
+    /// What is in the stash of the folder the side panel shows, newest first.
+    @Published private(set) var stashes: [StashInfo] = []
+    /// The files each stash that was opened holds, by its hash.
+    @Published private(set) var stashFiles: [String: [FileDiff]] = [:]
+    /// The stash that is opened out in the list.
+    @Published var openedStash: String?
+    /// The stash the user is asked about before it is dropped.
+    @Published var droppingStash: StashInfo?
+
+    func loadStashes() {
+        guard let directory = panelFolder else {
+            stashes = []
+            return
+        }
+        if isRemote {
+            connection?.send(.gitStashes(path: directory))
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let list = GitActions.stashes(in: directory)
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.panelFolder == directory else { return }
+                self.stashes = list
+            }
+        }
+    }
+
+    /// Runs a change to the stash here or on the other Mac, then shows the
+    /// stash and the changes as they are.
+    private func changeStash(_ message: (String) -> ClientMessage, _ action: @escaping (String) -> String?) {
+        guard let directory = panelFolder else { return }
+        if isRemote {
+            sendForDiff(message(directory), in: directory)
+            return
+        }
+        git(action) { [weak self] _ in self?.loadStashes() }
+    }
+
+    /// Puts the folder's changes aside, the new files too when asked.
+    func stash(named name: String, untracked: Bool) {
+        changeStash({ .gitStash(path: $0, message: name, untracked: untracked) }) { GitActions.stash(message: name, untracked: untracked, in: $0) }
+    }
+
+    /// Opens a stash out in the list, or closes it, and reads what it holds.
+    func toggle(_ stash: StashInfo) {
+        if openedStash == stash.hash {
+            openedStash = nil
+            return
+        }
+        openedStash = stash.hash
+        guard stashFiles[stash.hash] == nil, let directory = panelFolder else { return }
+        if isRemote {
+            connection?.send(.gitStashShow(path: directory, hash: stash.hash))
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let files = GitActions.stashFiles(stash.hash, in: directory)
+            DispatchQueue.main.async { self?.stashFiles[stash.hash] = files ?? [] }
+        }
+    }
+
+    func applyStash(_ stash: StashInfo, pop: Bool) {
+        changeStash({ .gitStashApply(path: $0, hash: stash.hash, pop: pop) }) { GitActions.applyStash(stash.hash, pop: pop, in: $0) }
+    }
+
+    func dropStashConfirmed() {
+        guard let stash = droppingStash else { return }
+        droppingStash = nil
+        if openedStash == stash.hash { openedStash = nil }
+        changeStash({ .gitStashDrop(path: $0, hash: stash.hash) }) { GitActions.dropStash(stash.hash, in: $0) }
+    }
+
+    /// Shows what a stash holds of one file, in the diff's tab.
+    func openDiff(_ file: FileDiff, of stash: StashInfo) {
+        guard let folder = panelFolder else { return }
+        diffTab = OpenDiff(folder: folder, file: file, commit: CommitInfo(hash: stash.hash, subject: stash.message, date: stash.date), label: "STASH")
+        loadingDiffFile = false
+        showDiffTab()
     }
 
     // MARK: Branches (#35)

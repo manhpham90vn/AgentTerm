@@ -45,6 +45,62 @@ public struct FileDiff: Codable, Identifiable, Equatable, Sendable {
     public var marker: String { isUntracked ? "U" : status.rawValue }
 }
 
+/// Changes put aside in a repository's stash (#38).
+public struct StashInfo: Codable, Equatable, Hashable, Identifiable, Sendable {
+    /// The hash of the commit git keeps the stash as: what names it here,
+    /// since its place in the list ("stash@{1}") moves when another is
+    /// dropped.
+    public var hash: String
+    /// Its place in the list as git names it: "stash@{0}" is the newest.
+    public var ref: String
+    /// What it was called when it was made, or git's own words for it.
+    public var message: String
+    /// The branch it was made on, when git's words say so.
+    public var branch: String?
+    public var date: Date
+
+    public var id: String { hash }
+
+    public init(hash: String, ref: String, message: String, branch: String? = nil, date: Date = Date(timeIntervalSince1970: 0)) {
+        self.hash = hash
+        self.ref = ref
+        self.message = message
+        self.branch = branch
+        self.date = date
+    }
+
+    /// From what git notes of a stash: "On main: half of the login" has a
+    /// name; "WIP on main: abc1234 the last commit" has none, and is told
+    /// by the commit it was made on.
+    public init(hash: String, ref: String, noted: String, date: Date) {
+        var message = noted
+        var branch: String?
+        for prefix in ["WIP on ", "On "] where noted.hasPrefix(prefix) {
+            let rest = noted.dropFirst(prefix.count)
+            if let colon = rest.range(of: ": ") {
+                branch = String(rest[..<colon.lowerBound])
+                message = prefix == "On " ? String(rest[colon.upperBound...]) : "Changes on " + String(rest[colon.upperBound...])
+            }
+            break
+        }
+        self.init(hash: hash, ref: ref, message: message, branch: branch, date: date)
+    }
+}
+
+/// What is asked before a stash is dropped (#38): it is the only copy of
+/// what it holds.
+public struct DropStashQuestion: Equatable, Sendable {
+    public var title: String
+    public var message: String
+    public var confirm: String
+
+    public init(stash: StashInfo) {
+        title = "Drop the stash “\(stash.message)”?"
+        message = "What it holds is in no commit and no file: once dropped it cannot be brought back from AgentTerm."
+        confirm = "Drop Stash"
+    }
+}
+
 /// One commit of a repository's history (#36).
 public struct CommitInfo: Codable, Equatable, Hashable, Identifiable, Sendable {
     public var hash: String

@@ -497,14 +497,15 @@ public enum GitActions {
     }
 
     static func run(
-        _ arguments: [String], in directory: String, timeout: TimeInterval = 30, environment: [String: String]? = nil
+        _ arguments: [String], in directory: String, timeout: TimeInterval = 30, environment: [String: String]? = nil, literalPaths: Bool = true
     ) -> String? {
-        // File names are taken as they are, not as patterns. No program is
-        // asked for a password either: see `actionEnvironment`.
+        // File names are taken as they are, not as patterns (`literalPaths`,
+        // unless the command names no file and goes wrong with it). No
+        // program is asked for a password either: see `actionEnvironment`.
         guard
             let result = Subprocess.run(
-                git, ["-C", directory, "--literal-pathspecs", "-c", "core.askPass="] + arguments, timeout: timeout, mergeErrors: true,
-                environment: environment)
+                git, ["-C", directory] + (literalPaths ? ["--literal-pathspecs"] : []) + ["-c", "core.askPass="] + arguments, timeout: timeout,
+                mergeErrors: true, environment: environment)
         else {
             return "git could not be started."
         }

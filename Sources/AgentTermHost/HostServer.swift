@@ -1473,6 +1473,18 @@ public final class HostServer {
             git(for: client, in: path) { GitActions.unstage(files, in: path) }
         case .gitDiscard(let path, let files):
             git(for: client, in: path) { GitActions.discard(files, in: path) }
+        case .gitStashes(let path):
+            work(for: client, { GitActions.stashes(in: path) }) { server, client, list in server.send(.gitStashes(path: path, stashes: list), to: client) }
+        case .gitStash(let path, let message, let untracked):
+            git(for: client, in: path, stashes: true) { GitActions.stash(message: message, untracked: untracked, in: path) }
+        case .gitStashShow(let path, let hash):
+            work(for: client, { GitActions.stashFiles(hash, in: path) }) { server, client, files in
+                server.send(.gitStashShow(path: path, hash: hash, files: files), to: client)
+            }
+        case .gitStashApply(let path, let hash, let pop):
+            git(for: client, in: path, stashes: true) { GitActions.applyStash(hash, pop: pop, in: path) }
+        case .gitStashDrop(let path, let hash):
+            git(for: client, in: path, stashes: true) { GitActions.dropStash(hash, in: path) }
         case .gitLog(let path, let branch, let skip, let limit):
             // No more at once than a list shows a page of.
             let count = min(max(limit, 1), 200)
@@ -1600,17 +1612,23 @@ public final class HostServer {
     ///
     /// A change to the branches (`branches`) is answered with them as well,
     /// before the changes, whose branch may be another now.
-    private func git(for client: Client, in path: String, sync: Bool = false, branches: Bool = false, _ action: @escaping () -> String?) {
+    /// One to the stash (`stashes`) likewise.
+    private func git(
+        for client: Client, in path: String, sync: Bool = false, branches: Bool = false, stashes: Bool = false, _ action: @escaping () -> String?
+    ) {
         work(
             for: client,
-            { () -> (String?, DiffSnapshot, [BranchInfo]?) in
+            { () -> (String?, DiffSnapshot, [BranchInfo]?, [StashInfo]?) in
                 let problem = action()
-                return (problem, GitDiff.snapshot(directory: path), branches ? GitActions.branches(in: path) : nil)
+                return (
+                    problem, GitDiff.snapshot(directory: path), branches ? GitActions.branches(in: path) : nil, stashes ? GitActions.stashes(in: path) : nil
+                )
             }
         ) { server, client, result in
             server.diffCache[path] = (result.1, Date())
             if let problem = result.0 { server.send(.error(problem), to: client) }
             if let list = result.2 { server.send(.gitBranches(path: path, branches: list), to: client) }
+            if let list = result.3 { server.send(.gitStashes(path: path, stashes: list), to: client) }
             server.send(.diff(path: path, snapshot: result.1.withoutPatches), to: client)
             if sync { server.send(.gitSynced(path: path), to: client) }
         }

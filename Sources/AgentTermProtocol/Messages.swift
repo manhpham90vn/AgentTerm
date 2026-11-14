@@ -222,6 +222,21 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Deletes a branch of the repository's own. One with commits that are
     /// on no other branch is deleted only with `force`.
     case gitDeleteBranch(path: String, name: String, force: Bool)
+    /// Asks for what is in the repository's stash (#38), newest first.
+    /// Answered with `gitStashes`.
+    case gitStashes(path: String)
+    /// Puts the changes aside: what is staged and what is not, and with
+    /// `untracked` the files git does not track yet. `message` names it;
+    /// empty, git names it after the last commit.
+    case gitStash(path: String, message: String, untracked: Bool)
+    /// Asks what a stash holds: its files, each with its diff. `hash`
+    /// names the stash (`StashInfo.hash`). Answered with `gitStashShow`.
+    case gitStashShow(path: String, hash: String)
+    /// Brings what a stash holds back into the folder. With `pop` the
+    /// stash is dropped once that worked; when it conflicts, it is kept.
+    case gitStashApply(path: String, hash: String, pop: Bool)
+    /// Throws a stash away. Sent only after the user was asked.
+    case gitStashDrop(path: String, hash: String)
     /// Asks for commits of a branch (#36), the checked out one when nil,
     /// newest first: `limit` of them after the first `skip`. Answered with
     /// `gitLog`.
@@ -392,6 +407,11 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// The paired devices. Sent to the host's own machine when they change.
     case devices([DeviceInfo])
     case diff(path: String, snapshot: DiffSnapshot)
+    /// What is in the repository's stash, newest first.
+    case gitStashes(path: String, stashes: [StashInfo])
+    /// The files a stash holds, each with its diff. `files` nil when the
+    /// stash is no longer there.
+    case gitStashShow(path: String, hash: String, files: [FileDiff]?)
     /// Commits of `branch` (the checked out one when nil), newest first,
     /// after the first `skip`; `more` when there are older ones still.
     case gitLog(path: String, branch: String?, skip: Int, commits: [CommitInfo], more: Bool)

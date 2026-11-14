@@ -27,6 +27,12 @@ enum Route: Hashable {
     case commit(folder: String, hash: String)
     /// What a commit did to one file.
     case commitFile(folder: String, hash: String, file: String)
+    /// What is in a folder's stash (#38).
+    case stashes(folder: String)
+    /// One stash: its files, and bringing it back or dropping it.
+    case stash(folder: String, hash: String)
+    /// What a stash holds of one file.
+    case stashFile(folder: String, hash: String, file: String)
 }
 
 /// A file on the Mac as it was last read.
@@ -342,6 +348,34 @@ final class PhoneModel: ObservableObject {
     @Published var tab = "sessions"
     /// A folder's uncommitted changes, by folder. Without the diffs.
     @Published private(set) var diffs: [String: DiffSnapshot] = [:]
+    // MARK: Stash (#38)
+
+    /// What is in each folder's stash, newest first.
+    @Published private(set) var stashes: [String: [StashInfo]] = [:]
+    /// The files each stash that was opened holds, by its hash.
+    @Published private(set) var stashFiles: [String: [FileDiff]] = [:]
+
+    func loadStashes(_ folder: String) { connection?.send(.gitStashes(path: folder)) }
+
+    func loadStash(_ hash: String, in folder: String) {
+        guard stashFiles[hash] == nil else { return }
+        connection?.send(.gitStashShow(path: folder, hash: hash))
+    }
+
+    /// Puts the folder's changes aside on the Mac, the new files too when asked.
+    func stash(named name: String, untracked: Bool, in folder: String) {
+        connection?.send(.gitStash(path: folder, message: name, untracked: untracked))
+    }
+
+    func applyStash(_ hash: String, pop: Bool, in folder: String) {
+        connection?.send(.gitStashApply(path: folder, hash: hash, pop: pop))
+    }
+
+    /// Throws a stash away, once the user was asked.
+    func dropStash(_ hash: String, in folder: String) {
+        connection?.send(.gitStashDrop(path: folder, hash: hash))
+    }
+
     // MARK: Commits (#36)
 
     /// The commits of each folder's checked out branch, newest first, as
@@ -1151,6 +1185,10 @@ final class PhoneModel: ObservableObject {
             }
         case .gitBranches(let folder, let list):
             branches[folder] = list
+        case .gitStashes(let folder, let list):
+            stashes[folder] = list
+        case .gitStashShow(_, let hash, let files):
+            stashFiles[hash] = files ?? []
         case .gitLog(let folder, nil, let skip, let list, let more):
             loadingCommits.remove(folder)
             // A page that does not follow what is listed is another list's.

@@ -537,6 +537,17 @@ panel.
     checked out branch; each is asked first, and one that runs into
     conflicts is undone and says so. A merge commit is not reverted or
     picked here: git has to be told which side to keep.
+    **Stashes**, the third list, is the repository's stash. **Stash
+    Changes…** puts what is staged and what is not aside, under a name
+    when one is given, with the files git does not track yet unless that
+    is turned off, and leaves the folder as it was committed. The stashes
+    are listed newest first, each with the branch it was made on and how
+    long ago; one that is pressed opens out to its files, which show their
+    diffs in the middle pane under **STASH**. **Apply** brings it back and
+    keeps it, **Pop** brings it back and takes it out of the stash, and
+    **Drop…** throws it away, asked first, since nothing else holds what
+    is in it. One that conflicts with what is in the folder says so: the
+    files that conflict are marked there, and the stash is kept.
     Not part of it: staging part of a file, amending,
     choosing a remote, and resolving a pull
     that conflicts.
@@ -785,7 +796,9 @@ button at the top right of Sessions goes back to the list of Macs.
   are asked by themselves while the folder's changes are on screen;
   **Commits** opens the history of the checked out branch, with the graph,
   and a commit shows its message, its hash to copy, and its files with
-  their diffs (reverting and picking a commit are on the Mac), the branch pushed and pulled, and the commit message written by an
+  their diffs (reverting and picking a commit are on the Mac); **Stashes**
+  stashes the changes, lists the stashes with their files and diffs, and
+  applies, pops and drops one, as on the Mac, the branch pushed and pulled, and the commit message written by an
   agent. **History**: the conversations each agent had in the
   folder only, as on the Mac; every conversation is in the History tab. **Files**: see
   Files above.

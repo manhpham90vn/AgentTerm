@@ -107,6 +107,12 @@ struct SessionsView: View {
                     CommitScreen(folder: folder, hash: hash)
                 case .commitFile(let folder, let hash, let file):
                     CommitFileScreen(folder: folder, hash: hash, file: file)
+                case .stashes(let folder):
+                    StashesScreen(folder: folder)
+                case .stash(let folder, let hash):
+                    StashScreen(folder: folder, hash: hash)
+                case .stashFile(let folder, let hash, let file):
+                    StashFileScreen(hash: hash, file: file)
                 }
             }
             .sheet(isPresented: $model.showBrowser) {

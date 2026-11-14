@@ -33,6 +33,92 @@ final class GitActionsTests: XCTestCase {
     private func entries(_ files: [FileDiff]) -> [String] { files.map { "\($0.marker) \($0.path)" } }
     private var snapshot: DiffSnapshot { GitDiff.snapshot(directory: root.path) }
 
+    /// GIT-44 (#38): changes are put aside under a name, with new files
+    /// when asked; the stash lists them, newest first, and says what each
+    /// holds.
+    func testStashingChangesAndWhatAStashHolds() throws {
+        try write("a.txt", "one\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        XCTAssertEqual(GitActions.stash(message: "nothing", untracked: true, in: root.path), "There is no change to stash.")
+        XCTAssertEqual(GitActions.stashes(in: root.path), [])
+
+        try write("new.txt", "mine\n")
+        XCTAssertEqual(
+            GitActions.stash(message: "", untracked: false, in: root.path), "Only new files have changed: stash them too, or there is nothing to stash.")
+        try write("a.txt", "one\ntwo\n")
+        // Without the new files: they stay where they are.
+        XCTAssertNil(GitActions.stash(message: "  half of the login ", untracked: false, in: root.path))
+        XCTAssertEqual(entries(snapshot.unstaged), ["U new.txt"])
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8), "one\n")
+
+        try write("a.txt", "one\nthree\n")
+        git("add", "a.txt")
+        // With them, and with what is staged: the folder is as committed. No name: git's own.
+        XCTAssertNil(GitActions.stash(message: "", untracked: true, in: root.path))
+        XCTAssertEqual(snapshot.files, [])
+
+        let list = GitActions.stashes(in: root.path)
+        XCTAssertEqual(list.map(\.ref), ["stash@{0}", "stash@{1}"])
+        XCTAssertEqual(list[1].message, "half of the login")
+        XCTAssertEqual(list[1].branch, "main")
+        XCTAssertTrue(list[0].message.hasPrefix("Changes on "), list[0].message)
+        XCTAssertTrue(list[0].message.hasSuffix("init"), list[0].message)
+        XCTAssertEqual(list[0].hash.count, 40)
+
+        let older = try XCTUnwrap(GitActions.stashFiles(list[1].hash, in: root.path))
+        XCTAssertEqual(older.map { "\($0.marker) \($0.path)" }, ["M a.txt"])
+        XCTAssertTrue(older[0].patch.contains("+two"))
+        let newer = try XCTUnwrap(GitActions.stashFiles(list[0].hash, in: root.path))
+        XCTAssertEqual(Set(newer.map(\.path)), ["a.txt", "new.txt"], "the new file is part of it")
+        XCTAssertTrue(newer.first { $0.path == "new.txt" }?.patch.contains("+mine") == true)
+        XCTAssertNil(GitActions.stashFiles("0000000000000000000000000000000000000000", in: root.path))
+    }
+
+    /// GIT-45 (#38): a stash is applied and kept, popped and gone, and
+    /// dropped; one that conflicts says so and is kept; a stash is named by
+    /// its commit, so another being dropped does not make it another.
+    func testApplyingPoppingAndDroppingAStash() throws {
+        try write("a.txt", "one\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        try write("a.txt", "one\nfirst\n")
+        XCTAssertNil(GitActions.stash(message: "first", untracked: false, in: root.path))
+        try write("b.txt", "second\n")
+        XCTAssertNil(GitActions.stash(message: "second", untracked: true, in: root.path))
+        var list = GitActions.stashes(in: root.path)
+        XCTAssertEqual(list.map(\.message), ["second", "first"])
+        let first = list[1], second = list[0]
+
+        // Applied: its change is back, and it is still in the stash.
+        XCTAssertNil(GitActions.applyStash(first.hash, pop: false, in: root.path))
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8), "one\nfirst\n")
+        XCTAssertEqual(GitActions.stashes(in: root.path).count, 2)
+
+        // Applied again onto another change to the same line: it conflicts, says so, and is kept.
+        git("checkout", "-q", "--", "a.txt")
+        try write("a.txt", "one\nsomething else\n")
+        git("commit", "-q", "-am", "something else")
+        let conflict = try XCTUnwrap(GitActions.applyStash(first.hash, pop: true, in: root.path))
+        XCTAssertTrue(conflict.hasPrefix("The stash conflicts with what is in the folder now."), conflict)
+        XCTAssertEqual(GitActions.stashes(in: root.path).count, 2, "a pop that conflicts keeps the stash")
+        git("checkout", "-q", "HEAD", "--", "a.txt")
+
+        // The newer one is dropped: the older is the same stash, at another place.
+        XCTAssertNil(GitActions.dropStash(second.hash, in: root.path))
+        list = GitActions.stashes(in: root.path)
+        XCTAssertEqual(list.map(\.hash), [first.hash])
+        XCTAssertEqual(list[0].ref, "stash@{0}")
+        XCTAssertEqual(GitActions.dropStash(second.hash, in: root.path), "That stash is no longer there.")
+        XCTAssertEqual(GitActions.applyStash(second.hash, pop: false, in: root.path), "That stash is no longer there.")
+
+        // Popped onto a folder it fits: back, and gone from the stash.
+        git("reset", "-q", "--hard", "HEAD~1")
+        XCTAssertNil(GitActions.applyStash(first.hash, pop: true, in: root.path))
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8), "one\nfirst\n")
+        XCTAssertEqual(GitActions.stashes(in: root.path), [])
+    }
+
     /// GIT-37 (#36): the commits of a branch, newest first and a page at a
     /// time, with their parents and what points at them; and what one of
     /// them changed.

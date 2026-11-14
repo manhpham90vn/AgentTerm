@@ -38,6 +38,11 @@ final class ProtocolTests: XCTestCase {
             .gitShow(path: "/Users/me/app", hash: "abc1234"),
             .gitRevert(path: "/Users/me/app", hash: "abc1234"),
             .gitCherryPick(path: "/Users/me/app", hash: "abc1234"),
+            .gitStashes(path: "/Users/me/app"),
+            .gitStash(path: "/Users/me/app", message: "half of it", untracked: true),
+            .gitStashShow(path: "/Users/me/app", hash: "abc"),
+            .gitStashApply(path: "/Users/me/app", hash: "abc", pop: true),
+            .gitStashDrop(path: "/Users/me/app", hash: "abc"),
             .gitBranches(path: "/Users/me/app"),
             .gitSwitch(path: "/Users/me/app", branch: "origin/feature/login"),
             .gitCreateBranch(path: "/Users/me/app", name: "feature/x", from: nil, checkout: true),
@@ -469,5 +474,22 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(question.title, "Revert abcdef1?")
         XCTAssertTrue(question.message.contains("takes back what “add two” changed"))
         XCTAssertEqual(CommitActionQuestion(.cherryPick, commit: CommitInfo(hash: "abcdef1234", subject: "x"), onto: nil).title, "Pick abcdef1 onto the checked out commit?")
+    }
+
+    /// GIT-46 (#38): a stash in words, from what git notes of it, and what
+    /// is asked before one is dropped.
+    func testAStashInWords() throws {
+        let named = StashInfo(hash: "h1", ref: "stash@{0}", noted: "On feature/login: half of the login", date: Date(timeIntervalSince1970: 5))
+        XCTAssertEqual(named.message, "half of the login")
+        XCTAssertEqual(named.branch, "feature/login")
+        let unnamed = StashInfo(hash: "h2", ref: "stash@{1}", noted: "WIP on main: abc1234 docs: the last commit", date: Date(timeIntervalSince1970: 5))
+        XCTAssertEqual(unnamed.message, "Changes on abc1234 docs: the last commit")
+        XCTAssertEqual(unnamed.branch, "main")
+        XCTAssertEqual(StashInfo(hash: "h3", ref: "stash@{2}", noted: "something of its own", date: Date()).message, "something of its own")
+        let question = DropStashQuestion(stash: named)
+        XCTAssertEqual(question.title, "Drop the stash “half of the login”?")
+        XCTAssertTrue(question.message.contains("cannot be brought back"))
+        let message = ServerMessage.gitStashes(path: "/p", stashes: [named, unnamed])
+        XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
     }
 }

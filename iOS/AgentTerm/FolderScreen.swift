@@ -1002,25 +1002,204 @@ struct ConversationSheet: View {
     }
 }
 
-/// The way from a folder's changes to its history (#36).
+/// The ways from a folder's changes to its history (#36) and its stash (#38).
 private struct CommitsLink: View {
     let folder: String
 
-    var body: some View {
-        NavigationLink(value: Route.commits(folder: folder)) {
-            HStack(spacing: 10) {
-                Image(systemName: "clock.arrow.circlepath").foregroundStyle(Palette.tint)
-                Text("Commits").font(.subheadline.weight(.medium))
-                Spacer()
-                Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 12)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.panel))
-            .contentShape(Rectangle())
+    private func row(_ title: String, symbol: String) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol).foregroundStyle(Palette.tint).frame(width: 22)
+            Text(title).font(.subheadline.weight(.medium))
+            Spacer()
+            Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
         }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("git-commits")
+        .padding(.horizontal, 12)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            NavigationLink(value: Route.commits(folder: folder)) { row("Commits", symbol: "clock.arrow.circlepath") }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("git-commits")
+            Palette.hairline.frame(height: 1).padding(.leading, 44)
+            NavigationLink(value: Route.stashes(folder: folder)) { row("Stashes", symbol: "tray.full") }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("git-stashes")
+        }
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Palette.panel))
+    }
+}
+
+/// A folder's stash on the Mac: putting the changes aside under a name,
+/// and what was put aside, newest first.
+struct StashesScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+    let folder: String
+    @State private var naming = false
+    @State private var name = ""
+    @State private var includeNew = true
+
+    private static let ago: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter
+    }()
+
+    private var hasChanges: Bool { !(model.diffs[folder]?.files.isEmpty ?? true) }
+
+    var body: some View {
+        List {
+            if naming {
+                Section("Stash Changes") {
+                    TextField("A name, to find it again (optional)", text: $name)
+                        .autocorrectionDisabled()
+                        .accessibilityIdentifier("stash-name")
+                    Toggle("Include new files", isOn: $includeNew)
+                    Button("Stash") {
+                        model.stash(named: name, untracked: includeNew, in: folder)
+                        naming = false
+                    }
+                    .accessibilityIdentifier("stash-confirm")
+                }
+            }
+            Section {
+                let list = model.stashes[folder] ?? []
+                if list.isEmpty {
+                    Text("Nothing is stashed. Stash Changes puts what is not committed aside, to bring back later.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(list) { stash in
+                    NavigationLink(value: Route.stash(folder: folder, hash: stash.hash)) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(stash.message).lineLimit(2)
+                            Text((stash.branch.map { "on \($0) · " } ?? "") + Self.ago.localizedString(for: stash.date, relativeTo: Date()))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .accessibilityIdentifier("stash-" + stash.ref)
+                }
+            }
+        }
+        .navigationTitle("Stashes")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    name = ""
+                    naming.toggle()
+                } label: {
+                    Label("Stash Changes", systemImage: "tray.and.arrow.down")
+                }
+                .disabled(!hasChanges)
+                .accessibilityIdentifier("stash-changes")
+            }
+        }
+        .refreshable { model.loadStashes(folder) }
+        .onAppear {
+            model.loadStashes(folder)
+            model.loadDiff(folder)
+        }
+    }
+}
+
+/// One stash: what it holds, and bringing it back or dropping it.
+struct StashScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+    @Environment(\.dismiss) private var dismiss
+    let folder: String
+    let hash: String
+    @State private var dropping = false
+
+    private var stash: StashInfo? { model.stashes[folder]?.first { $0.hash == hash } }
+
+    var body: some View {
+        List {
+            if let stash {
+                Section {
+                    Text(stash.message).font(.headline)
+                    Button("Apply") {
+                        model.applyStash(hash, pop: false, in: folder)
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("stash-apply")
+                    Button("Pop") {
+                        model.applyStash(hash, pop: true, in: folder)
+                        dismiss()
+                    }
+                    .accessibilityIdentifier("stash-pop")
+                    Button("Drop…", role: .destructive) { dropping = true }
+                        .accessibilityIdentifier("stash-drop")
+                } footer: {
+                    Text("Apply brings it back into the folder and keeps it in the stash; Pop takes it out of the stash once it is back.")
+                }
+                Section("Files") {
+                    if let files = model.stashFiles[hash] {
+                        if files.isEmpty { Text("It holds no file.").foregroundStyle(.secondary) }
+                        ForEach(files) { file in
+                            NavigationLink(value: Route.stashFile(folder: folder, hash: hash, file: file.path)) {
+                                HStack(spacing: 8) {
+                                    Text(file.marker).font(.caption.weight(.bold).monospaced()).frame(width: 14)
+                                    Text((file.path as NSString).lastPathComponent).lineLimit(1)
+                                    Spacer(minLength: 4)
+                                    DiffCount(added: file.added, deleted: file.deleted)
+                                }
+                            }
+                            .disabled(file.patch.isEmpty)
+                            .accessibilityIdentifier("stash-file-" + file.path)
+                        }
+                    } else {
+                        ProgressView()
+                    }
+                }
+            } else {
+                Text("That stash is no longer there.").foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle("Stash")
+        .navigationBarTitleDisplayMode(.inline)
+        .onAppear { model.loadStash(hash, in: folder) }
+        // Asked first: the stash is the only copy of what it holds.
+        .confirmationDialog(
+            stash.map { DropStashQuestion(stash: $0).title } ?? "", isPresented: $dropping, titleVisibility: .visible
+        ) {
+            Button(stash.map { DropStashQuestion(stash: $0).confirm } ?? "Drop Stash", role: .destructive) {
+                model.dropStash(hash, in: folder)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(stash.map { DropStashQuestion(stash: $0).message } ?? "")
+        }
+    }
+}
+
+/// What a stash holds of one file.
+struct StashFileScreen: View {
+    @EnvironmentObject private var model: PhoneModel
+    let hash: String
+    let file: String
+    @AppStorage("diffLayout") private var layout = "unified"
+
+    var body: some View {
+        Group {
+            if let diff = model.stashFiles[hash]?.first(where: { $0.path == file }), !diff.patch.isEmpty {
+                if layout == "split" {
+                    SplitDiffView(patch: diff.patch, fontSize: 11)
+                } else {
+                    PatchLines(patch: diff.patch)
+                }
+            } else {
+                Placeholder(text: "Nothing to show for this file: it is empty or not text.")
+            }
+        }
+        .background(Palette.canvas.ignoresSafeArea())
+        .navigationTitle((file as NSString).lastPathComponent)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
     }
 }
 
