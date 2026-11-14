@@ -167,6 +167,94 @@ enum Subprocess {
         }
     }
 
+    /// Asks a command to end. One that the terminal stopped (a shell that
+    /// reached for the terminal the host was started from) does not get the
+    /// signal until it is let go on, so it is.
+    static func end(_ pid: pid_t) {
+        kill(pid, SIGTERM)
+        kill(pid, SIGCONT)
+    }
+
+    /// A command that was started and runs by itself, to be stopped or
+    /// waited for: an agent that writes a commit message, which takes as
+    /// long as it takes and can be given up on.
+    ///
+    /// It runs in a session of its own, without the terminal the host may
+    /// have been started from. A login shell that is interactive and finds
+    /// itself at the head of a process group with a terminal takes that
+    /// terminal for its own; from the background it is stopped for it, and
+    /// neither runs its command nor ends.
+    final class Started {
+        let pid: pid_t
+        private let lock = NSLock()
+        private var status: Int32?
+
+        fileprivate init(pid: pid_t) { self.pid = pid }
+
+        /// Whether it has not ended yet.
+        var isRunning: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard status == nil else { return false }
+            var found: Int32 = 0
+            if waitpid(pid, &found, WNOHANG) == pid { status = found }
+            return status == nil
+        }
+
+        /// Asks it to end, unless it has: its number may be another
+        /// program's once it was waited for.
+        func stop() {
+            lock.lock()
+            defer { lock.unlock() }
+            if status == nil { Subprocess.end(pid) }
+        }
+
+        /// Waits for it to end, and says how it did.
+        @discardableResult
+        func wait() -> Ending {
+            // Seen to end before it is reaped, so that `stop` never signals
+            // a number the system has given to another program.
+            var info = siginfo_t()
+            while waitid(P_PID, id_t(pid), &info, WEXITED | WNOWAIT) < 0 && errno == EINTR {}
+            lock.lock()
+            defer { lock.unlock() }
+            if status == nil {
+                var found: Int32 = 0
+                while waitpid(pid, &found, 0) < 0 && errno == EINTR {}
+                status = found
+            }
+            let signal = (status ?? 0) & 0x7f
+            return signal == 0 ? .exited(((status ?? 0) >> 8) & 0xff) : .signalled(signal)
+        }
+    }
+
+    /// Starts a command by itself, with nothing to read and nowhere to
+    /// write, in a session of its own. Nil when it could not be started.
+    static func start(_ executable: String, _ arguments: [String], cwd: String? = nil, environment: [String: String]? = nil) -> Started? {
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0)
+        posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, "/dev/null", O_WRONLY, 0)
+        posix_spawn_file_actions_addopen(&actions, STDERR_FILENO, "/dev/null", O_WRONLY, 0)
+        if let cwd { posix_spawn_file_actions_addchdir_np(&actions, cwd) }
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSID))
+        let argv: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map { strdup($0) } + [nil]
+        var given = environment ?? ProcessInfo.processInfo.environment
+        HostEnvironment.keepGitOffTheirConfiguration(&given)
+        let envp: [UnsafeMutablePointer<CChar>?] = given.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer {
+            argv.forEach { free($0) }
+            envp.forEach { free($0) }
+        }
+        var pid: pid_t = 0
+        guard posix_spawn(&pid, executable, &actions, &attributes, argv, envp) == 0 else { return nil }
+        return Started(pid: pid)
+    }
+
     /// - Parameter mergeErrors: also capture what the command writes to standard error.
     ///
     /// Started with `posix_spawn` and waited for with `waitpid`: Foundation's
@@ -221,7 +309,7 @@ enum Subprocess {
             defer { lock.unlock() }
             if !ended {
                 stopped = true
-                kill(pid, SIGTERM)
+                Subprocess.end(pid)
             }
         }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)

@@ -110,26 +110,24 @@ final class CommitWriterTests: XCTestCase {
     }
 
     func testStoppingARunNeverLeavesItsAgentRunning() throws {
-        func agent() -> Process {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/bin/sleep")
-            process.arguments = ["30"]
-            return process
-        }
+        func agent() -> Subprocess.Started? { Subprocess.start("/bin/sleep", ["30"]) }
         // Stopped before the agent was started: it is not started at all.
         let early = CommitWriter.Run()
-        let never = agent()
+        var launched = false
         early.cancel()
-        XCTAssertFalse(try early.start(never))
-        XCTAssertFalse(never.isRunning)
+        XCTAssertThrowsError(
+            try early.start {
+                launched = true
+                return agent()
+            })
+        XCTAssertFalse(launched)
 
         // Stopped once it runs: it is ended, at once.
         let late = CommitWriter.Run()
-        let running = agent()
-        XCTAssertTrue(try late.start(running))
+        let running = try late.start(agent)
         late.cancel()
         let ended = Date()
-        running.waitUntilExit()
+        running.wait()
         XCTAssertLessThan(Date().timeIntervalSince(ended), 5)
         XCTAssertTrue(late.isCancelled)
 
@@ -137,21 +135,49 @@ final class CommitWriterTests: XCTestCase {
         // whichever comes first, no agent is left running.
         for _ in 0..<200 {
             let run = CommitWriter.Run()
-            let process = agent()
             let stopped = DispatchSemaphore(value: 0)
             DispatchQueue.global().async {
                 run.cancel()
                 stopped.signal()
             }
-            let started = try run.start(process)
+            let process = try? run.start(agent)
             stopped.wait()
-            if started {
-                let deadline = Date().addingTimeInterval(5)
-                while process.isRunning && Date() < deadline { usleep(2_000) }
-            }
+            guard let process else { continue }
+            let deadline = Date().addingTimeInterval(5)
+            while process.isRunning && Date() < deadline { usleep(2_000) }
             XCTAssertFalse(process.isRunning, "an agent was left running after Stop")
-            if process.isRunning { process.terminate() }
+            if process.isRunning { kill(process.pid, SIGKILL) }
         }
+    }
+
+    /// TEST-4: the agent's login shell runs in a session of its own. With a
+    /// terminal to reach for, as when the tests or the host are run from
+    /// one, a shell at the head of a process group of that terminal was
+    /// stopped by it, and the message was waited for until the tests were
+    /// given up on.
+    func testTheAgentsShellHasNoTerminalToReachFor() throws {
+        let started = try XCTUnwrap(Subprocess.start("/bin/sleep", ["30"]))
+        defer {
+            started.stop()
+            started.wait()
+        }
+        XCTAssertEqual(getsid(started.pid), started.pid, "a session of its own")
+        XCTAssertNotEqual(getsid(started.pid), getsid(0), "not the session the tests run in")
+    }
+
+    /// TEST-4: a command the terminal stopped is still ended when it is
+    /// asked to: one that is stopped takes no signal until it is let go on.
+    func testACommandThatWasStoppedIsStillEnded() throws {
+        let started = try XCTUnwrap(Subprocess.start("/bin/sleep", ["30"]))
+        kill(started.pid, SIGSTOP)
+        let asked = Date()
+        started.stop()
+        XCTAssertEqual(started.wait(), .signalled(SIGTERM))
+        XCTAssertLessThan(Date().timeIntervalSince(asked), 5)
+        // And one given a time to answer in.
+        let result = try XCTUnwrap(Subprocess.run("/bin/sh", ["-c", "kill -STOP $$; sleep 30"], timeout: 0.5))
+        XCTAssertEqual(result.ending, .timedOut)
+        XCTAssertLessThan(Date().timeIntervalSince(asked), 10)
     }
 
     func testTheAgentIsTheOneChosenOrTheFirstInstalled() {

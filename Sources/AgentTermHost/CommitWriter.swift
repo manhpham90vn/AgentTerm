@@ -29,7 +29,7 @@ public enum CommitWriter {
     /// One run, so it can be stopped from another thread.
     public final class Run {
         private let lock = NSLock()
-        private var process: Process?
+        private var process: Subprocess.Started?
         private var cancelled = false
         private var expired = false
 
@@ -47,20 +47,28 @@ public enum CommitWriter {
             cancelled = true
             // Only a process that was started is kept here, so one that is
             // not running has ended by itself.
-            if let process, process.isRunning { process.terminate() }
+            process?.stop()
         }
 
-        /// Starts the process, unless the run was cancelled before. False
-        /// then. Starting and cancelling exclude each other: a run cannot
-        /// be cancelled between being taken on and being started, which
-        /// would leave the agent running with nobody waiting for it.
-        func start(_ process: Process) throws -> Bool {
+        /// Why a run did not start.
+        enum NotStarted: Error {
+            /// It was cancelled before.
+            case cancelled
+            /// Its program could not be started.
+            case failed
+        }
+
+        /// Starts the process, unless the run was cancelled before.
+        /// Starting and cancelling exclude each other: a run cannot be
+        /// cancelled between being taken on and being started, which would
+        /// leave the agent running with nobody waiting for it.
+        func start(_ launch: () -> Subprocess.Started?) throws -> Subprocess.Started {
             lock.lock()
             defer { lock.unlock() }
-            guard !cancelled else { return false }
-            try process.run()
-            self.process = process
-            return true
+            guard !cancelled else { throw NotStarted.cancelled }
+            guard let started = launch() else { throw NotStarted.failed }
+            process = started
+            return started
         }
 
         /// Stops a process that took too long.
@@ -69,7 +77,7 @@ public enum CommitWriter {
             defer { lock.unlock() }
             guard let process, process.isRunning else { return }
             expired = true
-            process.terminate()
+            process.stop()
         }
 
         fileprivate var isExpired: Bool {
@@ -193,30 +201,29 @@ public enum CommitWriter {
         else { return .failure(.failed("The prompt for \(agent.name) could not be written.")) }
 
         // Through the login shell, as sessions are: the agent finds the
-        // same PATH and sign-in it has in a terminal.
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: HostEnvironment.shell)
-        process.arguments = ["-l", "-i", "-c", command]
-        process.currentDirectoryURL = scratch
-        process.environment = HostEnvironment.sessionEnvironment()
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
+        // same PATH and sign-in it has in a terminal. In a session of its
+        // own: with a terminal to take, as when the host was started from
+        // one, the shell was stopped for reaching for it and never ran.
+        let process: Subprocess.Started
         do {
-            guard try run.start(process) else { return .failure(.cancelled) }
+            process = try run.start {
+                Subprocess.start(HostEnvironment.shell, ["-l", "-i", "-c", command], cwd: scratch.path, environment: HostEnvironment.sessionEnvironment())
+            }
+        } catch Run.NotStarted.cancelled {
+            return .failure(.cancelled)
         } catch {
             return .failure(.failed("\(agent.name) could not be started."))
         }
 
         let timer = DispatchWorkItem { run.expire() }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timer)
-        process.waitUntilExit()
+        let ending = process.wait()
         timer.cancel()
 
         if run.isCancelled { return .failure(.cancelled) }
         if run.isExpired { return .failure(.failed("\(agent.name) took too long to write the message.")) }
         let message = clean((try? String(contentsOf: outputFile, encoding: .utf8)) ?? "")
-        guard process.terminationStatus == 0, !message.isEmpty else {
+        guard ending == .exited(0), !message.isEmpty else {
             let said = ((try? String(contentsOf: errorFile, encoding: .utf8)) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let reason = said.isEmpty ? (message.isEmpty ? "It answered nothing." : message) : String(said.suffix(400))
             return .failure(.failed("\(agent.name) could not write the message. \(reason)"))
