@@ -21,6 +21,19 @@ final class FlowTests: XCTestCase {
     /// The main screens with the phone on its side, from a session's terminal.
     /// PERF-6: how smoothly a terminal of 5,000 lines scrolls, as the time
     /// frames were late while it coasted after a fast swipe.
+    /// Makes a gesture until what it is for has happened, three times at
+    /// most. A press that opens a menu leaves the app busy for as long as
+    /// the tests wait for it to settle, and a touch or a drag made just
+    /// after is now and then lost: the picture taken after "Orange" was
+    /// touched showed the menu still open, with nothing chosen. What the
+    /// gesture is for is still asserted by the caller.
+    private func gesture(until done: () -> Bool, _ make: () -> Void) {
+        for _ in 0..<3 {
+            make()
+            if done() { return }
+        }
+    }
+
     private func measureScrolling(_ app: XCUIApplication, compose: XCUIElement) {
         compose.tap()
         compose.typeText("seq 1 5000")
@@ -620,9 +633,13 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(groupSays("1 sessions"), group.label)
         // Dropped on the group's label, a session joins it. Dropped on a
         // session of the group, it joins too.
-        rows.element(boundBy: 2).press(forDuration: 0.7, thenDragTo: group, withVelocity: .slow, thenHoldForDuration: 0.6)
+        gesture(until: { groupSays("2 sessions") }) {
+            rows.element(boundBy: 2).press(forDuration: 0.7, thenDragTo: group, withVelocity: .slow, thenHoldForDuration: 0.6)
+        }
         XCTAssertTrue(groupSays("2 sessions"), "dropping on the label did not add the session: \(group.label)")
-        rows.element(boundBy: 2).press(forDuration: 0.7, thenDragTo: rows.element(boundBy: 0), withVelocity: .slow, thenHoldForDuration: 0.6)
+        gesture(until: { groupSays("3 sessions") }) {
+            rows.element(boundBy: 2).press(forDuration: 0.7, thenDragTo: rows.element(boundBy: 0), withVelocity: .slow, thenHoldForDuration: 0.6)
+        }
         XCTAssertTrue(groupSays("3 sessions"), "dropping on a grouped session did not add the session: \(group.label)")
         capture("11-grouped")
         // A pinned session leaves its group and goes first.
@@ -641,9 +658,16 @@ final class FlowTests: XCTestCase {
         app.buttons["Color"].tap()
         XCTAssertTrue(app.buttons["Orange"].waitForExistence(timeout: 5), "the colors are not offered")
         capture("12-colors")
-        app.buttons["Orange"].tap()
+        // Chosen, the menu goes.
+        let orange = app.buttons["Orange"]
+        func menuIsGone() -> Bool {
+            let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: orange)
+            return XCTWaiter().wait(for: [gone], timeout: 4) == .completed
+        }
+        gesture(until: menuIsGone) { if orange.exists { orange.tap() } }
+        XCTAssertFalse(orange.exists, "the color was not chosen: its menu is still open")
         capture("13-arranged")
-        group.tap()
+        gesture(until: { groupSays("collapsed") }) { group.tap() }
         XCTAssertTrue(groupSays("collapsed"), group.label)
         XCTAssertEqual(rows.count, 2, "a collapsed group still shows its sessions")
         capture("14-collapsed")
