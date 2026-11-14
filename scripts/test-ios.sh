@@ -124,6 +124,9 @@ if [ -n "${SHOTS:-}" ]; then mkdir -p "$SHOTS"; export TEST_RUNNER_AGENTTERM_SHO
 if [ "${LANDSCAPE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_LANDSCAPE=1; fi
 # SCROLL=only measures how smoothly a long terminal scrolls, and nothing else.
 if [ "${SCROLL:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_SCROLL=1; fi
+# IDLE=only measures how long the steps around a session's menu wait for the
+# app to be idle (#65), and nothing else. The figures are in the log.
+if [ "${IDLE:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_IDLE=1; fi
 # PAGES=only checks that a long session's earlier lines come a page at a time.
 if [ "${PAGES:-}" = only ]; then export TEST_RUNNER_AGENTTERM_ONLY_HISTORY=1; fi
 # TAKEOVER=1 has something play the Mac: once the phone has a session open,
@@ -142,6 +145,7 @@ if "${XCODEBUILD[@]}" test-without-building > "$LOG" 2>&1; then
     if [ "${TAKEOVER:-}" = only ]; then echo "iOS UI test passed (Mac takeover only)."; rm -f "$LOG"; exit 0; fi
     if [ "${LANDSCAPE:-}" = only ]; then echo "iOS UI test passed (landscape only)."; rm -f "$LOG"; exit 0; fi
     if [ "${PAGES:-}" = only ]; then echo "iOS UI test passed (paged history only)."; rm -f "$LOG"; exit 0; fi
+    if [ "${IDLE:-}" = only ]; then grep -E "MEASURE idle" "$LOG" | sed 's/^.*MEASURE //' | cut -c1-200; echo "iOS UI test passed (idle waits measured)."; rm -f "$LOG"; exit 0; fi
     if [ "${SCROLL:-}" = only ]; then grep -E "Measured \[|average:" "$LOG" | cut -c1-300; echo "iOS UI test passed (scrolling measured)."; rm -f "$LOG"; exit 0; fi
     grep -q '"Group 1 api"' "$STATE/tabs.json" || { echo "test-ios.sh: the host did not save the arrangement of the sessions" >&2; exit 1; }
     # The test committed and pushed from the phone; the remote has to have it.

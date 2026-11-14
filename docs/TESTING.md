@@ -44,9 +44,27 @@ full log is.
 |---|---|---|
 | The host, the protocol and the shared code | `swift test` | 2 minutes |
 | The Mac app | `scripts/test-mac.sh` | 5 minutes |
-| The iPhone app | `scripts/test-ios.sh "iPhone Air"` | 10 minutes |
+| The iPhone app | `scripts/test-ios.sh "iPhone Air"` | 5 minutes |
 | The iPhone app on its side | `LANDSCAPE=only scripts/test-ios.sh "iPhone Air"` | a few minutes |
 | Both apps on one host | `scripts/test-both.sh "iPhone Air"` | 5 minutes |
+
+**A menu held the iPhone's test up for a minute at each step** (#65). A
+row of the sessions' list can be dragged and has a menu, and for as long as
+such a menu is open iOS keeps the app busy: XCUITest, which waits for the
+app to be idle before and after every step for up to 60 seconds, waited
+them out at the press that opens the menu and at the touch that picks from
+it. With the row not draggable the same steps take two seconds; where the
+drag is put (on the row or inside it, `onDrag` or `draggable`) makes no
+difference. It is how iOS pairs a drag with a menu, not something the app
+does, so the app is as it was and the test does not wait: its steps
+around a menu run inside `IdleWaits.skipped` (`iOS/AgentTermUITests`),
+which replaces the test runner's own wait while they run. The test went
+from 13 minutes to 5. Should a later Xcode name that wait otherwise,
+nothing is replaced and the steps wait as before; `IDLE=only
+scripts/test-ios.sh` says which waits it found. The grouping steps still
+make four of their gestures again when the first did nothing (`gesture`):
+whether a touch is still lost now and then without the minute-long waits
+is not known yet.
 
 Before a release all of them are run, in that order: the first is the
 quickest to say that something is broken, the last needs everything else
@@ -359,6 +377,7 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | PERF-6 | A terminal of 5,000 lines on the iPhone | A fast swipe, five times (`SCROLL=only scripts/test-ios.sh`) | The app's processor work while it coasts is measured; the figures are in PERFORMANCE.md | P |
 | PERF-7 | A session of 10,000 lines | A client attaches; another asks something meanwhile; the session writes meanwhile | The other is answered at once (measured: `scripts/measure.sh`); what was written follows the screen | H |
 | PERF-8 | The real host, on a state folder of its own | Twenty sessions opened and ended, then 180 more (`scripts/measure.sh`) | `leaks` finds nothing; what it has allocated (`heap`) after 200 is within 15% of what it was after the first 20 | H |
+| PERF-9 | The iPhone app, two sessions listed | A session's menu opened and an entry picked, each step timed, as XCUITest does them and with its wait for the app to be idle left out (`IDLE=only scripts/test-ios.sh`) | The figures: 61 s for the press and 61 s for the pick while the menu is open, 1.5 s and 0.4 s without the wait; a tap with no menu about takes 2 s either way (measured 2026-11-14, #65) | P |
 
 ### Keeping the Mac awake, starting at login
 
