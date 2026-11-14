@@ -548,7 +548,17 @@ panel.
     **Drop…** throws it away, asked first, since nothing else holds what
     is in it. One that conflicts with what is in the folder says so: the
     files that conflict are marked there, and the stash is kept.
-    Not part of it: staging part of a file, amending,
+    The last commit can be **amended** and **undone**, from the menu
+    beside Commit and from the newest commit in Commits. Amending puts the
+    commit's message in the commit box, which says so above it and offers
+    Cancel; the button then replaces the commit by one with the message as
+    it is now and with whatever is staged added to it, the message alone
+    when nothing is. Undoing, asked first, puts the branch back at the
+    commit before and leaves what the commit changed staged, so nothing is
+    lost. A commit that a remote has already is asked about once more,
+    for undoing and before amending: changed here, the next push has to be
+    forced, and whoever pulled it keeps it.
+    Not part of it: staging part of a file,
     choosing a remote, and resolving a pull
     that conflicts.
 - **History**, the place in the bar at the left: every conversation the
@@ -798,7 +808,8 @@ button at the top right of Sessions goes back to the list of Macs.
   and a commit shows its message, its hash to copy, and its files with
   their diffs (reverting and picking a commit are on the Mac); **Stashes**
   stashes the changes, lists the stashes with their files and diffs, and
-  applies, pops and drops one, as on the Mac, the branch pushed and pulled, and the commit message written by an
+  applies, pops and drops one, as on the Mac; the last commit is amended
+  and undone from the menu beside the branch, the branch pushed and pulled, and the commit message written by an
   agent. **History**: the conversations each agent had in the
   folder only, as on the Mac; every conversation is in the History tab. **Files**: see
   Files above.

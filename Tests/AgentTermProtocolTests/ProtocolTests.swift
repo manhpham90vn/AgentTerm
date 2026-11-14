@@ -38,6 +38,9 @@ final class ProtocolTests: XCTestCase {
             .gitShow(path: "/Users/me/app", hash: "abc1234"),
             .gitRevert(path: "/Users/me/app", hash: "abc1234"),
             .gitCherryPick(path: "/Users/me/app", hash: "abc1234"),
+            .gitLastCommit(path: "/Users/me/app"),
+            .gitAmend(path: "/Users/me/app", message: "feat: better"),
+            .gitUndoCommit(path: "/Users/me/app"),
             .gitStashes(path: "/Users/me/app"),
             .gitStash(path: "/Users/me/app", message: "half of it", untracked: true),
             .gitStashShow(path: "/Users/me/app", hash: "abc"),
@@ -490,6 +493,28 @@ final class ProtocolTests: XCTestCase {
         XCTAssertEqual(question.title, "Drop the stash “half of the login”?")
         XCTAssertTrue(question.message.contains("cannot be brought back"))
         let message = ServerMessage.gitStashes(path: "/p", stashes: [named, unnamed])
+        XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
+    }
+
+    /// GIT-50 (#41): what is asked before the last commit is undone or
+    /// amended: once, and once more when a remote has it already.
+    func testWhatIsAskedBeforeTheLastCommitIsRewritten() throws {
+        let commit = CommitInfo(hash: "abcdef1234", subject: "add two")
+        let mine = LastCommit(commit: commit, message: "add two")
+        let pushed = LastCommit(commit: commit, message: "add two", isPushed: true)
+        let undo = RewriteCommitQuestion(.undo, last: mine)
+        XCTAssertEqual(undo.title, "Undo the commit “add two”?")
+        XCTAssertEqual(undo.message, "The branch goes back to the commit before it. What it changed stays staged, so nothing is lost.")
+        XCTAssertEqual(undo.confirm, "Undo Commit")
+        let first = RewriteCommitQuestion(.undo, last: pushed)
+        XCTAssertTrue(first.message.hasSuffix("It is pushed already: you are asked once more."))
+        XCTAssertEqual(first.confirm, "Undo…")
+        let second = RewriteCommitQuestion(.undo, last: pushed, again: true)
+        XCTAssertEqual(second.title, "Undo a commit that is already pushed?")
+        XCTAssertTrue(second.message.contains("the next push has to be forced"))
+        XCTAssertEqual(second.confirm, "Undo Anyway")
+        XCTAssertEqual(RewriteCommitQuestion(.amend, last: pushed).confirm, "Amend Anyway")
+        let message = ServerMessage.gitLastCommit(path: "/p", last: pushed)
         XCTAssertEqual(try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message))), message)
     }
 }

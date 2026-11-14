@@ -205,6 +205,41 @@ final class GitTests: MacUITestCase {
         XCTAssertEqual(git("stash", "list", in: project), "")
     }
 
+    /// GIT-51 (#41): the last commit is amended from the commit box, its
+    /// message and a file staged since, and then undone, which leaves what
+    /// it changed staged.
+    func testAmendingAndUndoingTheLastCommit() throws {
+        git("add", "notes.txt", in: project)
+        git("commit", "-q", "-m", "docs: more ntes", in: project)
+        let count = git("rev-list", "--count", "HEAD", in: project)
+
+        app.press(.button("Git"))
+        app.wait(for: .button("Stage new.txt"))
+        app.press(.button("Stage new.txt"))
+        app.wait(for: .button("Unstage new.txt"))
+        app.press(.id("commit-more"))
+        app.press(.button("Amend Last Commit…"), menus: true)
+        // Its message is in the field, to be put right.
+        app.wait(for: .id("amending"))
+        wait("the commit's message in the field") { self.app.value(of: .text("Commit message")) == "docs: more ntes" }
+        shot("amending")
+        app.write("docs: more notes", into: .text("Commit message"), confirm: true)
+        app.press(.containing("Amend with 1 File"))
+        wait("the commit to be amended") { self.git("log", "-1", "--format=%s", in: self.project) == "docs: more notes" }
+        XCTAssertEqual(git("rev-list", "--count", "HEAD", in: project), count, "amended, not added to")
+        XCTAssertEqual(git("show", "--name-only", "--format=", "HEAD", in: project), "new.txt\nnotes.txt")
+        app.waitGone(.id("amending"))
+
+        // Undone: asked first; what it changed is staged again.
+        app.press(.id("commit-more"))
+        app.press(.button("Undo Last Commit…"), menus: true)
+        app.wait(for: .containing("Undo the commit “docs: more notes”?"))
+        app.press(.button("Undo Commit"))
+        wait("the commit to be undone") { self.git("log", "-1", "--format=%s", in: self.project) == "init" }
+        app.wait(for: .button("Unstage notes.txt"))
+        XCTAssertTrue(app.exists(.button("Unstage new.txt")))
+    }
+
     func testARefusedCommitSaysWhatGitSaid() throws {
         // A hook that refuses every commit, as a project's own checks may.
         let hook = project.appendingPathComponent(".git/hooks/pre-commit")

@@ -84,11 +84,18 @@ private struct ChangesList: View {
                     // what there is to push, and the branch can be another.
                     ScrollView {
                         VStack(spacing: 0) {
-                            BranchButton(folder: folder, branch: diff.branch)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 6)
-                                .padding(.bottom, 10)
+                            HStack(spacing: 8) {
+                                BranchButton(folder: folder, branch: diff.branch)
+                                Spacer()
+                                LastCommitMenu(folder: folder)
+                            }
+                            .padding(.horizontal, 6)
+                            .padding(.bottom, 10)
                             if diff.canPush || diff.canPull { SyncBar(folder: folder, diff: diff) }
+                            if model.amending[folder] != nil {
+                                // Amending with nothing staged: its message alone.
+                                CommitBox(folder: folder, stagedCount: 0).padding(.top, 12)
+                            }
                             CommitsLink(folder: folder).padding(.top, 12)
                             Text("No uncommitted changes.")
                                 .font(.callout)
@@ -105,6 +112,7 @@ private struct ChangesList: View {
                             HStack(spacing: 8) {
                                 BranchButton(folder: folder, branch: diff.branch)
                                 Spacer()
+                                LastCommitMenu(folder: folder)
                                 DiffCount(added: diff.files.reduce(0) { $0 + $1.added }, deleted: diff.files.reduce(0) { $0 + $1.deleted })
                                 Button {
                                     model.setDisplay { $0.changesView = isTree ? "list" : "tree" }
@@ -155,6 +163,20 @@ private struct ChangesList: View {
         } message: {
             Text(question?.message ?? "")
         }
+        // Undoing the last commit, or amending one that is pushed (#41).
+        .confirmationDialog(
+            rewriteQuestion?.title ?? "", isPresented: Binding(get: { model.pendingRewrite?.folder == folder }, set: { if !$0 { model.pendingRewrite = nil } }),
+            titleVisibility: .visible, presenting: model.pendingRewrite
+        ) { pending in
+            Button(rewriteQuestion?.confirm ?? "Go On", role: pending.last.isPushed ? .destructive : nil) { model.rewriteConfirmed(pending) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text(rewriteQuestion?.message ?? "")
+        }
+    }
+
+    private var rewriteQuestion: RewriteCommitQuestion? {
+        model.pendingRewrite.map { RewriteCommitQuestion($0.action, last: $0.last, again: $0.again) }
     }
 
     /// The files of one of the two lists, flat or grouped by folder.
@@ -351,14 +373,35 @@ private struct CommitBox: View {
 
     private var isCommitting: Bool { model.committing == folder }
 
+    /// The commit being amended, when one is (#41).
+    private var amending: LastCommit? { model.amending[folder] }
+
     private var canCommit: Bool {
-        stagedCount > 0 && model.committing == nil && !message.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        (stagedCount > 0 || amending != nil) && model.committing == nil && !message.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var commitTitle: String {
+        if amending != nil { return stagedCount > 0 ? "Amend with \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Amend Message" }
+        return stagedCount > 0 ? "Commit \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Stage Changes to Commit"
     }
 
     private var isWriting: Bool { model.writingCommitMessage.contains(folder) }
 
     var body: some View {
         VStack(spacing: 8) {
+            if let amending {
+                HStack(spacing: 6) {
+                    Image(systemName: "pencil.line").font(.footnote.weight(.semibold))
+                    Text("Amending \(amending.commit.short): what is staged is added to it").font(.footnote).lineLimit(2)
+                    Spacer(minLength: 4)
+                    Button("Cancel") { model.cancelAmend(in: folder) }
+                        .font(.footnote.weight(.medium))
+                        .accessibilityIdentifier("amend-cancel")
+                }
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 4)
+                .accessibilityIdentifier("amending")
+            }
             HStack(alignment: .top, spacing: 8) {
                 TextField("Commit message", text: message, axis: .vertical)
                     .lineLimit(1...5)
@@ -394,7 +437,7 @@ private struct CommitBox: View {
             } label: {
                 HStack(spacing: 8) {
                     if isCommitting { ProgressView().controlSize(.small) }
-                    Text(stagedCount > 0 ? "Commit \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Stage Changes to Commit")
+                    Text(commitTitle)
                         .font(.body.weight(.semibold))
                 }
                 .frame(maxWidth: .infinity)
@@ -999,6 +1042,25 @@ struct ConversationSheet: View {
                 if let plan { prompt = plan.prompt }
             }
         }
+    }
+}
+
+/// What is done to the last commit rather than made anew (#41): amending
+/// it, and undoing it.
+private struct LastCommitMenu: View {
+    @EnvironmentObject private var model: PhoneModel
+    let folder: String
+
+    var body: some View {
+        Menu {
+            Button("Amend Last Commit…") { model.requestAmend(in: folder) }
+            Button("Undo Last Commit…") { model.requestUndoCommit(in: folder) }
+        } label: {
+            Image(systemName: "ellipsis.circle").font(.system(size: 17)).frame(width: 30, height: 30)
+        }
+        .disabled(model.status != .connected || model.amending[folder] != nil)
+        .accessibilityLabel("Amend or undo the last commit")
+        .accessibilityIdentifier("commit-more")
     }
 }
 

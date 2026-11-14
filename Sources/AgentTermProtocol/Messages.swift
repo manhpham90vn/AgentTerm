@@ -222,6 +222,14 @@ public enum ClientMessage: Codable, Equatable, Sendable {
     /// Deletes a branch of the repository's own. One with commits that are
     /// on no other branch is deleted only with `force`.
     case gitDeleteBranch(path: String, name: String, force: Bool)
+    /// Asks for the commit the checked out branch is at (#41). Answered
+    /// with `gitLastCommit`.
+    case gitLastCommit(path: String)
+    /// Replaces the last commit by one with this message and with what is
+    /// staged now added to it. An empty message keeps the one it has.
+    case gitAmend(path: String, message: String)
+    /// Takes the last commit back and leaves what it changed staged.
+    case gitUndoCommit(path: String)
     /// Asks for what is in the repository's stash (#38), newest first.
     /// Answered with `gitStashes`.
     case gitStashes(path: String)
@@ -407,6 +415,9 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     /// The paired devices. Sent to the host's own machine when they change.
     case devices([DeviceInfo])
     case diff(path: String, snapshot: DiffSnapshot)
+    /// The commit the checked out branch is at; nil for a repository
+    /// without a commit.
+    case gitLastCommit(path: String, last: LastCommit?)
     /// What is in the repository's stash, newest first.
     case gitStashes(path: String, stashes: [StashInfo])
     /// The files a stash holds, each with its diff. `files` nil when the

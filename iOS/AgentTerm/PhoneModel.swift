@@ -1185,6 +1185,9 @@ final class PhoneModel: ObservableObject {
             }
         case .gitBranches(let folder, let list):
             branches[folder] = list
+        case .gitLastCommit(let folder, let last):
+            guard let wanted = lastCommitWanted.removeValue(forKey: folder) else { break }
+            if let last { wanted(last) } else { self.message = "There is no commit here yet." }
         case .gitStashes(let folder, let list):
             stashes[folder] = list
         case .gitStashShow(_, let hash, let files):
@@ -1205,6 +1208,7 @@ final class PhoneModel: ObservableObject {
                 // The answer to a commit that git accepted: an error would have come first.
                 committing = nil
                 commitDrafts[folder] = nil
+                amending[folder] = nil
             }
         case .gitFetched(let folder, let problem, let automatic):
             syncing[folder] = nil
@@ -1413,7 +1417,69 @@ final class PhoneModel: ObservableObject {
     func commit(in folder: String) {
         guard committing == nil, let message = commitDrafts[folder] else { return }
         committing = folder
-        connection?.send(.gitCommit(path: folder, message: message))
+        // The last commit is being amended: this replaces it (#41).
+        connection?.send(amending[folder] != nil ? .gitAmend(path: folder, message: message) : .gitCommit(path: folder, message: message))
+    }
+
+    // MARK: Amend and undo the last commit (#41)
+
+    /// The commit being amended, by folder.
+    @Published private(set) var amending: [String: LastCommit] = [:]
+    /// Undoing or amending that waits to be confirmed.
+    @Published var pendingRewrite: PendingRewrite?
+    /// What is done with a folder's last commit once the Mac has said it.
+    private var lastCommitWanted: [String: (LastCommit) -> Void] = [:]
+
+    struct PendingRewrite: Identifiable {
+        let folder: String
+        let action: RewriteCommitQuestion.Action
+        let last: LastCommit
+        var again = false
+        var id: String { folder + action.rawValue + last.commit.hash + (again ? "again" : "") }
+    }
+
+    /// Starts amending the last commit: its message goes into the commit
+    /// box. One a remote has already is asked about first.
+    func requestAmend(in folder: String) {
+        lastCommitWanted[folder] = { [weak self] last in
+            if last.isPushed { self?.pendingRewrite = PendingRewrite(folder: folder, action: .amend, last: last) } else { self?.beginAmend(last, in: folder) }
+        }
+        connection?.send(.gitLastCommit(path: folder))
+    }
+
+    private func beginAmend(_ last: LastCommit, in folder: String) {
+        amending[folder] = last
+        commitDrafts[folder] = last.message
+    }
+
+    func cancelAmend(in folder: String) {
+        guard amending[folder] != nil else { return }
+        amending[folder] = nil
+        commitDrafts[folder] = nil
+    }
+
+    func requestUndoCommit(in folder: String) {
+        lastCommitWanted[folder] = { [weak self] last in self?.pendingRewrite = PendingRewrite(folder: folder, action: .undo, last: last) }
+        connection?.send(.gitLastCommit(path: folder))
+    }
+
+    func rewriteConfirmed(_ pending: PendingRewrite) {
+        switch pending.action {
+        case .amend:
+            beginAmend(pending.last, in: pending.folder)
+        case .undo:
+            // One a remote has is asked about once more, once this
+            // question has gone.
+            if pending.last.isPushed && !pending.again {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    self?.pendingRewrite = PendingRewrite(folder: pending.folder, action: .undo, last: pending.last, again: true)
+                }
+                return
+            }
+            guard status == .connected, syncing[pending.folder] == nil else { return }
+            syncing[pending.folder] = "undo"
+            connection?.send(.gitUndoCommit(path: pending.folder))
+        }
     }
 
     /// `folder` nil loads every conversation on the Mac.

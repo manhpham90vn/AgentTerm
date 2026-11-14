@@ -97,14 +97,19 @@ struct DiffView: View {
         } else if let diff = model.diff {
             if !diff.isRepository {
                 placeholder("This folder is not a git repository.")
-            } else if diff.files.isEmpty {
+            } else if diff.files.isEmpty && !model.isAmending {
                 placeholder("No uncommitted changes.")
             } else {
                 // The list only: a file that is clicked shows its diff in the middle pane.
                 VStack(spacing: 0) {
                     CommitBox(stagedCount: diff.staged.count)
                     Theme.hairline.frame(height: 1)
-                    fileList(diff)
+                    if diff.files.isEmpty {
+                        // Amending with nothing staged: its message alone.
+                        placeholder("No uncommitted changes: only the commit's message is amended.")
+                    } else {
+                        fileList(diff)
+                    }
                 }
             }
         } else {
@@ -191,6 +196,14 @@ private struct GitQuestions: ViewModifier {
         Binding(get: { model.pendingCommitAction != nil }, set: { if !$0 { model.pendingCommitAction = nil } })
     }
 
+    private var askingRewrite: Binding<Bool> {
+        Binding(get: { model.pendingRewrite != nil }, set: { if !$0 { model.pendingRewrite = nil } })
+    }
+
+    private func question(_ pending: AppModel.PendingRewrite) -> RewriteCommitQuestion {
+        RewriteCommitQuestion(pending.action, last: pending.last, again: pending.again)
+    }
+
     private var askingDrop: Binding<Bool> {
         Binding(get: { model.droppingStash != nil }, set: { if !$0 { model.droppingStash = nil } })
     }
@@ -206,6 +219,15 @@ private struct GitQuestions: ViewModifier {
                 presenting: model.pendingCommitAction
             ) { pending in
                 Button(question(pending).confirm) { model.commitActionConfirmed(pending) }
+                Button("Cancel", role: .cancel) {}
+            } message: { pending in
+                Text(question(pending).message)
+            }
+            .confirmationDialog(
+                model.pendingRewrite.map { question($0).title } ?? "", isPresented: askingRewrite, titleVisibility: .visible,
+                presenting: model.pendingRewrite
+            ) { pending in
+                Button(question(pending).confirm, role: pending.last.isPushed ? .destructive : nil) { model.rewriteConfirmed(pending) }
                 Button("Cancel", role: .cancel) {}
             } message: { pending in
                 Text(question(pending).message)
@@ -349,8 +371,17 @@ private struct CommitBox: View {
         )
     }
 
+    /// The commit being amended, when one is (#41).
+    private var amending: LastCommit? { model.panelFolder.flatMap { model.amending[$0] } }
+
     private var canCommit: Bool {
-        stagedCount > 0 && !model.isCommitting && !message.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // Amending needs nothing staged: the message alone may be what changes.
+        (stagedCount > 0 || amending != nil) && !model.isCommitting && !message.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var commitTitle: String {
+        if amending != nil { return stagedCount > 0 ? "Amend with \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Amend Message" }
+        return stagedCount > 0 ? "Commit \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Commit"
     }
 
     private var isWriting: Bool { model.panelFolder.map(model.writingCommitMessage.contains) ?? false }
@@ -363,6 +394,22 @@ private struct CommitBox: View {
 
     var body: some View {
         VStack(spacing: 6) {
+            if let amending {
+                // What the box does now is said above it, with the way out.
+                HStack(spacing: 6) {
+                    Image(systemName: "pencil.line").font(.system(size: 10, weight: .semibold))
+                    Text("Amending \(amending.commit.short): what is staged is added to it")
+                        .font(.system(size: 10.5))
+                        .lineLimit(2)
+                    Spacer(minLength: 4)
+                    Button("Cancel") { model.cancelAmend() }
+                        .controlSize(.mini)
+                        .accessibilityIdentifier("amend-cancel")
+                }
+                .foregroundStyle(.secondary)
+                .accessibilityElement(children: .contain)
+                .accessibilityIdentifier("amending")
+            }
             TextField("Commit message", text: message, axis: .vertical)
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
@@ -377,14 +424,17 @@ private struct CommitBox: View {
                 } label: {
                     HStack(spacing: 6) {
                         if model.isCommitting { ProgressView().controlSize(.mini) }
-                        Text(stagedCount > 0 ? "Commit \(stagedCount) \(stagedCount == 1 ? "File" : "Files")" : "Commit")
+                        Text(commitTitle)
                     }
                     .frame(maxWidth: .infinity)
                 }
                 .controlSize(.small)
                 .buttonStyle(.borderedProminent)
                 .disabled(!canCommit)
-                .help(stagedCount == 0 ? "Stage the changes to commit first" : "Commit what is staged")
+                .help(
+                    amending != nil
+                        ? "Replace the last commit by one with this message and what is staged"
+                        : (stagedCount == 0 ? "Stage the changes to commit first" : "Commit what is staged"))
                 if let writer {
                     // While the agent writes, the same button stops it.
                     Button {
@@ -410,6 +460,21 @@ private struct CommitBox: View {
                                 : "Have \(writer.name) write the message for what is staged. Nothing is committed until you commit.")
                     )
                     .accessibilityLabel(isWriting ? "Stop writing the commit message" : "Write the commit message with \(writer.name)")
+                }
+                if amending == nil {
+                    // What is done to the last commit rather than made anew (#41).
+                    Menu {
+                        Button("Amend Last Commit…") { model.requestAmend() }
+                        Button("Undo Last Commit…") { model.requestUndoCommit() }
+                    } label: {
+                        Image(systemName: "ellipsis").font(.system(size: 10, weight: .bold))
+                    }
+                    .menuStyle(.borderlessButton)
+                    .menuIndicator(.hidden)
+                    .fixedSize()
+                    .help("Amend or undo the last commit")
+                    .accessibilityLabel("Amend or undo the last commit")
+                    .accessibilityIdentifier("commit-more")
                 }
             }
         }

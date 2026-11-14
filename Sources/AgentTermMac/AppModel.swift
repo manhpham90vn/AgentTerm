@@ -1388,6 +1388,10 @@ final class AppModel: ObservableObject {
             accountUsage = Dictionary(list.map { ($0.agent, $0) }, uniquingKeysWith: { $1 })
         case .gitBranches(let path, let list):
             if path == panelFolder { branches = list }
+        case .gitLastCommit(let path, let last):
+            guard path == panelFolder, let wanted = lastCommitWanted else { break }
+            lastCommitWanted = nil
+            if let last { wanted(last) } else { notice = "There is no commit here yet." }
         case .gitStashes(let path, let list):
             if path == panelFolder { stashes = list }
         case .gitStashShow(_, let hash, let files):
@@ -1414,6 +1418,7 @@ final class AppModel: ObservableObject {
                 pendingCommit = nil
                 isCommitting = false
                 commitMessages[path] = nil
+                amending[path] = nil
                 files.refresh()
             }
             guard path == panelFolder else { break }
@@ -2260,9 +2265,11 @@ final class AppModel: ObservableObject {
         guard let directory = panelFolder, !isCommitting else { return }
         let message = commitMessages[directory] ?? ""
         isCommitting = true
+        // The last commit is being amended: this replaces it (#41).
+        let amends = amending[directory] != nil
         if isRemote {
             // Answered with the changes as they are then, after an error if git refused.
-            if sendForDiff(.gitCommit(path: directory, message: message), in: directory) {
+            if sendForDiff(amends ? .gitAmend(path: directory, message: message) : .gitCommit(path: directory, message: message), in: directory) {
                 pendingCommit = directory
             } else {
                 isCommitting = false
@@ -2270,9 +2277,98 @@ final class AppModel: ObservableObject {
             }
             return
         }
-        git({ GitActions.commit(message: message, in: $0) }) { [weak self] succeeded in
+        git({ amends ? GitActions.amend(message: message, in: $0) : GitActions.commit(message: message, in: $0) }) { [weak self] succeeded in
             self?.isCommitting = false
-            if succeeded { self?.commitMessages[directory] = nil }
+            if succeeded {
+                self?.commitMessages[directory] = nil
+                self?.amending[directory] = nil
+            }
+        }
+    }
+
+    // MARK: Amend and undo the last commit (#41)
+
+    /// The commit being amended, by folder: the commit box then replaces
+    /// it, with the message it had to begin with.
+    @Published private(set) var amending: [String: LastCommit] = [:]
+    /// Undoing or amending that waits to be confirmed.
+    @Published var pendingRewrite: PendingRewrite?
+
+    struct PendingRewrite: Identifiable {
+        let action: RewriteCommitQuestion.Action
+        let last: LastCommit
+        var again = false
+        var id: String { action.rawValue + last.commit.hash + (again ? "again" : "") }
+    }
+
+    /// Whether the folder the side panel shows has its last commit being amended.
+    var isAmending: Bool { panelFolder.map { amending[$0] != nil } ?? false }
+
+    /// Reads the last commit, here or on the other Mac, and goes on with it.
+    private func withLastCommit(_ then: @escaping (LastCommit) -> Void) {
+        guard let directory = panelFolder else { return }
+        if isRemote {
+            lastCommitWanted = then
+            connection?.send(.gitLastCommit(path: directory))
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let last = GitActions.lastCommit(in: directory)
+            DispatchQueue.main.async {
+                guard let self, self.panelFolder == directory else { return }
+                if let last { then(last) } else { self.notice = "There is no commit here yet." }
+            }
+        }
+    }
+
+    /// What is done with another Mac's last commit once it has said it.
+    private var lastCommitWanted: ((LastCommit) -> Void)?
+
+    /// Starts amending the last commit: its message is put in the commit
+    /// box, and what is staged goes into it when the box commits. One a
+    /// remote has already is asked about first.
+    func requestAmend() {
+        withLastCommit { [weak self] last in
+            if last.isPushed { self?.pendingRewrite = PendingRewrite(action: .amend, last: last) } else { self?.beginAmend(last) }
+        }
+    }
+
+    private func beginAmend(_ last: LastCommit) {
+        guard let directory = panelFolder else { return }
+        amending[directory] = last
+        commitMessages[directory] = last.message
+        // The commit box is among the changes: that is where to go on.
+        UserDefaults.standard.set("changes", forKey: "gitPane")
+    }
+
+    /// Leaves the last commit as it is; the message goes with it.
+    func cancelAmend() {
+        guard let directory = panelFolder, amending[directory] != nil else { return }
+        amending[directory] = nil
+        commitMessages[directory] = nil
+    }
+
+    /// Asks before the last commit is undone.
+    func requestUndoCommit() {
+        withLastCommit { [weak self] last in self?.pendingRewrite = PendingRewrite(action: .undo, last: last) }
+    }
+
+    func rewriteConfirmed(_ pending: PendingRewrite) {
+        switch pending.action {
+        case .amend:
+            beginAmend(pending.last)
+        case .undo:
+            // One a remote has is asked about once more.
+            if pending.last.isPushed && !pending.again {
+                // After the dialog has gone: one that is presented while
+                // another closes is not shown.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                    self?.pendingRewrite = PendingRewrite(action: .undo, last: pending.last, again: true)
+                }
+                return
+            }
+            guard let directory = panelFolder else { return }
+            sync("undo", in: directory, .gitUndoCommit(path: directory)) { GitActions.undoLastCommit(in: $0) }
         }
     }
 

@@ -65,6 +65,42 @@ extension GitActions {
             commit: commit, body: fields.count > 6 ? fields[6].trimmingCharacters(in: .whitespacesAndNewlines) : "", files: files, diffsLeftOut: tooLarge)
     }
 
+    /// The commit the checked out branch is at, with its whole message and
+    /// whether a remote has it. Nil for a repository without a commit.
+    public static func lastCommit(in directory: String) -> LastCommit? {
+        guard
+            let result = Subprocess.run("/usr/bin/git", ["-C", directory, "log", "-1", "--format=" + commitFormat + "%x00%B", "HEAD", "--"], timeout: 30),
+            result.status == 0
+        else { return nil }
+        let fields = String(decoding: result.output, as: UTF8.self).components(separatedBy: "\0")
+        guard let commit = commit(from: fields), fields.count > 6 else { return nil }
+        let onRemotes = list(["branch", "--remotes", "--contains", "HEAD", "--format=%(refname:short)"], in: directory) ?? []
+        return LastCommit(commit: commit, message: fields[6].trimmingCharacters(in: .whitespacesAndNewlines), isPushed: !onRemotes.joined().isEmpty)
+    }
+
+    /// Replaces the last commit by one with `message` and with what is
+    /// staged now added to it; an empty message keeps the one it has.
+    public static func amend(message: String, in directory: String) -> String? {
+        guard lastCommit(in: directory) != nil else { return "There is no commit to amend yet." }
+        guard unfinished(in: directory) == nil else { return "A merge or a rebase is under way: finish it or abort it before amending." }
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Hooks run here, and may call tools the user's shell finds.
+        return findingTools {
+            run(["commit", "--amend", "--quiet"] + (trimmed.isEmpty ? ["--no-edit"] : ["--message", trimmed]), in: directory, timeout: 120, environment: actionEnvironment)
+        }
+    }
+
+    /// Takes the last commit back: the branch is at the commit before it,
+    /// and what the commit changed is staged, with whatever was staged or
+    /// changed besides. Nothing in the folder changes.
+    public static func undoLastCommit(in directory: String) -> String? {
+        guard let last = lastCommit(in: directory) else { return "There is no commit to undo yet." }
+        guard unfinished(in: directory) == nil else { return "A merge or a rebase is under way: finish it or abort it before undoing a commit." }
+        // The first commit has none before it: the branch is unborn again.
+        if last.commit.parents.isEmpty { return run(["update-ref", "-d", "HEAD"], in: directory) }
+        return run(["reset", "--soft", "HEAD~1"], in: directory)
+    }
+
     /// Makes a commit on the checked out branch that takes back what
     /// `hash` changed. When that conflicts it is undone: there is nowhere
     /// here to resolve it yet.

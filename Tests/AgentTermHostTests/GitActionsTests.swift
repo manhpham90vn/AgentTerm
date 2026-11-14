@@ -33,6 +33,66 @@ final class GitActionsTests: XCTestCase {
     private func entries(_ files: [FileDiff]) -> [String] { files.map { "\($0.marker) \($0.path)" } }
     private var snapshot: DiffSnapshot { GitDiff.snapshot(directory: root.path) }
 
+    /// GIT-49 (#41): the last commit is amended, its message and what is
+    /// staged now; and undone, with what it changed left staged.
+    func testAmendingAndUndoingTheLastCommit() throws {
+        XCTAssertNil(GitActions.lastCommit(in: root.path), "no commit yet")
+        XCTAssertEqual(GitActions.amend(message: "x", in: root.path), "There is no commit to amend yet.")
+        XCTAssertEqual(GitActions.undoLastCommit(in: root.path), "There is no commit to undo yet.")
+
+        try write("a.txt", "one\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        try write("a.txt", "one\ntwo\n")
+        git("commit", "-q", "-am", "add two\n\nWith a body.")
+        let before = try XCTUnwrap(GitActions.lastCommit(in: root.path))
+        XCTAssertEqual(before.commit.subject, "add two")
+        XCTAssertEqual(before.message, "add two\n\nWith a body.")
+        XCTAssertFalse(before.isPushed)
+
+        // Its message alone.
+        XCTAssertNil(GitActions.amend(message: "feat: add a second line", in: root.path))
+        XCTAssertEqual(git("log", "-1", "--format=%B"), "feat: add a second line")
+        XCTAssertEqual(git("rev-list", "--count", "HEAD"), "2", "amended, not added to")
+        // What is staged now goes into it; no message keeps the one it has.
+        try write("b.txt", "forgotten\n")
+        git("add", "b.txt")
+        XCTAssertNil(GitActions.amend(message: "  ", in: root.path))
+        XCTAssertEqual(git("log", "-1", "--format=%s"), "feat: add a second line")
+        XCTAssertEqual(git("show", "--name-only", "--format=", "HEAD"), "a.txt\nb.txt")
+        XCTAssertEqual(git("rev-list", "--count", "HEAD"), "2")
+
+        // Undone: the branch is at the commit before, and its change is staged.
+        try write("c.txt", "not staged\n")
+        XCTAssertNil(GitActions.undoLastCommit(in: root.path))
+        XCTAssertEqual(git("log", "-1", "--format=%s"), "init")
+        XCTAssertEqual(entries(snapshot.staged), ["M a.txt", "A b.txt"])
+        XCTAssertEqual(entries(snapshot.unstaged), ["U c.txt"], "what was not committed is as it was")
+        XCTAssertEqual(try String(contentsOf: root.appendingPathComponent("a.txt"), encoding: .utf8), "one\ntwo\n")
+
+        // The first commit too: the branch has no commit again, and its file is staged.
+        git("reset", "-q", "--hard")
+        XCTAssertNil(GitActions.undoLastCommit(in: root.path))
+        XCTAssertNil(GitActions.lastCommit(in: root.path))
+        XCTAssertTrue(entries(snapshot.staged).contains("A a.txt"))
+    }
+
+    /// GIT-49: a commit a remote has already is said to be pushed.
+    func testACommitThatIsPushedIsSaidToBe() throws {
+        let remote = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-gitactions-remote-\(UUID().uuidString).git")
+        defer { try? FileManager.default.removeItem(at: remote) }
+        _ = Subprocess.run("/usr/bin/git", ["init", "-q", "--bare", "-b", "main", remote.path])
+        try write("a.txt", "one\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "init")
+        git("remote", "add", "origin", remote.path)
+        git("push", "-q", "-u", "origin", "main")
+        XCTAssertEqual(GitActions.lastCommit(in: root.path)?.isPushed, true)
+        try write("a.txt", "one\ntwo\n")
+        git("commit", "-q", "-am", "not pushed")
+        XCTAssertEqual(GitActions.lastCommit(in: root.path)?.isPushed, false)
+    }
+
     /// GIT-44 (#38): changes are put aside under a name, with new files
     /// when asked; the stash lists them, newest first, and says what each
     /// holds.

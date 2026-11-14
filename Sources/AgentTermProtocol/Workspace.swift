@@ -45,6 +45,58 @@ public struct FileDiff: Codable, Identifiable, Equatable, Sendable {
     public var marker: String { isUntracked ? "U" : status.rawValue }
 }
 
+/// The commit a branch is at, as far as amending or undoing it needs to
+/// know it (#41).
+public struct LastCommit: Codable, Equatable, Sendable {
+    public var commit: CommitInfo
+    /// Its whole message, first line and the rest.
+    public var message: String
+    /// A branch of a remote has it already: changing it here leaves the
+    /// two apart, and the next push needs force.
+    public var isPushed: Bool
+
+    public init(commit: CommitInfo, message: String, isPushed: Bool = false) {
+        self.commit = commit
+        self.message = message
+        self.isPushed = isPushed
+    }
+}
+
+/// What is asked before the last commit is undone or amended (#41), the
+/// same on every device. One that a remote has already is asked about
+/// once more, saying what follows from changing it.
+public struct RewriteCommitQuestion: Equatable, Sendable {
+    public enum Action: String, Sendable {
+        case undo
+        case amend
+    }
+
+    public var title: String
+    public var message: String
+    public var confirm: String
+
+    /// - Parameter again: The second question, for a commit that is pushed.
+    public init(_ action: Action, last: LastCommit, again: Bool = false) {
+        let pushed = "A remote has this commit already. Changed here, the branch and the remote are apart: the next push has to be forced, and anyone who pulled the commit keeps it."
+        switch (action, again) {
+        case (.undo, false):
+            title = "Undo the commit “\(last.commit.subject)”?"
+            message =
+                "The branch goes back to the commit before it. What it changed stays staged, so nothing is lost."
+                + (last.isPushed ? " It is pushed already: you are asked once more." : "")
+            confirm = last.isPushed ? "Undo…" : "Undo Commit"
+        case (.undo, true):
+            title = "Undo a commit that is already pushed?"
+            message = pushed
+            confirm = "Undo Anyway"
+        case (.amend, _):
+            title = "Amend a commit that is already pushed?"
+            message = pushed
+            confirm = "Amend Anyway"
+        }
+    }
+}
+
 /// Changes put aside in a repository's stash (#38).
 public struct StashInfo: Codable, Equatable, Hashable, Identifiable, Sendable {
     /// The hash of the commit git keeps the stash as: what names it here,

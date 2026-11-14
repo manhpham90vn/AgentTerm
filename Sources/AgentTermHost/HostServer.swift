@@ -1473,6 +1473,12 @@ public final class HostServer {
             git(for: client, in: path) { GitActions.unstage(files, in: path) }
         case .gitDiscard(let path, let files):
             git(for: client, in: path) { GitActions.discard(files, in: path) }
+        case .gitLastCommit(let path):
+            work(for: client, { GitActions.lastCommit(in: path) }) { server, client, last in server.send(.gitLastCommit(path: path, last: last), to: client) }
+        case .gitAmend(let path, let message):
+            git(for: client, in: path, sync: true) { GitActions.amend(message: message, in: path) }
+        case .gitUndoCommit(let path):
+            git(for: client, in: path, sync: true) { GitActions.undoLastCommit(in: path) }
         case .gitStashes(let path):
             work(for: client, { GitActions.stashes(in: path) }) { server, client, list in server.send(.gitStashes(path: path, stashes: list), to: client) }
         case .gitStash(let path, let message, let untracked):

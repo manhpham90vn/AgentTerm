@@ -78,7 +78,8 @@ struct CommitsList: View {
         return ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(model.commits.enumerated()), id: \.element.hash) { index, commit in
-                    CommitRow(commit: commit, graph: rows[index], lanes: lanes, onBranch: current)
+                    // The commit the checked out branch is at can be amended and undone.
+                    CommitRow(commit: commit, graph: rows[index], lanes: lanes, onBranch: current, isLast: index == 0 && model.commitsBranch == nil)
                 }
                 if model.commitsMore {
                     // Coming into view, it asks for the next page.
@@ -143,6 +144,8 @@ private struct CommitRow: View {
     let lanes: Int
     /// The branch that is checked out, which a revert or a pick lands on.
     let onBranch: String?
+    /// The commit the checked out branch is at: amended and undone (#41).
+    var isLast = false
     @State private var hovering = false
 
     private var opened: Bool { model.openedCommit == commit.hash }
@@ -163,6 +166,8 @@ private struct CommitRow: View {
     private func copy() { model.copyHash(of: commit) }
     private func revert() { model.pendingCommitAction = .init(action: .revert, commit: commit) }
     private func pick() { model.pendingCommitAction = .init(action: .cherryPick, commit: commit) }
+    private func amend() { if isLast { model.requestAmend() } }
+    private func undo() { if isLast { model.requestUndoCommit() } }
 
     var body: some View {
         HStack(alignment: .top, spacing: 6) {
@@ -207,6 +212,11 @@ private struct CommitRow: View {
         .help(commit.short + " " + commit.subject)
         .contextMenu {
             Button("Copy Hash", action: copy)
+            if isLast {
+                Divider()
+                Button("Amend…", action: amend)
+                Button("Undo Commit…", action: undo)
+            }
             Divider()
             Button("Revert…", action: revert)
             Button("Cherry-Pick onto \(onBranch.map { "“\($0)”" } ?? "the Checked Out Commit")…", action: pick)
@@ -219,6 +229,8 @@ private struct CommitRow: View {
         .accessibilityAction(named: "Copy Hash", copy)
         .accessibilityAction(named: "Revert", revert)
         .accessibilityAction(named: "Cherry-Pick", pick)
+        .accessibilityAction(named: "Amend", amend)
+        .accessibilityAction(named: "Undo Commit", undo)
     }
 }
 
