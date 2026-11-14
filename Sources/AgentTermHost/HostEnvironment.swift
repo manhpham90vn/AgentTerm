@@ -82,7 +82,15 @@ public enum HostEnvironment {
         // XCTest it can only be theirs. A host a test script starts, with a
         // home of its own as ZDOTDIR, is not under XCTest.
         if LoginShellPath.underTests { env["ZDOTDIR"] = testShellHome.path }
+        keepGitOffTheirConfiguration(&env)
         return env
+    }
+
+    /// Under XCTest, git reads no global configuration: the identity, hooks
+    /// and signing of the person running the tests are theirs, and a test
+    /// sets in its repository what it needs.
+    static func keepGitOffTheirConfiguration(_ env: inout [String: String]) {
+        if LoginShellPath.underTests { env["GIT_CONFIG_GLOBAL"] = "/dev/null" }
     }
 
     /// What a command the host runs for the user through their login shell
@@ -164,7 +172,9 @@ enum Subprocess {
         posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
 
         let argv: [UnsafeMutablePointer<CChar>?] = ([executable] + arguments).map { strdup($0) } + [nil]
-        let envp: [UnsafeMutablePointer<CChar>?] = (environment ?? ProcessInfo.processInfo.environment).map { strdup("\($0.key)=\($0.value)") } + [nil]
+        var given = environment ?? ProcessInfo.processInfo.environment
+        HostEnvironment.keepGitOffTheirConfiguration(&given)
+        let envp: [UnsafeMutablePointer<CChar>?] = given.map { strdup("\($0.key)=\($0.value)") } + [nil]
         defer {
             argv.forEach { free($0) }
             envp.forEach { free($0) }

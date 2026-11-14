@@ -27,4 +27,16 @@ final class TestIsolationTests: XCTestCase {
             XCTAssertNotEqual(command, theirs, "a command run through the login shell")
         }
     }
+
+    /// TEST-3: under the tests, git reads no global configuration of the
+    /// person running them (their identity, hooks, signing): not the git
+    /// the host runs, nor one run in a session.
+    func testGitReadsNoGlobalConfigurationOfThePersonRunningTheTests() throws {
+        let result = try XCTUnwrap(Subprocess.run("/usr/bin/git", ["config", "--global", "--list"]))
+        // What it read is not printed: it is theirs.
+        XCTAssertTrue(result.status != 0 || result.output.isEmpty, "the git the host runs read a global configuration")
+        let explicit = try XCTUnwrap(Subprocess.run("/usr/bin/git", ["config", "--global", "--list"], environment: ProcessInfo.processInfo.environment))
+        XCTAssertTrue(explicit.status != 0 || explicit.output.isEmpty, "nor with an environment given")
+        XCTAssertEqual(HostEnvironment.sessionEnvironment()["GIT_CONFIG_GLOBAL"], "/dev/null", "nor in a session")
+    }
 }
