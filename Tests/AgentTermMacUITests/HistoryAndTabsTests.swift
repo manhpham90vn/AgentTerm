@@ -27,8 +27,7 @@ final class HistoryAndTabsTests: MacUITestCase {
         wait("the receiving agent's session") { phone.sessions.count == 2 }
         let receiving = try XCTUnwrap(phone.sessions.first { $0.id != resumed.id })
         XCTAssertEqual(receiving.title, "Codex")
-        phone.send(.attach(session: receiving.id, size: .default))
-        wait("the receiving agent told about the file") { phone.text(receiving.id).contains(".agentterm/handoffs/") }
+        wait("the receiving agent told about the file") { self.agentStarts().contains { $0.hasPrefix("codex: ") && $0.contains(".agentterm/handoffs/") } }
         let handoffs = (try? FileManager.default.contentsOfDirectory(atPath: project.appendingPathComponent(".agentterm/handoffs").path)) ?? []
         XCTAssertEqual(handoffs.count, 1, "no handoff file was written in the project")
         XCTAssertFalse(git("status", "--short", in: project).contains(".agentterm"), "the handoff file shows up as a change")

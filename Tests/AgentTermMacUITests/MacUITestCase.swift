@@ -201,7 +201,8 @@ class MacUITestCase: XCTestCase {
 
     /// Small programs under the agents' names. Asked for one answer (`-p`,
     /// `exec`), they give a commit message; started in a terminal, they say
-    /// so and then repeat what they are told, as `cat` does.
+    /// so, write down what they were started with (`agentStarts`), and then
+    /// repeat what they are told, as `cat` does.
     func makeAgents(_ directory: URL) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         for name in ["claude", "codex"] {
@@ -210,6 +211,7 @@ class MacUITestCase: XCTestCase {
                 case " $* " in
                   *" -p "*) cat > /dev/null; echo "feat: written by the stand-in \(name)"; exit 0 ;;
                 esac
+                printf '%s: %s\\n' '\(name)' "$*" >> '\(directory.appendingPathComponent("started").path)'
                 echo "stand-in \(name) started: $*"
                 exec cat
                 """
@@ -217,6 +219,15 @@ class MacUITestCase: XCTestCase {
             try script.write(to: file, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
         }
+    }
+
+    /// What each stand-in agent was started with, a line each, as
+    /// `name: arguments`. Read from a file rather than from its terminal,
+    /// where a long line is wrapped at the pane's width, and a device that
+    /// attaches late is sent the screen as wrapped.
+    func agentStarts() -> [String] {
+        let file = root.appendingPathComponent("agents/started")
+        return ((try? String(contentsOf: file, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init)
     }
 
     // MARK: The host and the app
