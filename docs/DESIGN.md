@@ -239,8 +239,10 @@ Host to client: `welcome`, `sessions`, `agents`, `folders`, `attached`,
 (`tabLayout`, `keepAwake`, `keepAwakeOptions`, `commitWriter`) are pushed to
 every client when they change.
 
-The protocol version is 7 since 0.6.0, which added `failures` and
-`dismissFailure` (see "A part that stopped"). It was 6 from 0.4.0, which
+The protocol version is 8 since 0.7.0, which added `agentShellsFaults`
+and gave `agentShellResult`'s list of shells the asking agent's own (see
+"Shells an agent opens"). It was 7 from 0.6.0, which added `failures` and
+`dismissFailure` (see "A part that stopped"), and 6 from 0.4.0, which
 added the messages for push and pull, commit messages, keep awake options
 and SSH hosts.
 
@@ -796,13 +798,19 @@ message to a line, on standard input and output. Its tools are
 appears, or the screen has been the same for a while, or the time is up.
 
 **Which session's agent it is.** The host gives every agent's session a key
-of its own, with its port, in `AGENTTERM_MCP`; the agent passes its
-environment on to the server it starts. The server signs in to the host as
+of its own, with its port and its build, in `AGENTTERM_MCP` (`<port> <key>
+<release or dev>`, then `use`); the agent passes its environment on to the
+server it starts. The server signs in to the host as
 any app on the Mac does, with the Mac's own token from the state folder,
 and sends each request as `agentShell(id:key:request:)`. The host looks up
 the session whose key it is and answers `agentShellResult(id:result:)` to
 that connection only. A key names a running agent's session or nothing.
-Without the variable, the server offers no tools. With "agents run their
+Without the variable, the server offers no tools. Nor does it in a session
+of the other build: a released build and a development build each install
+a server of their own (below), so an agent has both, and the one whose
+build the variable does not name stays out rather than sign in to a host
+with another host's token. A variable that names no build is from a host
+of 0.6, and is the released build's. With "agents run their
 commands in shells you see" on (the host's `agentsUseShells`, on by
 default) the variable ends with `use`: the server's instructions are then
 `AgentShellsInstructions.useShells`, and the agents are told the same
@@ -816,23 +824,59 @@ servers it allows, and Antigravity not at all. Codex follows the server's.
 
 **What it may reach.** A shell it opens is a session like any other, in the
 agent's folder and at its size, with `SessionInfo.openedBy` naming the
-agent's session. Listing, reading, typing and closing are done on any
-session with an `openedBy`, whichever agent opened it, so that agents share
-their shells rather than each open its own; never on the user's sessions or
-an agent's session. Two agents typing into one shell at once is not
-prevented. A command whose first word is an agent's is
-refused. Typing is the same as typing: text, and keys by name turned into
-the bytes a terminal sends (`TerminalKeys`). When the agent's session ends,
-the server it started ends with it, and its shells stay, for the others.
+agent's session. Only that agent types into it and closes it; every agent
+lists and reads the shells any agent opened, and `agentShellResult`'s
+`shells(_:own:)` says which are the asking agent's (#61). So what runs in
+an agent's shell is what that agent started, and no agent has to guess
+from a screen whether a shell is free: one that has none, or whose own is
+busy, opens another. Typing into or closing another agent's shell is
+refused with words that say to open one; so it is for a shell whose
+agent's session has ended, which is nobody's: it stays open for the user,
+and nothing takes it over. A session that is resumed or handed off is, to
+the host, another agent, and only reads the shells it opened before. An
+agent never reaches the user's sessions or an agent's session. A command
+whose first word is an agent's is refused. Typing is the same as typing:
+text, and keys by name turned into the bytes a terminal sends
+(`TerminalKeys`). When the agent's session ends, the server it started
+ends with it. The apps name a shell's agent on its row
+(`SessionInfo.openedByName`).
+
+**When it cannot reach its host.** The server's line to the host
+(`AgentShellsLink` in `agenttermd`) signs in when the server starts. A
+connection that is refused or closed answers whoever waits at once, with
+the reason in words: the host is not running on its port, the host
+refused the sign-in (it answers a wrong token with `error("invalid
+token")` and closes), or the connection was lost. Each later call tries
+the host once more, so it fails as fast while the host is gone and works
+again once it is back; only a host that is up and silent is waited for,
+fifteen seconds. The host notes a sign-in it refused from a client on this
+Mac named `MCP`, and the agents `AgentShellsInstall.ensure` could not add
+the server to, and tells every client `agentShellsFaults`: an
+`AgentShellsFault` per cause (`install`, with the agents' names; `signIn`),
+none when nothing is wrong. A sign-in fault lasts until an `MCP` client
+signs in or the server is set up again; an install fault until `ensure`
+succeeds. Both apps show each in their top banner until it is over or it
+is closed there, and a closed one comes back only after it went away. A
+host that is not running cannot say so itself: that one is the agent's to
+tell. An agent that refuses `mcp add` because it has the name already has
+the entry removed and added again as this build's own.
 
 **Installed in the agents.** `AgentShellsInstall` runs each installed agent's
 own command, through the login shell: `claude mcp add --scope user
 agentterm -- <agenttermd> mcp`, `codex mcp add agentterm -- …`, `copilot
 mcp add agentterm -- …`, `agy mcp add agentterm -- …`, and `mcp remove
-agentterm` to take it out. `agent-shells.json` in the state folder keeps
-whether it is on (on unless turned off) and which agents have it, with the
-program it names: only those are ever removed, and an agent is asked again
-when the host's program moved. The host does it at start and on
+agentterm` to take it out. The name is the build's
+(`AppChannel.mcpServerName`): `agentterm` for the released build,
+`agentterm-dev` for a development build, so that both are installed side
+by side and each installs, repairs and removes only its own; the
+instructions an agent is given name its build's server.
+`agent-shells.json` in the state folder keeps whether it is on (on unless
+turned off), the name, and which agents have it, with the program it
+names: only those are ever removed, and an agent is asked again when the
+host's program moved. What a development build of 0.6 installed under
+`agentterm` is not counted as its own any more and is left as it is: it is
+put right by hand (`<agent> mcp remove agentterm`, then the released app
+started again). The host does it at start and on
 `setAgentShells`, off its queue, and tells every client `agentShells(Bool)`.
 A host with a state folder of its own (a test, a trial run) never does.
 

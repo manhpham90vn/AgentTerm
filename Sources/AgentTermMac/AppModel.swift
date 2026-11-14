@@ -205,6 +205,20 @@ final class AppModel: ObservableObject {
     @Published private(set) var agentShells: Bool?
     /// Whether the agents are asked to run their commands in shells the user sees.
     @Published private(set) var agentsUseShells: Bool?
+    /// What keeps the agents from opening shells although that is on (#58),
+    /// as the host says it, and those of them the user has closed here.
+    @Published private(set) var agentShellsFaults: [AgentShellsFault] = []
+    @Published private var closedShellsFaults: Set<String> = []
+    /// The ones to warn of: a fault that was closed is shown again only
+    /// after it went away and came back.
+    var shownShellsFaults: [AgentShellsFault] { agentShellsFaults.filter { !closedShellsFaults.contains($0.id) } }
+
+    func dismiss(_ fault: AgentShellsFault) { closedShellsFaults.insert(fault.id) }
+
+    private func took(_ faults: [AgentShellsFault]) {
+        agentShellsFaults = faults
+        closedShellsFaults.formIntersection(faults.map(\.id))
+    }
 
     func setAgentsUseShells(_ on: Bool) {
         agentsUseShells = on
@@ -979,6 +993,7 @@ final class AppModel: ObservableObject {
         startAtLogin = nil
         agentShells = nil
         agentsUseShells = nil
+        took([])
         // The next host says its own; until then none of this one's shows.
         keepAwakeOptions = KeepAwakeOptions()
         commitWriter = CommitWriterSettings()
@@ -1137,6 +1152,8 @@ final class AppModel: ObservableObject {
             agentShells = on
         case .agentsUseShells(let on):
             agentsUseShells = on
+        case .agentShellsFaults(let faults):
+            took(faults)
         case .schedules(let list):
             schedules = list
         case .worktrees(let folder, let list, let setup):

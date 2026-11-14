@@ -31,6 +31,11 @@ public enum AppChannel: String, Sendable {
     public var linkScheme: String { self == .release ? "agentterm" : "agentterm-dev" }
 
     public static let linkSchemes: Set<String> = [AppChannel.release.linkScheme, AppChannel.dev.linkScheme]
+
+    /// The name this build's MCP server has in the agents' configuration
+    /// (#57). Each build has its own, so that both can be installed and
+    /// neither replaces the other's.
+    public var mcpServerName: String { self == .release ? "agentterm" : "agentterm-dev" }
 }
 
 /// The version of the app that is running, as its bundle states it. Every

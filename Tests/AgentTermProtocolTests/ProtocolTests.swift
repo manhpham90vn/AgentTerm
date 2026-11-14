@@ -298,6 +298,21 @@ final class ProtocolTests: XCTestCase {
         for frame in other { second = joiner.add(frame) ?? second }
         XCTAssertEqual(second, Data(repeating: 1, count: 300_000))
     }
+
+    /// MCP-19: what keeps the agents from opening shells, in words, and a
+    /// cause this build does not know still read.
+    func testAnAgentShellsFaultInWords() throws {
+        let install = AgentShellsFault(cause: .install, agents: ["Codex", "Copilot CLI"])
+        XCTAssertEqual(install.headline(), "AgentTerm's shells could not be set up in Codex and Copilot CLI.")
+        XCTAssertEqual(install.headline(on: "Studio"), "AgentTerm's shells could not be set up in Codex and Copilot CLI on Studio.")
+        XCTAssertEqual(AgentShellsFault(cause: .signIn).headline(), "An agent's MCP server was refused by the AgentTerm host.")
+        XCTAssertTrue(AgentShellsFault(cause: .signIn).advice.contains("Start that agent's session again"))
+        let message = ServerMessage.agentShellsFaults([install, AgentShellsFault(cause: .init(rawValue: "later"))])
+        let back = try XCTUnwrap(MessageCoding.decode(ServerMessage.self, from: MessageCoding.encode(message)))
+        XCTAssertEqual(back, message)
+        XCTAssertEqual(AgentShellsFault(cause: .init(rawValue: "later")).headline(), "Agents cannot open shells you see (later).")
+    }
+
     /// WT-12 (#56): a worktree's row is short: the name of its folder
     /// stands for its path.
     func testAWorktreesRowNamesItsFolderNotItsPath() {

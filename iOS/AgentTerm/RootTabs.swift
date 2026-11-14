@@ -27,11 +27,19 @@ struct RootTabs: View {
         // An agent of another session finished, or needs you: over every
         // tab, as the Mac shows it over every place.
         .overlay(alignment: .top) {
-            if let notice = model.agentNotice, notice.session != model.openSessionID {
-                AgentNoticeBanner(notice: notice)
-                    .padding(.horizontal, 12)
-                    .transition(.move(edge: .top).combined(with: .opacity))
+            VStack(spacing: 8) {
+                // The agents on the Mac cannot open shells, although that
+                // is on (#58): over every tab too, as on the Mac.
+                ForEach(model.shownShellsFaults) { fault in
+                    AgentShellsFaultBanner(fault: fault)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+                if let notice = model.agentNotice, notice.session != model.openSessionID {
+                    AgentNoticeBanner(notice: notice)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
             }
+            .padding(.horizontal, 12)
         }
         // On the tabs, not on one of them: what the Mac answers to
         // something asked in History or Settings has to be shown there too,
@@ -237,6 +245,41 @@ private struct SettingsTab: View {
                 Text("Sessions keep running on \(macName). To connect again you pair with it once more.")
             }
         }
+    }
+}
+
+/// Something keeps the agents on the Mac from opening shells the user
+/// sees (#58): what, and what to do about it, until the Mac says it is
+/// over or it is closed here.
+private struct AgentShellsFaultBanner: View {
+    @EnvironmentObject private var model: PhoneModel
+    let fault: AgentShellsFault
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(fault.headline(on: model.pairing?.name ?? "the Mac"))
+                    .font(.subheadline.weight(.semibold))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(fault.advice)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("agent-shells-fault")
+            Spacer(minLength: 0)
+            Button {
+                model.dismiss(fault)
+            } label: {
+                Image(systemName: "xmark").font(.footnote.weight(.semibold))
+            }
+            .accessibilityLabel("Dismiss")
+            .accessibilityIdentifier("agent-shells-fault-dismiss")
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.thinMaterial))
     }
 }
 

@@ -573,6 +573,14 @@ private struct SessionRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                if let owner = session.openedByName(among: model.sessions) {
+                    // A shell an agent opened: whose it is (#61).
+                    Label(owner, systemImage: "sparkles")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .accessibilityLabel("Opened by \(owner)")
+                }
             }
             Spacer(minLength: 8)
             if session.schedule != nil {
@@ -580,12 +588,6 @@ private struct SessionRow: View {
                     .font(.system(size: 12))
                     .foregroundStyle(session.schedulePermissions == .skipAll ? .orange : .secondary)
                     .accessibilityLabel(session.schedulePermissions == .skipAll ? "A scheduled run, without asking for permission" : "A scheduled run")
-            }
-            if session.openedBy != nil {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("Opened by an agent")
             }
             StateMark(session: session)
             Text("\(session.size.cols)×\(session.size.rows)")

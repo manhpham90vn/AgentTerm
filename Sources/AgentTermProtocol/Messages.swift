@@ -1,7 +1,7 @@
 import Foundation
 
 /// Version of the wire protocol. Bumped on incompatible changes.
-public let agenttermProtocolVersion = 7
+public let agenttermProtocolVersion = 8
 
 /// How the version a host speaks compares with this build's. The two apps
 /// of one release speak the same; anything else is not supported together.
@@ -396,6 +396,10 @@ public enum ServerMessage: Codable, Equatable, Sendable {
     case agentShells(Bool)
     /// Whether the agents are asked to run their commands in shells the user sees.
     case agentsUseShells(Bool)
+    /// What keeps the agents from opening shells although that is on
+    /// (#58); none when nothing does. Sent on connecting and whenever it
+    /// changes.
+    case agentShellsFaults([AgentShellsFault])
     /// Whether someone is at the Mac (#22, #24): its app in front, or a key
     /// or the pointer used in the last five minutes; and not since a device
     /// (an iPhone, another Mac) was used, until the Mac app is used again.

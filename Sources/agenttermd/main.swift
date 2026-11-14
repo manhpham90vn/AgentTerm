@@ -43,42 +43,18 @@ if arguments.first == "hook" {
 }
 
 // `agenttermd mcp` is the MCP server agents are given (#10). Inside a session
-// of an agent AgentTerm started, it asks the host on this Mac, as that
-// session, for what the agent's tools do; elsewhere it offers no tools.
+// of an agent this build of AgentTerm started, it asks the host on this Mac,
+// as that session, for what the agent's tools do; elsewhere, a session of
+// the other build included (#57), it offers no tools.
 if arguments.first == "mcp" {
     var ask: AgentShellsMCP.Ask?
-    let named = ProcessInfo.processInfo.environment[HostServer.agentShellsVariable]?.split(separator: " ").map(String.init) ?? []
-    if named.count >= 2, let port = UInt16(named[0]), let token = try? HostEnvironment.loadOrCreateToken() {
-        let key = named[1]
-        let connection = AgentTermConnection(host: "127.0.0.1", port: port, credential: .token(token), clientName: "MCP")
-        let lock = NSLock()
-        var answers: [Int: AgentShellResult] = [:]
-        var waiting: [Int: DispatchSemaphore] = [:]
-        var next = 0
-        connection.onMessage = { message in
-            guard case .agentShellResult(let id, let result) = message else { return }
-            lock.lock()
-            answers[id] = result
-            let semaphore = waiting.removeValue(forKey: id)
-            lock.unlock()
-            semaphore?.signal()
-        }
-        DispatchQueue.main.async { connection.connect() }
-        ask = { request in
-            lock.lock()
-            next += 1
-            let id = next
-            let semaphore = DispatchSemaphore(value: 0)
-            waiting[id] = semaphore
-            lock.unlock()
-            DispatchQueue.main.async { connection.send(.agentShell(id: id, key: key, request: request)) }
-            guard semaphore.wait(timeout: .now() + 15) == .success else { return .refused("AgentTerm's host did not answer.") }
-            lock.lock()
-            defer { lock.unlock() }
-            return answers.removeValue(forKey: id) ?? .refused("AgentTerm's host did not answer.")
-        }
+    let session = AgentShellsMCP.Session(variable: ProcessInfo.processInfo.environment[HostServer.agentShellsVariable])
+    if let session, let token = try? HostEnvironment.loadOrCreateToken() {
+        let link = AgentShellsLink(port: session.port, key: session.key, token: token)
+        link.start()
+        ask = link.ask
     }
-    let server = AgentShellsMCP(ask: ask, version: AppChannel.current.appName, useShells: named.dropFirst(2).first == "use")
+    let server = AgentShellsMCP(ask: ask, version: AppChannel.current.appName, useShells: session?.useShells ?? false)
     // Lines are read and answered in turn, off the main queue, where the
     // connection's answers arrive.
     Thread.detachNewThread {

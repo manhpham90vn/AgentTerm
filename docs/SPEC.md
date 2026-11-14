@@ -215,14 +215,29 @@ itself.
   whole user, by default, the first time it runs. Settings ("Agents can
   open shells you see", on the Mac and the iPhone) removes it from them,
   and puts it back.
+- A development build installs a server of its own beside the released
+  app's, under another name (`agentterm-dev`), and each works only in the
+  sessions of its own build: trying a change never takes the shells from
+  the agents of the installed app.
 - Its tools: open a shell (with a command or without), list the shells,
   read a shell's screen, type into it (text and keys by name), wait until
   its screen is still or shows a text, close it.
-- The shells agents open are every agent's: an agent lists them, with
-  their folders, and uses one that is free rather than open one more, so
-  that each agent does not leave shells of its own behind. An agent never
-  reaches the user's own sessions, nor an agent's session. It opens shells
-  only, never another agent.
+- Only the agent that opened a shell types into it and closes it. Every
+  agent lists the shells agents opened, told which are its own, and may
+  read any of them; one that has no shell of its own, or whose own is
+  busy, opens another. So what runs in an agent's shell is what that agent
+  started. A shell whose agent's session has ended is left as it is: it
+  stays open for the user, agents still read it, and none types into it.
+  An agent never reaches the user's own sessions, nor an agent's session.
+  It opens shells only, never another agent.
+- A shell's row names the session of the agent that opened it, on the Mac
+  and on the iPhone, or says that its agent has ended.
+- When an agent's server cannot reach the host, the agent is told at once
+  and why (the host is not running, its sign-in was refused, the
+  connection was lost), rather than left waiting. When a server was
+  refused, or could not be set up in an agent, both apps say so in a
+  banner at the top, with what to do, until it is over or the banner is
+  closed.
 - When the agent's session ends, the shells it opened stay, for the user
   and for the other agents.
 - Outside a session of AgentTerm (an agent run in another terminal), the

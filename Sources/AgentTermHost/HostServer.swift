@@ -253,6 +253,12 @@ public final class HostServer {
     /// Parts that stopped without being asked to, until the user has seen
     /// them on one of the clients.
     private var failures: [PartFailure] = []
+    /// The agents the MCP server could not be installed in, by name.
+    private var agentShellsNotInstalled: [String] = []
+    /// An agent's MCP server was refused when it signed in, and none has
+    /// signed in since.
+    private var agentShellsRefused = false
+    private var agentShellsFaultsTold: [AgentShellsFault] = []
     /// What this host notes about itself in the state folder while it runs.
     private var marker: HostMarker?
     private var markerFile: URL?
@@ -1160,11 +1166,15 @@ public final class HostServer {
     // MARK: Messages
 
     private func handle(_ message: ClientMessage, from client: Client) {
-        if case .hello(let token, _) = message {
+        if case .hello(let token, let name) = message {
             guard let identity = registry.authenticate(token: token, isLocal: client.isLocal) else {
+                // An agent's server that is refused leaves its agent without
+                // shells, and nothing else would say so (#58).
+                if name == Self.agentShellsClient, client.isLocal { setAgentShellsRefused(true) }
                 refuse(client, "invalid token")
                 return
             }
+            if name == Self.agentShellsClient { setAgentShellsRefused(false) }
             admit(client, as: identity)
             return
         }
@@ -1839,6 +1849,7 @@ public final class HostServer {
             send(.agentShells(install.isOn), to: client)
             send(.agentsUseShells(agentsUseShells), to: client)
         }
+        if configuration.agentShells != nil || !agentShellsFaults.isEmpty { send(.agentShellsFaults(agentShellsFaults), to: client) }
         send(.macInUse(macInUse), to: client)
         send(.schedules(schedules), to: client)
         send(.commitWriter(commitWriter), to: client)
@@ -1972,7 +1983,9 @@ public final class HostServer {
         environment.merge(more) { _, new in new }
         // The agent's MCP server tells the host which session's it is.
         let agentKey = agent.map { _ in UUID().uuidString + UUID().uuidString }
-        if let agentKey { environment[Self.agentShellsVariable] = "\(boundPort) \(agentKey)" + (asksToUseShells ? " use" : "") }
+        if let agentKey {
+            environment[Self.agentShellsVariable] = AgentShellsMCP.Session(port: boundPort, key: agentKey, useShells: asksToUseShells).variable()
+        }
         let process: PTYProcess
         do {
             process = try PTYProcess(
@@ -2056,11 +2069,21 @@ public final class HostServer {
         guard !key.isEmpty, let owner = sessions.values.first(where: { $0.agentKey == key }) else {
             return answer(.refused("This is not the session of an agent AgentTerm started, or that session has ended."))
         }
-        /// A shell an agent opened and that still runs.
-        func own(_ session: SessionID) -> Session? {
+        /// A shell an agent opened and that still runs: any agent reads it.
+        func opened(_ session: SessionID) -> Session? {
             sessions[session].flatMap { $0.info.openedBy != nil ? $0 : nil }
         }
-        let notOwn = "That is not a shell an agent opened, or it has ended. Use list_shells."
+        let notOpened = "That is not a shell an agent opened, or it has ended. Use list_shells."
+        /// A shell this agent opened: only it types into it and closes it
+        /// (#61). One whose agent's session has ended is nobody's, and is
+        /// left to the user.
+        func own(_ session: SessionID) -> (Session?, String) {
+            guard let shell = opened(session) else { return (nil, notOpened) }
+            guard shell.info.openedBy == owner.info.id else {
+                return (nil, "Shell \(session) was opened by another agent: you may read it, not type into it or close it. Open one of your own with open_shell.")
+            }
+            return (shell, "")
+        }
         switch request {
         case .open(let command, let title):
             // Shells only: one agent starting another spends an account
@@ -2078,9 +2101,10 @@ public final class HostServer {
             }
             answer(.opened(session.info))
         case .list:
-            answer(.shells(sessions.values.filter { $0.info.openedBy != nil }.map(\.info).sorted { $0.id < $1.id }))
+            let shells = sessions.values.filter { $0.info.openedBy != nil }.map(\.info).sorted { $0.id < $1.id }
+            answer(.shells(shells, own: shells.filter { $0.openedBy == owner.info.id }.map(\.id)))
         case .read(let session, let linesAbove):
-            guard let shell = own(session) else { return answer(.refused(notOwn)) }
+            guard let shell = opened(session) else { return answer(.refused(notOpened)) }
             let lines = min(linesAbove, configuration.screenLines)
             // Read where the screen is kept, after what was written to it,
             // without this queue, which every session's output goes
@@ -2091,7 +2115,8 @@ public final class HostServer {
                 self?.queue.async { answer(.screen(text)) }
             }
         case .send(let session, let text, let keys):
-            guard let shell = own(session) else { return answer(.refused(notOwn)) }
+            let (found, why) = own(session)
+            guard let shell = found else { return answer(.refused(why)) }
             var bytes = text ?? ""
             for key in keys {
                 guard let typed = TerminalKeys.bytes(for: key) else { return answer(.refused("There is no key called “\(key)”.")) }
@@ -2100,7 +2125,8 @@ public final class HostServer {
             shell.process.write(Data(bytes.utf8))
             answer(.done)
         case .close(let session):
-            guard let shell = own(session) else { return answer(.refused(notOwn)) }
+            let (found, why) = own(session)
+            guard let shell = found else { return answer(.refused(why)) }
             shell.endAsked = true
             shell.process.hangUp()
             queue.asyncAfter(deadline: .now() + 3) { [weak shell] in shell?.process.forceKill() }
@@ -2116,13 +2142,39 @@ public final class HostServer {
         let detect = configuration.detectAgents
         workQueue.async { [weak self] in
             let installed = known ?? detect()
-            if let on { install.set(on: on, agents: installed) } else { install.ensure(agents: installed) }
+            let failed = on.map { install.set(on: $0, agents: installed) } ?? install.ensure(agents: installed)
             let isOn = install.isOn
             self?.queue.async {
                 guard let self else { return }
                 for client in self.clients.values where client.authenticated { self.send(.agentShells(isOn), to: client) }
+                // Set up again: what was refused before is not known to be still.
+                if on != nil { self.agentShellsRefused = false }
+                self.agentShellsNotInstalled = failed.map(\.name)
+                self.broadcastAgentShellsFaults()
             }
         }
+    }
+
+    /// The name an agent's MCP server signs in under.
+    public static let agentShellsClient = "MCP"
+
+    /// What keeps the agents from opening shells, for the apps to warn of.
+    private var agentShellsFaults: [AgentShellsFault] {
+        (agentShellsNotInstalled.isEmpty ? [] : [AgentShellsFault(cause: .install, agents: agentShellsNotInstalled)])
+            + (agentShellsRefused ? [AgentShellsFault(cause: .signIn)] : [])
+    }
+
+    private func setAgentShellsRefused(_ refused: Bool) {
+        guard agentShellsRefused != refused else { return }
+        agentShellsRefused = refused
+        broadcastAgentShellsFaults()
+    }
+
+    private func broadcastAgentShellsFaults() {
+        let faults = agentShellsFaults
+        guard faults != agentShellsFaultsTold else { return }
+        agentShellsFaultsTold = faults
+        for client in clients.values where client.authenticated { send(.agentShellsFaults(faults), to: client) }
     }
 
     private func attach(_ client: Client, to session: Session, size: TermSize, have: Int? = nil, history: Int? = nil) {

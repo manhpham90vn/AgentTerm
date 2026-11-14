@@ -315,6 +315,16 @@ struct SessionRow: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+                if let owner = session.openedByName(among: model.sessions) {
+                    // A shell an agent opened: whose it is, since only that
+                    // agent types into it (#61).
+                    Label(owner, systemImage: "sparkles")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help("Opened by \(owner): only that agent types into it, others may read it")
+                }
                 if showsPath {
                     Text((session.cwd as NSString).abbreviatingWithTildeInPath)
                         .font(.system(size: 10.5))
@@ -332,13 +342,6 @@ struct SessionRow: View {
                     .help(
                         "A run of “\(schedule)”"
                             + (session.schedulePermissions == .skipAll ? ": it runs without asking for permission" : ", \(session.schedulePermissions?.label.lowercased() ?? "")"))
-            }
-            if let owner = session.openedBy {
-                // Opened by an agent through MCP: it may type here too.
-                Image(systemName: "sparkles")
-                    .font(.system(size: 9.5))
-                    .foregroundStyle(.secondary)
-                    .help("Opened by " + (model.sessions.first { $0.id == owner }?.displayName ?? "an agent whose session has ended"))
             }
             AgentStateMark(session: session)
             if model.foreignSizes[session.id] != nil {
@@ -380,7 +383,7 @@ struct SessionRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
             AgentStateMark.label(
-                "\(session.displayName), session" + (session.branch.map { ", in worktree \($0)" } ?? "") + (session.openedBy == nil ? "" : ", opened by an agent"),
+                "\(session.displayName), session" + (session.branch.map { ", in worktree \($0)" } ?? "") + (session.openedByName(among: model.sessions).map { ", opened by \($0)" } ?? ""),
                 session)
         )
         .accessibilityIdentifier("session-\(session.id)")

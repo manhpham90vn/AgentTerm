@@ -391,6 +391,37 @@ private struct FailureBanner: View {
     }
 }
 
+/// Something keeps the agents from opening shells the user sees, although
+/// that is on (#58): what, and what to do about it. It stays until the
+/// host says it is over, or it is closed here.
+private struct AgentShellsFaultBanner: View {
+    @EnvironmentObject private var model: AppModel
+    let fault: AgentShellsFault
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.yellow)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(fault.headline(on: model.remote?.name))
+                    .font(.system(size: 12, weight: .medium))
+                Text(fault.advice)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button("Dismiss") { model.dismiss(fault) }
+                .controlSize(.small)
+                .help("Hide this until it happens again")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.yellow.opacity(0.12))
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("agent-shells-fault")
+    }
+}
+
 /// An agent of a session that is not in front finished its task or waits
 /// for the user (#22): which session, and why. Touching it opens it.
 private struct AgentNoticeBanner: View {
@@ -614,6 +645,10 @@ private struct Banners: View {
         // What stopped without being asked to, until it is dismissed.
         ForEach(model.failures) { failure in
             FailureBanner(failure: failure)
+        }
+        // The agents cannot open shells, although that is on.
+        ForEach(model.shownShellsFaults) { fault in
+            AgentShellsFaultBanner(fault: fault)
         }
         // An agent of another session finished, or waits for you.
         if let notice = model.agentNotice {

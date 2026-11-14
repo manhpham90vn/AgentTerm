@@ -6,24 +6,63 @@ import Foundation
 /// as JSON-RPC, one message to a line, on standard input and output, and
 /// asks the running host for what an agent's tools do.
 ///
-/// It offers its tools only inside a session of an agent AgentTerm started,
-/// whose environment names the host's port and the session's key
-/// (`HostServer.agentShellsVariable`). Elsewhere, in a terminal of another
-/// app, it offers none.
+/// It offers its tools only inside a session of an agent its own build of
+/// AgentTerm started, whose environment names the host's port, the
+/// session's key and the build (`HostServer.agentShellsVariable`).
+/// Elsewhere, in a terminal of another app or in a session of the other
+/// build (#57), it offers none.
 public final class AgentShellsMCP {
     /// Asks the host, and waits for its answer.
     public typealias Ask = (AgentShellRequest) -> AgentShellResult
 
+    /// What a session's variable tells its agent's server: the host to ask,
+    /// as which session, and whether the agent is to run its commands in
+    /// the shells. Written as `<port> <key> <channel> [use]`.
+    public struct Session: Equatable {
+        public var port: UInt16
+        public var key: String
+        public var useShells: Bool
+
+        public init(port: UInt16, key: String, useShells: Bool) {
+            self.port = port
+            self.key = key
+            self.useShells = useShells
+        }
+
+        /// The variable's value, for a session of the build `channel`.
+        public func variable(channel: AppChannel = .current) -> String {
+            "\(port) \(key) \(channel.rawValue)" + (useShells ? " use" : "")
+        }
+
+        /// What the variable says, or nil when it names no session, or one
+        /// of another build than `channel`: that build's host has a token
+        /// of its own, and its own server is the one to answer there. A
+        /// variable that names no build is from before the builds had a
+        /// server each, when only the released one was meant to.
+        public init?(variable: String?, channel: AppChannel = .current) {
+            let words = variable?.split(separator: " ").map(String.init) ?? []
+            guard words.count >= 2, let port = UInt16(words[0]) else { return nil }
+            let rest = words.dropFirst(2)
+            let named = rest.compactMap(AppChannel.init(rawValue:)).first ?? .release
+            guard named == channel else { return nil }
+            self.init(port: port, key: words[1], useShells: rest.contains("use"))
+        }
+    }
+
     private let ask: Ask?
+    private let name: String
     private let version: String
     /// The agent is to run its commands in these shells.
     private let useShells: Bool
     /// How long `wait` looks between two reads of the screen.
     var pollInterval: TimeInterval = 0.2
 
-    /// - Parameter ask: Nil outside a session of AgentTerm: no tools then.
-    public init(ask: Ask?, version: String, useShells: Bool = false) {
+    /// - Parameters:
+    ///   - ask: Nil outside a session of this build of AgentTerm: no tools then.
+    ///   - name: The server's name in the agents' configuration.
+    public init(ask: Ask?, name: String = AppChannel.current.mcpServerName, version: String, useShells: Bool = false) {
         self.ask = ask
+        self.name = name
         self.version = version
         self.useShells = useShells
     }
@@ -42,12 +81,12 @@ public final class AgentShellsMCP {
             return result([
                 "protocolVersion": params["protocolVersion"] as? String ?? "2025-06-18",
                 "capabilities": ["tools": [:]],
-                "serverInfo": ["name": "agentterm", "version": version],
+                "serverInfo": ["name": name, "version": version],
                 "instructions": ask == nil
                     ? "Not in a session of AgentTerm: no tools."
                     : useShells
-                        ? AgentShellsInstructions.useShells
-                        : "Open shells the user can see in AgentTerm, next to your session, and work in them. Use them for what keeps running or what the user should watch: an SSH session, a dev server, a REPL. The shells agents open are shared: use one that is open and free, with list_shells, before opening another."
+                        ? AgentShellsInstructions.useShells(server: name)
+                        : "Open shells the user can see in AgentTerm, next to your session, and work in them. Use them for what keeps running or what the user should watch: an SSH session, a dev server, a REPL. Only the agent that opened a shell may type into it: list_shells says which are yours, and another agent's you may read but not type into."
                     ,
             ])
         case "ping":
@@ -73,15 +112,15 @@ public final class AgentShellsMCP {
             ["command": string("The command to run; none for a plain login shell"), "title": string("The tab's name")], required: []),
         tool(
             "list_shells",
-            "The shells open in AgentTerm that agents opened, yours and other agents', with their numbers and folders. Use one that is free, in your folder, before opening another.",
+            "The shells open in AgentTerm that agents opened, with their numbers and folders, and whose each is: you may type into yours, and only read another agent's.",
             [:], required: []),
         tool(
-            "read_screen", "The shell's screen as text, with lines above it when asked.",
+            "read_screen", "The screen as text of a shell any agent opened, with lines above it when asked.",
             ["session": integer("The shell's number"), "lines_above": integer("How many lines above the screen to include; 0 by default")],
             required: ["session"]),
         tool(
             "send_input",
-            "Types into the shell: text, then keys by name, as a person would. Keys: Return, Tab, Escape, Backspace, Up, Down, Left, Right, Home, End, Page Up, Page Down, Delete, Control A to Control Z.",
+            "Types into a shell you opened: text, then keys by name, as a person would. Another agent's shell is refused. Keys: Return, Tab, Escape, Backspace, Up, Down, Left, Right, Home, End, Page Up, Page Down, Delete, Control A to Control Z.",
             ["session": integer("The shell's number"), "text": string("Text to type"), "keys": ["type": "array", "items": ["type": "string"], "description": "Keys to press after the text"]],
             required: ["session"]),
         tool(
@@ -92,7 +131,7 @@ public final class AgentShellsMCP {
                 "quiet_seconds": number("How long the screen must stay the same; 1 by default"), "timeout_seconds": number("At most this long; 30 by default"),
             ],
             required: ["session"]),
-        tool("close_shell", "Ends a shell an agent opened, when no one needs it.", ["session": integer("The shell's number")], required: ["session"]),
+        tool("close_shell", "Ends a shell you opened, when you no longer need it. Another agent's shell is refused.", ["session": integer("The shell's number")], required: ["session"]),
     ]
 
     private static func tool(_ name: String, _ description: String, _ properties: [String: Any], required: [String]) -> [String: Any] {
@@ -166,9 +205,10 @@ public final class AgentShellsMCP {
     static func words(_ result: AgentShellResult) -> (String, Bool) {
         switch result {
         case .opened(let shell): return ("Opened shell \(shell.id), “\(shell.title)”, in \(shell.cwd).", false)
-        case .shells(let list):
+        case .shells(let list, let own):
             if list.isEmpty { return ("No agent has a shell open.", false) }
-            return (list.map { "\($0.id): \($0.title), in \($0.cwd)" }.joined(separator: "\n"), false)
+            let lines = list.map { "\($0.id): \($0.title), in \($0.cwd) (\(own.contains($0.id) ? "yours" : "another agent's: read only"))" }
+            return (lines.joined(separator: "\n"), false)
         case .screen(let text): return (text, false)
         case .done: return ("Done.", false)
         case .refused(let why): return (why, true)
