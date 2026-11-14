@@ -68,6 +68,55 @@ final class ScheduleTimeTests: XCTestCase {
     }
 }
 
+/// SCHED-20 (#51): the agent writes its settings file too, while it runs.
+/// What it writes while a folder is being trusted there is kept.
+final class TrustWhileTheAgentWritesTests: XCTestCase {
+    override func tearDown() { ScheduleRunner.beforeWriting = nil }
+
+    func testWhatTheAgentWritesMeanwhileIsKept() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-trust-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let file = home.appendingPathComponent(".claude.json")
+        try #"{"numStartups":3,"projects":{"/other/place":{"hasTrustDialogAccepted":true}}}"#.write(to: file, atomically: true, encoding: .utf8)
+        // Claude Code writes the file between the host's read and its write.
+        var written = 0
+        ScheduleRunner.beforeWriting = { _ in
+            guard written == 0 else { return }
+            written += 1
+            try? #"{"numStartups":4,"projects":{"/other/place":{"hasTrustDialogAccepted":true,"lastCost":1.5}}}"#.write(to: file, atomically: true, encoding: .utf8)
+        }
+        try ScheduleRunner.trustFolder(of: Schedule(name: "n", agent: "claude", folder: "/work/here", prompt: "p", when: .limitReset), home: home.path)
+        let text = try String(contentsOf: file, encoding: .utf8)
+        let claude = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any])
+        let projects = try XCTUnwrap(claude["projects"] as? [String: [String: Any]])
+        XCTAssertEqual(projects["/work/here"]?["hasTrustDialogAccepted"] as? Bool, true, "the folder is trusted")
+        XCTAssertEqual(claude["numStartups"] as? Int, 4, "what the agent wrote meanwhile is kept")
+        XCTAssertEqual(projects["/other/place"]?["lastCost"] as? Double, 1.5)
+        XCTAssertFalse(text.contains(#"\/"#), "slashes as the agent writes them: \(text)")
+    }
+
+    /// A file that is written again every time it is looked at is not
+    /// overwritten blindly: saving the schedule says so.
+    func testAFileThatKeepsChangingIsNotOverwritten() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("agentterm-trust-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".copilot"), withIntermediateDirectories: true)
+        let file = home.appendingPathComponent(".copilot/config.json")
+        try #"{"n":0}"#.write(to: file, atomically: true, encoding: .utf8)
+        var written = 0
+        ScheduleRunner.beforeWriting = { _ in
+            written += 1
+            try? #"{"n":\#(written)}"#.write(to: file, atomically: true, encoding: .utf8)
+        }
+        XCTAssertThrowsError(
+            try ScheduleRunner.trustFolder(
+                of: Schedule(name: "n", agent: "copilot", folder: "/work", prompt: "p", when: .limitReset, permissions: .ask), home: home.path))
+        XCTAssertEqual(written, ScheduleRunner.editAttempts)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), #"{"n":\#(written)}"#, "the agent's last word stands")
+    }
+}
+
 /// SCHED-4 to SCHED-9: a host with a clock the test sets, and a stand-in
 /// agent that writes down how it was started.
 final class SchedulerHostTests: XCTestCase {
