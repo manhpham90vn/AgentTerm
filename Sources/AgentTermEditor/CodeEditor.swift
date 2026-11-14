@@ -69,10 +69,21 @@ enum Highlighting {
 
     static func font(size: CGFloat) -> PlatformFont { .monospacedSystemFont(ofSize: size, weight: .regular) }
 
-    /// Text storage that recolors what is edited, or a plain one if the
-    /// highlighter could not be loaded.
-    static func storage(for path: String, fontSize: CGFloat) -> NSTextStorage {
-        guard let highlightr = shared else { return NSTextStorage() }
+    /// The largest text that is colored, in UTF-16 units: about half a
+    /// megabyte. Coloring a file of 5 MB held the window for five seconds
+    /// when it opened, and a quarter of a second at each key (#21).
+    static let largestColored = 512 * 1024
+
+    /// Whether a file's text is colored: one in a language the highlighter
+    /// knows, and not too large.
+    static func colors(_ path: String, length: Int) -> Bool {
+        length <= largestColored && FileLanguage.forFile(path) != "plaintext"
+    }
+
+    /// Text storage that recolors what is edited; a plain one for text
+    /// that is not colored, or if the highlighter could not be loaded.
+    static func storage(for path: String, fontSize: CGFloat, length: Int) -> NSTextStorage {
+        guard colors(path, length: length), let highlightr = shared else { return NSTextStorage() }
         highlightr.theme.setCodeFont(font(size: fontSize))
         let highlighted = CodeAttributedString(highlightr: highlightr)
         highlighted.language = FileLanguage.forFile(path)
@@ -101,8 +112,10 @@ public struct CodeEditor: NSViewRepresentable {
     public func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     public func makeNSView(context: Context) -> NSScrollView {
-        let storage = Highlighting.storage(for: path, fontSize: fontSize)
+        let storage = Highlighting.storage(for: path, fontSize: fontSize, length: text.utf16.count)
         let layout = NSLayoutManager()
+        // Only what is on show is laid out: a file of megabytes opens at once.
+        layout.allowsNonContiguousLayout = true
         storage.addLayoutManager(layout)
         // Lines are not wrapped: code reads better scrolled sideways.
         let container = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
@@ -142,6 +155,7 @@ public struct CodeEditor: NSViewRepresentable {
         scroll.backgroundColor = EditorStyle.background
         context.coordinator.textView = textView
         context.coordinator.path = path
+        context.coordinator.held = text
         context.coordinator.go(to: target)
         return scroll
     }
@@ -154,11 +168,16 @@ public struct CodeEditor: NSViewRepresentable {
             context.coordinator.path = path
             (textView.textStorage as? CodeAttributedString)?.language = FileLanguage.forFile(path)
             textView.string = text
+            context.coordinator.held = text
             textView.undoManager?.removeAllActions()
             textView.scrollToBeginningOfDocument(nil)
-        } else if textView.string != text {
-            // Changed from outside the editor, such as discarding edits.
-            textView.string = text
+        } else if context.coordinator.held != text {
+            // Changed from outside the editor, such as discarding edits. Told
+            // by what the editor last gave or was given, which is the same
+            // text in memory when nothing changed: asking the view for all
+            // of its text at each key is what made typing in a large file slow.
+            context.coordinator.held = text
+            if textView.string != text { textView.string = text }
         }
         context.coordinator.go(to: target)
     }
@@ -167,6 +186,8 @@ public struct CodeEditor: NSViewRepresentable {
         var parent: CodeEditor
         weak var textView: NSTextView?
         var path = ""
+        /// The text the editor last gave its owner, or was given by it.
+        var held = ""
         private var shown: Int?
 
         /// Scrolls to a line and marks it, once for each time it is asked
@@ -189,7 +210,12 @@ public struct CodeEditor: NSViewRepresentable {
 
         public func textDidChange(_ notification: Notification) {
             guard let textView else { return }
-            if parent.text != textView.string { parent.text = textView.string }
+            // What the view holds now, kept as the one text both sides
+            // have: the view is not asked for it again, nor compared with
+            // it, when this change comes back round as an update (#21).
+            let now = textView.string
+            held = now
+            parent.text = now
         }
     }
 }
@@ -214,7 +240,7 @@ public struct CodeEditor: UIViewRepresentable {
     public func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     public func makeUIView(context: Context) -> UITextView {
-        let storage = Highlighting.storage(for: path, fontSize: fontSize)
+        let storage = Highlighting.storage(for: path, fontSize: fontSize, length: text.utf16.count)
         let layout = NSLayoutManager()
         storage.addLayoutManager(layout)
         // Lines wrap: a phone is too narrow to scroll code sideways while typing.

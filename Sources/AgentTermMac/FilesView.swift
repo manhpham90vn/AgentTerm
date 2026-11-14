@@ -364,6 +364,9 @@ struct DocumentView: View {
                     text: Binding(get: { files.documents.first { $0.path == path }?.text ?? "" }, set: { files.setText($0, for: path) }),
                     path: path, target: files.lineTargets[path]
                 )
+                // An editor of its own for each file: whether its text is
+                // colored is decided when it is made (#21).
+                .id(path)
             }
         case .image:
             if let image = document.imageData.flatMap(NSImage.init(data:)) ?? (files.isRemote ? nil : NSImage(contentsOfFile: document.path)) {

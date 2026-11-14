@@ -1285,6 +1285,30 @@ toolbar, before the agents, switches between this Mac and the paired ones.
 - `AGENTTERM_STATE_DIR` moves the host's token, folder list and log to another
   folder, which keeps test hosts away from the real pairing.
 
+## Large text and large diffs on the Mac
+
+The editor (`CodeEditor`) colors text with highlight.js only when its
+file is in a language the highlighter knows and its text is at most 512 KB
+(`Highlighting.colors`); otherwise its storage is a plain `NSTextStorage`.
+Its layout is non-contiguous, and its coordinator keeps the text it last
+gave its owner or was given (`held`), so that an update that only brings
+the editor's own change back compares nothing. Each file has an editor of
+its own (`.id(path)`), since the storage is chosen when it is made.
+
+A file's diff in one panel (`PatchView`) is one `NSTextView`: the patch as
+an attributed string, colored off the main thread, with a layout manager
+(`LineTints`) that fills each added, removed or hunk line's tint from the
+pane's left edge to its right. Its layout is non-contiguous: the top
+shows at once, and the rest is laid out 10,000 characters at a time on
+the main queue, so that the scroll bar is exact a moment later. A diff of
+the same file that changes is put in by replacing only the characters
+that differ, and the line at the top of the pane is scrolled back to
+where it was. The text view is kept as wide as the pane at least, and
+its scroll bars show only when there is something to scroll to. The two-panel diff is still rows of
+SwiftUI views (`SplitDiffView`, shared with the iPhone). `MainThreadWatch`
+notes stalls of the main thread, only when `AGENTTERM_MEASURE_MAIN` names
+a file to write them to (#21).
+
 ## The host's own gits
 
 Every command the host starts by itself (`Subprocess`), not a session's

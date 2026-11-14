@@ -11,6 +11,8 @@ struct AgentTermApp: App {
     @AppStorage(MenuBarMode.key) private var staysInMenuBar = MenuBarMode.defaultValue
 
     init() {
+        // Only when measuring (#21): notes when the main thread was held up.
+        MainThreadWatch.startIfAsked()
         // Before anything is shown: the question about crash reports
         // depends on whether this build can report at all.
         FirebaseSink.start()

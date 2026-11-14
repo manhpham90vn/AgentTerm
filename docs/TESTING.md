@@ -379,6 +379,9 @@ new, `new.txt` new. "A second device" is another client on the same host.
 | PERF-7 | A session of 10,000 lines | A client attaches; another asks something meanwhile; the session writes meanwhile | The other is answered at once (measured: `scripts/measure.sh`); what was written follows the screen | H |
 | PERF-8 | The real host, on a state folder of its own | Twenty sessions opened and ended, then 180 more (`scripts/measure.sh`) | `leaks` finds nothing; what it has allocated (`heap`) after 200 is within 15% of what it was after the first 20 | H |
 | PERF-9 | The iPhone app, two sessions listed | A session's menu opened and an entry picked, each step timed, as XCUITest does them and with its wait for the app to be idle left out (`IDLE=only scripts/test-ios.sh`) | The figures: 61 s for the press and 61 s for the pick while the menu is open, 1.5 s and 0.4 s without the wait; a tap with no menu about takes 2 s either way (measured 2026-11-14, #65) | P |
+| PERF-10 | The Mac app, told to note when its main thread is held up; a file with 20,000 changed lines, a text file of 5 MB, a session writing 12,000 lines | Each heavy thing done once and the app left alone meanwhile (`MEASURE=1 scripts/test-mac.sh MainThreadMeasurements`) | The figures: how often its main thread took longer than 16 ms to answer, and the longest; in PERFORMANCE.md. Skipped unless asked for | M |
+| PERF-11 | A Swift file of 20 KB, one over 512 KB, plain text | Which is colored, and the text storage made for each | The small one in a known language; the others get a plain storage | U |
+| FIND-12 | A text of four lines, one empty; one with Windows line ends | Where line 1, 3, 4, 40 and 0 are | Each without its line break; the empty one at its place; the last line for a number past the end | U |
 
 ### Keeping the Mac awake, starting at login
 

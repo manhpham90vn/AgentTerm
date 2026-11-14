@@ -126,6 +126,51 @@ asks for the first results within a second.
 | The same: all lines given | 660 ms |
 | A word every file holds: stopped at 2,000 lines | 254 ms |
 
+## The Mac app's main thread
+
+Taken on 2026-11-14 with a debug build (`MEASURE=1 scripts/test-mac.sh
+MainThreadMeasurements`, PERF-10). The app notes each time its main thread
+took longer than a frame, 16 ms, to answer (`MainThreadWatch`, which runs
+only when measuring); the test does one thing, leaves the app alone, and
+reads what was noted. The threshold is that it is never held up longer
+than 16 ms.
+
+| What | Before | After | Over 16 ms still |
+|---|---|---|---|
+| At rest, the window open | once, 24 ms | never; in one run of five twice, the longest 49 ms | now and then |
+| The Git tab shown, a change of 20,000 lines among the changes | never | never | no |
+| A diff of 20,000 changed lines opened | twice, the longest 87 to 107 ms | about 12 times in the half second after, the longest 50 to 72 ms, 0.3 s in all: the tab opening, then the rest laid out in pieces | **yes** |
+| That diff scrolled from top to bottom in a second | 64 to 72 times, the longest 92 ms, 4.6 s in all; only its first 4,000 lines were shown | never; every line shown | no |
+| The diff laid out in two panels | twice, the longest 311 ms | twice, the longest 110 to 131 ms | **yes** |
+| The two panels scrolled from top to bottom in a second | 69 times, the longest 61 ms, 3.0 s in all | the same: not changed | **yes** |
+| The Files tab shown | once, 25 ms | once, 16 to 25 ms | by a little |
+| A text file of 5 MB picked (it says it is large) | twice, the longest 124 ms | twice, the longest 98 to 131 ms: not changed | **yes** |
+| The 5 MB file opened in the editor | 3 times, the longest 5,341 ms | once or twice, the longest 27 to 35 ms | **yes**, by 19 ms at most |
+| Twenty letters typed into it, one at a time | 20 times, each about 250 ms | 3 to 5 times of the 20, the longest 19 to 25 ms | **yes**, by 9 ms at most |
+| The 5 MB file scrolled from top to bottom in a second | never | never, or once, 29 to 35 ms | now and then |
+| A session on show writing 12,000 lines at once | once, 20 ms | once or twice, the longest 20 to 28 ms | **yes**, by 12 ms at most |
+
+What was changed for them:
+
+- **The editor does not color large or plain text.** A text over 512 KB,
+  and plain text of any size, gets a plain text storage: highlight.js run
+  over 5 MB is what held the window for five seconds. It lays out only
+  what is on show, and it no longer asks the text view for all of its text
+  and compares it at each key: it keeps the text it last gave or was given.
+- **The one-panel diff is one text view**, not a row for each line: a
+  layout manager draws each line's tint across the pane. It is colored
+  off the main thread, its top shows at once and the rest is laid out a
+  piece at a time, between which the window answers; it shows the whole
+  diff, where the rows stopped at 4,000 lines. When a diff on show
+  changes, only what differs is put in, and the line at the top of the
+  pane stays there (GIT-13).
+
+Still over the threshold, and not changed here: the two-panel diff, which
+is rows of views in code the iPhone shares (`SplitDiffView`); opening a
+large diff's or a large file's tab, 50 to 130 ms; and stalls of 20 to 35
+ms here and there, typing in a 5 MB file among them (9 ms over at most). The figures are of a debug build; a release build was not
+measured, and neither was the iPhone app's main thread.
+
 ## Not measured yet
 
 These need what a test on this Mac does not have, and are still to do for
@@ -140,5 +185,5 @@ These need what a test on this Mac does not have, and are still to do for
   sessions that keep writing; and the Mac app's own memory after opening
   and closing files, diffs and previews a hundred times, and switching
   between Macs.
-- **Scrolling** a diff of 20,000 lines and a list of thousands of changes,
-  which is the app's drawing rather than the host's.
+- **Scrolling a list of thousands of changes**, and the main thread of the
+  iPhone app; the Mac app's is above.

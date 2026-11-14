@@ -1011,101 +1011,214 @@ struct DiffDocumentView: View {
     }
 }
 
-/// One file's unified diff with added and removed lines tinted.
-private struct PatchView: View {
+/// A file's diff in one panel: every line in its color, lines put in and
+/// taken out tinted across the pane's whole width.
+///
+/// One text view rather than a row for each line (#21): scrolling a diff of
+/// 20,000 lines held the window up for 60 to 90 ms at each step when every
+/// line was a view of its own, and only its first 4,000 lines were shown.
+/// A text view lays out only what is on show, and what is selected can run
+/// over as many lines as wanted.
+private struct PatchView: NSViewRepresentable {
     let file: FileDiff
-    private let lines: [String]
-    /// Width of the longest line, so the diff scrolls sideways far enough to show it.
-    private let contentWidth: CGFloat
 
-    private static let maxLines = 4000
     private static let font = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
-    private static let horizontalPadding: CGFloat = 10
 
-    init(file: FileDiff) {
-        self.file = file
-        // Tabs have no fixed width in SwiftUI text, which would make the measured width wrong.
-        lines = file.patch.split(separator: "\n", omittingEmptySubsequences: false).prefix(Self.maxLines)
-            .map { $0.replacingOccurrences(of: "\t", with: "    ") }
-        // Measuring every line would be slow on a large diff. The widest is
-        // almost always among the longest by character count.
-        let candidates = lines.sorted { $0.utf16.count > $1.utf16.count }.prefix(8)
-        let widest = candidates.map { ($0 as NSString).size(withAttributes: [.font: Self.font]).width }.max() ?? 0
-        contentWidth = ceil(widest) + Self.horizontalPadding * 2 + 8
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let storage = NSTextStorage()
+        let layout = LineTints()
+        layout.allowsNonContiguousLayout = true
+        storage.addLayoutManager(layout)
+        // Lines are not wrapped: a diff reads line for line.
+        let container = NSTextContainer(size: NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = false
+        container.lineFragmentPadding = 10
+        layout.addTextContainer(container)
+
+        let text = NSTextView(frame: .zero, textContainer: container)
+        text.isEditable = false
+        text.isSelectable = true
+        text.isRichText = false
+        text.drawsBackground = true
+        text.backgroundColor = NSColor(Theme.canvas)
+        text.textContainerInset = NSSize(width: 0, height: 6)
+        text.minSize = .zero
+        text.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        text.isVerticallyResizable = true
+        text.isHorizontallyResizable = true
+        text.setAccessibilityIdentifier("patch")
+
+        let scroll = NSScrollView()
+        scroll.documentView = text
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = true
+        // Shown whenever there is something to scroll to, not only while
+        // scrolling: with a trackpad macOS hides them otherwise, and then
+        // nothing tells that a long line goes on to the right. Not shown
+        // when everything fits.
+        scroll.scrollerStyle = .legacy
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = true
+        scroll.backgroundColor = NSColor(Theme.canvas)
+        context.coordinator.text = text
+        // As wide as the pane at least, so that the tints reach its right
+        // edge, and wider only when a line is: kept so as the pane changes.
+        scroll.contentView.postsFrameChangedNotifications = true
+        context.coordinator.watching = NotificationCenter.default.addObserver(
+            forName: NSView.frameDidChangeNotification, object: scroll.contentView, queue: .main
+        ) { [weak coordinator = context.coordinator] _ in coordinator?.fit() }
+        show(in: context.coordinator)
+        return scroll
     }
 
-    var body: some View {
-        GeometryReader { viewport in
-            // At least as wide as the pane, so line tints reach the right edge.
-            let width = max(contentWidth, viewport.size.width)
-            ScrollView([.vertical, .horizontal]) {
-                LazyVStack(alignment: .leading, spacing: 0) {
-                    ForEach(Array(lines.enumerated()), id: \.offset) { line in
-                        Text(line.element.isEmpty ? " " : line.element)
-                            .font(.system(size: 11.5, design: .monospaced))
-                            .foregroundStyle(foreground(Substring(line.element)))
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .padding(.horizontal, Self.horizontalPadding)
-                            .padding(.vertical, 1)
-                            .frame(width: width, alignment: .leading)
-                            .background(background(Substring(line.element)))
-                    }
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        show(in: context.coordinator)
+    }
+
+    /// Puts the diff into the view when it is another than the one shown.
+    /// Colored off the main thread: twenty thousand lines take a moment.
+    private func show(in coordinator: Coordinator) {
+        guard coordinator.patch != file.patch || coordinator.file != file.id else { return }
+        let sameFile = coordinator.file == file.id
+        coordinator.patch = file.patch
+        coordinator.file = file.id
+        let patch = file.patch
+        DispatchQueue.global(qos: .userInitiated).async {
+            let colored = Self.colored(patch)
+            DispatchQueue.main.async {
+                guard coordinator.patch == patch, let text = coordinator.text, let scroll = text.enclosingScrollView else { return }
+                guard sameFile, let storage = text.textStorage, storage.length > 0, let layout = text.layoutManager, let container = text.textContainer else {
+                    text.textStorage?.setAttributedString(colored)
+                    coordinator.fit()
+                    text.scroll(.zero)
+                    coordinator.layOutTheRest()
+                    return
                 }
-                .frame(width: width, alignment: .leading)
-                .padding(.vertical, 6)
-                .textSelection(.enabled)
-                .background(PermanentScrollers())
+                // The same file with its diff changed stays where it was
+                // scrolled to (GIT-13): only what differs is put in, so that
+                // what is on show above it is not laid out anew.
+                let old = storage.string as NSString, new = colored.string as NSString
+                let most = min(old.length, new.length)
+                var same = 0
+                while same < most, old.character(at: same) == new.character(at: same) { same += 1 }
+                var tail = 0
+                while tail < most - same, old.character(at: old.length - 1 - tail) == new.character(at: new.length - 1 - tail) { tail += 1 }
+                // The line at the top of the pane, to be there again after.
+                let place = scroll.contentView.bounds.origin
+                let inset = text.textContainerOrigin
+                let top = layout.characterIndex(
+                    for: NSPoint(x: 0, y: place.y - inset.y), in: container, fractionOfDistanceBetweenInsertionPoints: nil)
+                let offset = place.y - (layout.lineFragmentRect(forGlyphAt: layout.glyphIndexForCharacter(at: min(top, storage.length - 1)), effectiveRange: nil).minY + inset.y)
+                storage.beginEditing()
+                storage.replaceCharacters(
+                    in: NSRange(location: same, length: old.length - same - tail),
+                    with: colored.attributedSubstring(from: NSRange(location: same, length: new.length - same - tail)))
+                storage.endEditing()
+                // Where that line is now: it moved by what was put in or
+                // taken out above it.
+                var now = top
+                if top >= old.length - tail { now = top + (new.length - old.length) }
+                now = max(0, min(now, storage.length - 1))
+                // Laid out whole, so that where each line is is known and not guessed.
+                layout.ensureLayout(for: container)
+                coordinator.fit()
+                let line = layout.lineFragmentRect(forGlyphAt: layout.glyphIndexForCharacter(at: now), effectiveRange: nil)
+                scroll.contentView.scroll(to: NSPoint(x: place.x, y: max(line.minY + inset.y + offset, 0)))
+                scroll.reflectScrolledClipView(scroll.contentView)
             }
         }
-        .background(Theme.canvas)
-        // By the file alone, not by its diff: see `DiffDocumentView`.
-        .id(file.id)
     }
 
-    private func foreground(_ line: Substring) -> Color {
-        if line.hasPrefix("@@") { return Color(red: 0.55, green: 0.67, blue: 0.98) }
-        if line.hasPrefix("+") { return Theme.added }
-        if line.hasPrefix("-") { return Theme.removed }
-        return Color.white.opacity(0.72)
-    }
+    final class Coordinator {
+        weak var text: NSTextView?
+        var patch: String?
+        var file: String?
+        var watching: NSObjectProtocol?
 
-    private func background(_ line: Substring) -> Color {
-        if line.hasPrefix("@@") { return Color.white.opacity(0.04) }
-        if line.hasPrefix("+") { return Theme.added.opacity(0.10) }
-        if line.hasPrefix("-") { return Theme.removed.opacity(0.10) }
-        return .clear
-    }
-}
-
-/// Makes the enclosing scroll view show its scroll bars all the time.
-///
-/// With a trackpad macOS hides scroll bars until you scroll, and then nothing
-/// tells that a long diff line continues to the right. SwiftUI's
-/// `scrollIndicators(.visible)` does not override that, so this reaches the
-/// AppKit scroll view behind the SwiftUI one.
-private struct PermanentScrollers: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSView { Probe() }
-    func updateNSView(_ view: NSView, context: Context) {}
-
-    private final class Probe: NSView {
-        override func viewDidMoveToWindow() {
-            super.viewDidMoveToWindow()
-            apply()
+        deinit {
+            if let watching { NotificationCenter.default.removeObserver(watching) }
         }
 
-        override func viewDidMoveToSuperview() {
-            super.viewDidMoveToSuperview()
-            apply()
+        /// The text view no smaller than the pane, and as large as its
+        /// text needs beyond that.
+        func fit() {
+            guard let text, let scroll = text.enclosingScrollView else { return }
+            text.minSize = scroll.contentSize
+            text.sizeToFit()
         }
 
-        private func apply() {
-            guard let scrollView = enclosingScrollView else { return }
-            scrollView.scrollerStyle = .legacy
-            scrollView.autohidesScrollers = false
-            scrollView.hasHorizontalScroller = true
-            scrollView.hasVerticalScroller = true
-            scrollView.scrollerKnobStyle = .light
+        /// Counts the texts put in: a layout begun for an earlier one stops.
+        private var laying = 0
+
+        /// Lays out what is below the pane a piece at a time, between
+        /// which the window answers: the top shows at once, and how long
+        /// the whole is, which the scroll bar says, is exact a moment
+        /// later rather than guessed.
+        func layOutTheRest() {
+            laying += 1
+            piece(from: 0, of: laying)
+        }
+
+        private func piece(from start: Int, of generation: Int) {
+            guard generation == laying, let text, let layout = text.layoutManager, let storage = text.textStorage else { return }
+            let length = min(10_000, storage.length - start)
+            guard length > 0 else {
+                fit()
+                return
+            }
+            layout.ensureLayout(forCharacterRange: NSRange(location: start, length: length))
+            DispatchQueue.main.async { [weak self] in self?.piece(from: start + length, of: generation) }
+        }
+    }
+
+    /// The diff as text with each line's color, and its tint for the
+    /// layout to draw across the pane.
+    static func colored(_ patch: String) -> NSAttributedString {
+        // Tabs as four blanks, as before: a diff's lines start with a mark,
+        // which would put every tab stop one off.
+        let text = patch.replacingOccurrences(of: "\t", with: "    ")
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 2
+        let result = NSMutableAttributedString(
+            string: text, attributes: [.font: font, .foregroundColor: NSColor.white.withAlphaComponent(0.72), .paragraphStyle: paragraph])
+        let hunk = NSColor(red: 0.55, green: 0.67, blue: 0.98, alpha: 1)
+        let added = NSColor(Theme.added), removed = NSColor(Theme.removed)
+        let whole = text as NSString
+        var start = 0
+        result.beginEditing()
+        while start < whole.length {
+            let line = whole.lineRange(for: NSRange(location: start, length: 0))
+            let first = whole.character(at: line.location)
+            if first == 0x40, line.length > 1, whole.character(at: line.location + 1) == 0x40 {
+                result.addAttributes([.foregroundColor: hunk, LineTints.tint: NSColor.white.withAlphaComponent(0.04)], range: line)
+            } else if first == 0x2B {
+                result.addAttributes([.foregroundColor: added, LineTints.tint: added.withAlphaComponent(0.10)], range: line)
+            } else if first == 0x2D {
+                result.addAttributes([.foregroundColor: removed, LineTints.tint: removed.withAlphaComponent(0.10)], range: line)
+            }
+            start = NSMaxRange(line)
+        }
+        result.endEditing()
+        return result
+    }
+
+    /// Draws a line's tint from the pane's left edge to its right, behind
+    /// the text: the background of text alone ends where the line does.
+    final class LineTints: NSLayoutManager {
+        static let tint = NSAttributedString.Key("agentterm.lineTint")
+
+        override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
+            super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+            guard let storage = textStorage, let view = firstTextView else { return }
+            let width = max(view.bounds.width, view.enclosingScrollView?.contentView.bounds.width ?? 0)
+            enumerateLineFragments(forGlyphRange: glyphsToShow) { rect, _, _, glyphs, _ in
+                let index = self.characterIndexForGlyph(at: glyphs.location)
+                guard index < storage.length, let color = storage.attribute(Self.tint, at: index, effectiveRange: nil) as? NSColor else { return }
+                color.setFill()
+                NSRect(x: 0, y: rect.minY + origin.y, width: width, height: rect.height).fill(using: .sourceOver)
+            }
         }
     }
 }
