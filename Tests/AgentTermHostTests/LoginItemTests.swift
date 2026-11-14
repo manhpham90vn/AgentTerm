@@ -49,7 +49,6 @@ final class LoginItemTests: XCTestCase {
         XCTAssertNoThrow(try item.turnOff())
     }
 
-    /// LOGIN-4.
     /// LOGIN-9: Start at Login is on by default, the first time a host that
     /// can be started at login runs; once the user turned it off, it stays off.
     func testItIsOnByDefaultUntilTheUserChooses() throws {
@@ -94,6 +93,7 @@ final class LoginItemTests: XCTestCase {
         server.stop()
     }
 
+    /// LOGIN-4.
     func testAnAppThatMovedIsStartedFromWhereItIsNow() throws {
         try item().turnOn()
         let moved = item(executable: "/Users/me/Applications/AgentTerm.app/Contents/MacOS/agenttermd")
