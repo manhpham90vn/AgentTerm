@@ -127,6 +127,23 @@ final class WorktreeTests: XCTestCase {
         withExtendedLifetime(watch) {}
     }
 
+    /// WT-10: a worktree made from a folder inside one AgentTerm made goes
+    /// next to it, and its session starts in the same folder inside it.
+    func testAWorktreeMadeFromInsideAnotherStartsInTheSameFolder() throws {
+        try FileManager.default.createDirectory(at: project.appendingPathComponent("sub"), withIntermediateDirectories: true)
+        try write("sub/b.txt", "two\n")
+        git("add", ".")
+        git("commit", "-q", "-m", "sub")
+        let first = try GitWorktrees.create(in: project.appendingPathComponent("sub").path, agent: "claude", branch: nil)
+        XCTAssertEqual(first.directory, project.appendingPathComponent(".agentterm/worktrees/agentterm/claude-1/sub").path)
+        let second = try GitWorktrees.create(in: first.directory, agent: "claude", branch: nil)
+        XCTAssertEqual(second.directory, project.appendingPathComponent(".agentterm/worktrees/agentterm/claude-2/sub").path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: second.directory + "/b.txt"))
+        // From the top of one, the top of the next.
+        let top = project.appendingPathComponent(".agentterm/worktrees/agentterm/claude-1").path
+        XCTAssertEqual(try GitWorktrees.create(in: top, agent: "claude", branch: nil).directory, project.appendingPathComponent(".agentterm/worktrees/agentterm/claude-3").path)
+    }
+
     func testWhereAWorktreesSessionBelongs() {
         XCTAssertEqual(WorktreePath.project(of: "/p/.agentterm/worktrees/agentterm/claude-1"), "/p")
         XCTAssertNil(WorktreePath.project(of: "/p/src"))

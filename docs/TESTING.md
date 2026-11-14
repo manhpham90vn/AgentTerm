@@ -436,6 +436,7 @@ A second host stands in for the other Mac, with a project of its own.
 | WT-7 | The Mac app, a session in a new worktree with a change of its own | The session is selected | Listed under its project with its branch; the side panel's bar names the branch and the Git tab shows the worktree's change, not the project's | M |
 | WT-8 | The Mac app | Merge, open a pull request, throw away from the bar; a folder with uncommitted changes started in a new worktree | Each as WT-2 says; the question before starting | hand, until the UI tests cover it |
 | WT-9 | A worktree whose changes are watched | Its branch is pushed in a terminal (its remote branch written in the repository's own git folder) | The watch sees it, so ahead and behind are read again | H |
+| WT-10 | A folder inside a worktree AgentTerm made | A worktree is made from it; one from the top of the first | Next to the first, the session in the same folder inside it; then at the top of the new one | H |
 
 ### Schedules
 

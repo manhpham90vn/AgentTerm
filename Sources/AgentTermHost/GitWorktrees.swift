@@ -87,7 +87,6 @@ public enum GitWorktrees {
     public static func create(in folder: String, agent: String, branch wanted: String?) throws -> (directory: String, branch: String) {
         let top = try top(of: folder).asWritten
         // A worktree made from one made by AgentTerm goes next to the others.
-        let project = WorktreePath.project(of: folder) ?? folder
         let projectTop = WorktreePath.project(of: top) ?? top
         let taken = Set(((try? run(["branch", "--list", "--format=%(refname:short)"], in: folder)) ?? "").split(separator: "\n").map(String.init))
         let branch = (wanted?.trimmingCharacters(in: .whitespaces)).flatMap { $0.isEmpty ? nil : $0 } ?? WorktreePath.branchName(agent: agent, taken: taken)
@@ -97,8 +96,9 @@ public enum GitWorktrees {
         Handoff.keepOutOfGit(projectTop)
         try FileManager.default.createDirectory(atPath: (root as NSString).deletingLastPathComponent, withIntermediateDirectories: true)
         _ = try run(["worktree", "add", "-b", branch, root, "HEAD"], in: folder, timeout: 120)
-        // The folder's place in its repository, in the new one.
-        let inside = project.hasPrefix(projectTop) ? String(project.dropFirst(projectTop.count)) : ""
+        // The folder's place in its own checkout, in the new one: from the
+        // top of the worktree it is in, not from the project's.
+        let inside = folder.hasPrefix(top + "/") ? String(folder.dropFirst(top.count)) : ""
         return (root + inside, branch)
     }
 
